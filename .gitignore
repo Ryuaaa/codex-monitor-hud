@@ -1,0 +1,11 @@
+.DS_Store
+*.log
+*.csv
+*.app
+data/
+native-history/
+.collect.lock/
+build/
+DerivedData/
+xcuserdata/
+reports/

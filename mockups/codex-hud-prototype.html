@@ -1,0 +1,885 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Codex 状态悬浮窗｜HTML 原型</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #071019;
+      --panel-opacity: .80;
+      --panel-border: rgba(255, 255, 255, .14);
+      --text: #f4f7fa;
+      --muted: #aab5c0;
+      --faint: #788591;
+      --green: #63e68b;
+      --green-soft: rgba(99, 230, 139, .14);
+      --amber: #ffc65c;
+      --amber-soft: rgba(255, 198, 92, .14);
+      --red: #ff6f70;
+      --red-soft: rgba(255, 111, 112, .15);
+      --blue: #76b7ff;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 17% 18%, rgba(35, 111, 151, .34), transparent 26rem),
+        radial-gradient(circle at 82% 74%, rgba(90, 51, 126, .34), transparent 28rem),
+        linear-gradient(145deg, #06131f 0%, #10131b 48%, #15101d 100%);
+    }
+
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      opacity: .35;
+      background-image: linear-gradient(rgba(255,255,255,.025) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.025) 1px, transparent 1px);
+      background-size: 36px 36px;
+      mask-image: linear-gradient(to bottom, black, transparent 85%);
+    }
+
+    .page {
+      width: min(1160px, calc(100% - 40px));
+      margin: 0 auto;
+      padding: 48px 0 54px;
+    }
+
+    .topbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 28px;
+      margin-bottom: 26px;
+    }
+
+    .eyebrow {
+      margin: 0 0 9px;
+      color: var(--blue);
+      font-size: 12px;
+      font-weight: 750;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(25px, 4vw, 40px);
+      line-height: 1.16;
+      letter-spacing: -.035em;
+    }
+
+    .intro {
+      max-width: 690px;
+      margin: 12px 0 0;
+      color: var(--muted);
+      font-size: 15px;
+      line-height: 1.7;
+    }
+
+    .badge {
+      flex: 0 0 auto;
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      padding: 8px 11px;
+      border: 1px solid rgba(118,183,255,.27);
+      border-radius: 999px;
+      color: #cce5ff;
+      background: rgba(118,183,255,.09);
+      font-size: 12px;
+    }
+
+    .badge::before {
+      content: "";
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--blue);
+      box-shadow: 0 0 12px rgba(118,183,255,.7);
+    }
+
+    .workspace {
+      display: grid;
+      grid-template-columns: minmax(530px, 1.4fr) minmax(300px, .75fr);
+      min-height: 590px;
+      border: 1px solid rgba(255,255,255,.09);
+      border-radius: 24px;
+      overflow: hidden;
+      background: rgba(4, 8, 12, .28);
+      box-shadow: 0 28px 90px rgba(0,0,0,.35);
+    }
+
+    .desktop {
+      position: relative;
+      min-height: 590px;
+      overflow: hidden;
+      background:
+        radial-gradient(circle at 26% 25%, rgba(62, 138, 171, .34), transparent 18rem),
+        radial-gradient(circle at 72% 65%, rgba(99, 62, 130, .34), transparent 19rem),
+        linear-gradient(140deg, #0a1c29, #151723 55%, #251628);
+    }
+
+    .desktop::before,
+    .desktop::after {
+      content: "";
+      position: absolute;
+      border: 1px solid rgba(255,255,255,.07);
+      border-radius: 28px;
+      background: rgba(255,255,255,.025);
+      backdrop-filter: blur(5px);
+    }
+
+    .desktop::before { width: 56%; height: 37%; top: 58px; left: 8%; }
+    .desktop::after { width: 36%; height: 27%; top: 120px; right: 7%; }
+
+    .menubar {
+      position: absolute;
+      inset: 0 0 auto;
+      height: 28px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 12px;
+      color: rgba(255,255,255,.72);
+      background: rgba(8,12,18,.38);
+      border-bottom: 1px solid rgba(255,255,255,.05);
+      font-size: 10px;
+    }
+
+    .dock {
+      position: absolute;
+      left: 50%;
+      bottom: 12px;
+      width: 220px;
+      height: 42px;
+      transform: translateX(-50%);
+      border: 1px solid rgba(255,255,255,.12);
+      border-radius: 14px;
+      background: rgba(255,255,255,.09);
+      backdrop-filter: blur(18px);
+    }
+
+    .hud-wrap {
+      position: absolute;
+      left: 16px;
+      bottom: 67px;
+      z-index: 3;
+      width: min(430px, calc(100% - 32px));
+    }
+
+    .hud {
+      position: relative;
+      border: 1px solid var(--panel-border);
+      border-radius: 16px;
+      overflow: hidden;
+      background: rgba(23, 28, 34, var(--panel-opacity));
+      box-shadow: 0 14px 40px rgba(0,0,0,.38), inset 0 1px 0 rgba(255,255,255,.08);
+      backdrop-filter: blur(26px) saturate(135%);
+      -webkit-backdrop-filter: blur(26px) saturate(135%);
+    }
+
+    .hud::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      background: linear-gradient(125deg, rgba(255,255,255,.06), transparent 38%);
+    }
+
+    .hud-main { padding: 13px 15px 12px; }
+
+    .hud-tabs {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      margin-bottom: 11px;
+      padding-bottom: 9px;
+      border-bottom: 1px solid rgba(255,255,255,.075);
+    }
+
+    .hud-tab {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      min-height: 27px;
+      padding: 0 10px;
+      border: 0;
+      border-radius: 8px;
+      color: var(--muted);
+      background: transparent;
+      cursor: pointer;
+      font: inherit;
+      font-size: 11px;
+      font-weight: 650;
+    }
+
+    .hud-tab.active { color: white; background: rgba(255,255,255,.09); }
+
+    .tab-alert {
+      display: none;
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--amber);
+      box-shadow: 0 0 9px rgba(255,198,92,.8);
+    }
+
+    .tab-alert.visible { display: inline-block; }
+    .hud-tabs .sample-tag { margin-left: auto; }
+
+    .settings-button {
+      position: relative;
+      z-index: 4;
+      width: 27px;
+      height: 27px;
+      padding: 0;
+      border: 0;
+      border-radius: 8px;
+      color: var(--muted);
+      background: transparent;
+      cursor: pointer;
+      font-size: 15px;
+    }
+
+    .settings-button:hover { color: white; background: rgba(255,255,255,.09); }
+    .hud-page { display: none; }
+    .hud-page.active { display: block; }
+
+    .status-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 10px;
+      font-size: 13px;
+      font-weight: 720;
+      letter-spacing: -.01em;
+    }
+
+    .dot {
+      flex: 0 0 auto;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 12px rgba(99,230,139,.8);
+    }
+
+    .sample-tag {
+      margin-left: auto;
+      padding: 3px 6px;
+      border: 1px solid rgba(255,255,255,.1);
+      border-radius: 6px;
+      color: var(--faint);
+      font-size: 9px;
+      font-weight: 650;
+    }
+
+    .quota {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-bottom: 9px;
+    }
+
+    .quota-card {
+      min-width: 0;
+      padding: 9px 10px 8px;
+      border: 1px solid rgba(255,255,255,.075);
+      border-radius: 10px;
+      background: rgba(255,255,255,.035);
+    }
+
+    .quota-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 6px;
+      color: var(--muted);
+      font-size: 10px;
+    }
+
+    .quota-value {
+      color: var(--green);
+      font-size: 16px;
+      font-weight: 760;
+      letter-spacing: -.03em;
+    }
+
+    .quota-value.unavailable { color: var(--faint); font-size: 13px; letter-spacing: 0; }
+    .quota-reset { margin-top: 2px; color: var(--faint); font-size: 9.5px; }
+
+    .codex-insights {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 7px;
+      margin-top: 8px;
+    }
+
+    .insight-card {
+      min-width: 0;
+      padding: 7px 8px;
+      border: 1px solid rgba(255,255,255,.075);
+      border-radius: 9px;
+      background: rgba(255,255,255,.03);
+    }
+
+    .insight-card span { display: block; color: var(--faint); font-size: 9px; }
+    .insight-card strong { display: block; margin-top: 3px; overflow: hidden; color: #f0f5f8; font-size: 11.5px; text-overflow: ellipsis; white-space: nowrap; }
+    .insight-card small { display: block; margin-top: 2px; color: var(--faint); font-size: 8px; }
+
+    .bar {
+      height: 4px;
+      margin-top: 7px;
+      overflow: hidden;
+      border-radius: 4px;
+      background: rgba(255,255,255,.08);
+    }
+
+    .bar > span {
+      display: block;
+      width: 63%;
+      height: 100%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, #56d77f, #82ef9f);
+    }
+
+    .bar.missing > span { width: 0; }
+
+    .metric-row {
+      display: flex;
+      align-items: center;
+      min-height: 21px;
+      color: #e8edf2;
+      font-variant-numeric: tabular-nums;
+      font-size: 11.5px;
+      white-space: nowrap;
+    }
+
+    .metric-label { width: 49px; color: var(--muted); }
+    .divider { margin: 0 7px; color: #5e6872; }
+    .subtle { color: var(--muted); }
+
+    .health-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-bottom: 9px;
+    }
+
+    .health-card {
+      padding: 9px 10px;
+      border: 1px solid rgba(255,255,255,.075);
+      border-radius: 10px;
+      background: rgba(255,255,255,.035);
+    }
+
+    .health-card span { display: block; color: var(--muted); font-size: 9.5px; }
+    .health-card strong { display: block; margin-top: 3px; color: var(--green); font-size: 16px; font-variant-numeric: tabular-nums; }
+    .hud.warning .health-card strong { color: var(--amber); }
+
+    .diagnosis-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 7px;
+      margin-bottom: 8px;
+    }
+
+    .diagnosis-card {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 7px 9px;
+      border: 1px solid rgba(99,230,139,.12);
+      border-radius: 9px;
+      background: var(--green-soft);
+      font-size: 9.5px;
+    }
+
+    .diagnosis-card span { color: var(--muted); }
+    .diagnosis-card strong { color: var(--green); font-size: 11px; }
+    .hud.warning .diagnosis-card { border-color: rgba(255,198,92,.18); background: var(--amber-soft); }
+    .hud.warning .diagnosis-card strong { color: var(--amber); }
+
+    .trend-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 22px;
+      margin-top: 5px;
+      color: var(--muted);
+      font-size: 9.5px;
+    }
+
+    .sparkline { display: flex; align-items: flex-end; gap: 2px; width: 48px; height: 15px; }
+    .sparkline i { flex: 1; min-width: 2px; height: var(--h); border-radius: 2px 2px 0 0; background: rgba(99,230,139,.72); }
+    .hud.warning .sparkline i { background: rgba(255,198,92,.78); }
+    .trend-row strong { color: #e8edf2; font-weight: 600; }
+
+    .detail {
+      display: none;
+      padding: 0 15px 13px;
+    }
+
+    .hud.expanded .detail { display: block; }
+    .detail-pane { display: none; }
+    .detail-pane.active { display: block; }
+
+    .detail-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px 12px;
+      padding-top: 10px;
+      border-top: 1px solid rgba(255,255,255,.075);
+      color: var(--muted);
+      font-size: 10.5px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .detail-grid strong { color: #e7edf2; font-weight: 600; }
+
+    .expand-button {
+      position: relative;
+      z-index: 4;
+      width: 100%;
+      height: 24px;
+      border: 0;
+      border-top: 1px solid rgba(255,255,255,.07);
+      color: var(--faint);
+      background: rgba(255,255,255,.02);
+      cursor: pointer;
+      font: inherit;
+      font-size: 10px;
+    }
+
+    .expand-button:hover { color: #d9e3eb; background: rgba(255,255,255,.045); }
+
+    .controls {
+      position: relative;
+      z-index: 2;
+      padding: 26px;
+      border-left: 1px solid rgba(255,255,255,.08);
+      background: rgba(11,14,19,.82);
+    }
+
+    .controls h2 { margin: 0 0 7px; font-size: 18px; }
+    .controls > p { margin: 0 0 24px; color: var(--muted); font-size: 13px; line-height: 1.6; }
+
+    .control-group { margin-bottom: 24px; }
+    .control-label { display: block; margin-bottom: 9px; color: #d9e1e8; font-size: 12px; font-weight: 650; }
+
+    .segmented {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+      padding: 4px;
+      border: 1px solid rgba(255,255,255,.08);
+      border-radius: 11px;
+      background: rgba(255,255,255,.025);
+    }
+
+    .segmented button {
+      min-height: 35px;
+      padding: 6px 8px;
+      border: 0;
+      border-radius: 8px;
+      color: var(--muted);
+      background: transparent;
+      cursor: pointer;
+      font: inherit;
+      font-size: 11px;
+    }
+
+    .segmented button.active {
+      color: white;
+      background: rgba(118,183,255,.15);
+      box-shadow: inset 0 0 0 1px rgba(118,183,255,.2);
+    }
+
+    .principles {
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .principles li {
+      position: relative;
+      margin: 0 0 11px;
+      padding-left: 18px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.52;
+    }
+
+    .principles li::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      top: 6px;
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--green);
+    }
+
+    .note {
+      margin-top: 22px;
+      padding: 12px;
+      border: 1px solid rgba(255,198,92,.16);
+      border-radius: 10px;
+      color: #d9c9a5;
+      background: rgba(255,198,92,.06);
+      font-size: 11px;
+      line-height: 1.55;
+    }
+
+    .hud.warning #computerDot { background: var(--amber); box-shadow: 0 0 12px rgba(255,198,92,.8); }
+
+    .settings-sheet {
+      display: none;
+      position: absolute;
+      inset: 0;
+      z-index: 8;
+      overflow: auto;
+      padding: 14px 15px 16px;
+      background: rgba(16, 20, 25, .97);
+      backdrop-filter: blur(28px);
+    }
+
+    .hud.settings-open .settings-sheet { display: block; }
+    .settings-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+    .settings-head strong { font-size: 13px; }
+    .settings-close { border: 0; color: var(--muted); background: transparent; cursor: pointer; font-size: 17px; }
+    .settings-group { padding: 10px 0; border-top: 1px solid rgba(255,255,255,.075); }
+    .settings-group-title { margin-bottom: 7px; color: var(--faint); font-size: 9px; font-weight: 700; letter-spacing: .1em; }
+    .setting-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 28px; color: #e6ecf1; font-size: 10.5px; }
+    .setting-row small { color: var(--faint); }
+    .setting-row select { max-width: 150px; border: 1px solid rgba(255,255,255,.12); border-radius: 7px; color: white; background: #252b32; padding: 4px 6px; font: inherit; font-size: 10px; }
+    .setting-row input[type="range"] { width: 112px; accent-color: var(--green); }
+    .setting-row input[type="checkbox"] { accent-color: var(--green); }
+    .swatches { display: flex; gap: 7px; }
+    .swatch { width: 18px; height: 18px; border: 2px solid transparent; border-radius: 50%; cursor: pointer; }
+    .swatch.active { border-color: white; }
+    .privacy-note { margin-top: 6px; color: var(--faint); font-size: 9.5px; line-height: 1.45; }
+    .freshness { margin-top: 7px; color: var(--faint); font-size: 9px; }
+    .hud.stale .freshness.codex-source { color: var(--red); }
+    .hud.stale #codexStatusText { color: var(--red); }
+    .hud.stale #codexPage .dot, .hud.stale #codexAlert { background: var(--red); box-shadow: 0 0 12px rgba(255,111,112,.75); }
+    .hud.compact .hud-main { padding-top: 9px; padding-bottom: 9px; }
+    .hud.compact .quota-card, .hud.compact .health-card { padding-top: 6px; padding-bottom: 6px; }
+    .hud-wrap.position-left-top { top: 44px; bottom: auto; }
+    .hud-wrap.position-right-bottom { right: 16px; left: auto; }
+    .hud-wrap.position-right-top { top: 44px; right: 16px; bottom: auto; left: auto; }
+    [hidden] { display: none !important; }
+    .segmented.three { grid-template-columns: repeat(3, 1fr); }
+
+    @media (max-width: 860px) {
+      .workspace { grid-template-columns: 1fr; }
+      .controls { border-left: 0; border-top: 1px solid rgba(255,255,255,.08); }
+      .topbar { flex-direction: column; }
+    }
+
+    @media (max-width: 560px) {
+      .page { width: min(100% - 20px, 1160px); padding-top: 24px; }
+      .workspace, .desktop { min-height: 540px; }
+      .desktop::before, .desktop::after { display: none; }
+      .hud-wrap { left: 10px; width: calc(100% - 20px); }
+      .metric-row { font-size: 10.5px; }
+      .controls { padding: 21px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">HTML PROTOTYPE · V4</p>
+        <h1>Codex 双页面状态悬浮窗</h1>
+        <p class="intro">Codex页集中显示额度、订阅与使用趋势；电脑性能页一眼判断是否吃紧、瓶颈在哪里、是否由Codex造成。只加入当前存在可靠数据来源的功能。</p>
+      </div>
+      <span class="badge">仅视觉原型，未修改悬浮窗</span>
+    </header>
+
+    <section class="workspace" aria-label="悬浮窗原型工作区">
+      <div class="desktop">
+        <div class="menubar"><span>●  Codex &nbsp; 文件 &nbsp; 编辑</span><span>8月2日 周日&nbsp;&nbsp; 19:28</span></div>
+        <div class="hud-wrap">
+          <article class="hud" id="hud" aria-label="Codex 状态悬浮窗示例">
+            <div class="hud-main">
+              <nav class="hud-tabs" aria-label="悬浮窗页面">
+                <button class="hud-tab active" type="button" data-page="codex">Codex<span class="tab-alert visible" id="codexAlert" aria-hidden="true"></span></button>
+                <button class="hud-tab" type="button" data-page="computer">电脑性能<span class="tab-alert" id="computerAlert" aria-hidden="true"></span></button>
+                <span class="sample-tag">示例数据</span>
+                <button class="settings-button" id="settingsButton" type="button" aria-label="打开设置">⚙</button>
+              </nav>
+
+              <section class="hud-page active" id="codexPage" data-page-content="codex">
+                <div class="status-row">
+                  <span class="dot" aria-hidden="true"></span>
+                  <span id="codexStatusText">Pro · 5小时额度暂未返回</span>
+                </div>
+
+                <div class="quota" aria-label="Codex额度" data-module="quota">
+                  <div class="quota-card">
+                    <div class="quota-head"><span>5小时额度</span><span id="fiveWindow">等待接口</span></div>
+                    <div class="quota-value unavailable" id="fiveValue">当前未返回</div>
+                    <div class="quota-reset" id="fiveReset">已预留显示位置</div>
+                    <div class="bar missing" id="fiveBar"><span></span></div>
+                  </div>
+                  <div class="quota-card">
+                    <div class="quota-head"><span>每周额度</span><span>剩余</span></div>
+                    <div class="quota-value" id="weekValue">81%</div>
+                    <div class="quota-reset" id="weekReset">4天8小时后恢复</div>
+                    <div class="bar" id="weekBar"><span style="width:81%"></span></div>
+                  </div>
+                </div>
+
+                <div class="codex-insights">
+                  <div class="insight-card" data-module="account"><span>订阅</span><strong>Pro</strong><small>不显示邮箱</small></div>
+                  <div class="insight-card" data-module="modelQuota"><span>模型专属额度</span><strong>Spark 100%</strong><small>接口返回时显示</small></div>
+                  <div class="insight-card" data-module="usage"><span>Token用量</span><strong>今日 1.28M · 示例</strong><small>7天趋势 ↑18% · 不等于额度</small></div>
+                </div>
+
+                <div class="freshness codex-source" id="codexFreshness">Codex本地账户接口 · 12秒前更新</div>
+              </section>
+
+              <section class="hud-page" id="computerPage" data-page-content="computer">
+                <div class="status-row">
+                  <span class="dot" id="computerDot" aria-hidden="true"></span>
+                  <span id="computerStatusText">电脑正常 · Codex未造成瓶颈</span>
+                </div>
+
+                <div class="diagnosis-grid">
+                  <div class="diagnosis-card"><span>当前瓶颈</span><strong id="bottleneckText">无</strong></div>
+                  <div class="diagnosis-card"><span>Codex影响</span><strong id="impactText">低</strong></div>
+                </div>
+
+                <div class="health-grid" data-module="system">
+                  <div class="health-card"><span>整机CPU</span><strong id="computerMetric">18%</strong></div>
+                  <div class="health-card"><span>内存压力</span><strong id="pressureMetric">正常</strong></div>
+                </div>
+
+                <div class="metric-row" data-module="attribution"><span class="metric-label">Codex</span><span id="codexCpu">CPU 3%</span><span class="divider">·</span><span id="codexMemory">内存 6.1 / 18G（34%）</span></div>
+                <div class="metric-row"><span class="metric-label">系统</span><span>热状态 正常</span><span class="divider">·</span><span>Swap十分钟 +0M</span></div>
+                <div class="trend-row" data-module="trend"><span>CPU近10分钟</span><div class="sparkline" id="cpuSparkline" aria-hidden="true"><i style="--h:28%"></i><i style="--h:35%"></i><i style="--h:31%"></i><i style="--h:48%"></i><i style="--h:42%"></i><i style="--h:38%"></i><i style="--h:46%"></i><i style="--h:34%"></i><i style="--h:40%"></i><i style="--h:36%"></i></div><strong id="trendMetric">平均16% · 峰值31%</strong></div>
+                <div class="freshness">macOS系统接口 · 2秒前更新</div>
+              </section>
+            </div>
+
+            <div class="detail" id="detail">
+              <div class="detail-pane active" data-detail-page="codex">
+                <div class="detail-grid">
+                  <span>数据来源 <strong>Codex本地账户接口</strong></span>
+                  <span>刷新频率 <strong>60秒</strong></span>
+                  <span>历史用量 <strong>按日Token趋势</strong></span>
+                  <span>连续使用 <strong>接口支持时显示</strong></span>
+                  <span>Codex版本 <strong>当前客户端版本</strong></span>
+                  <span>隐私 <strong>不显示邮箱</strong></span>
+                </div>
+              </div>
+              <div class="detail-pane" data-detail-page="computer">
+                <div class="detail-grid">
+                  <span>Swap <strong>6.5G（+0M/10分）</strong></span>
+                  <span>热状态 <strong>正常</strong></span>
+                  <span>Codex进程 <strong>71</strong></span>
+                  <span>最大进程 <strong>1.2G</strong></span>
+                  <span>磁盘写入 <strong>0.5 MB/s</strong></span>
+                  <span>物理网络 <strong>下载 0.1 MB/s</strong></span>
+                </div>
+              </div>
+            </div>
+            <button class="expand-button" id="expandButton" type="button" aria-expanded="false">展开Codex详情</button>
+
+            <section class="settings-sheet" id="settingsSheet" aria-label="悬浮窗设置">
+              <div class="settings-head"><strong>悬浮窗设置</strong><button class="settings-close" id="settingsClose" type="button" aria-label="关闭设置">×</button></div>
+              <div class="settings-group">
+                <div class="settings-group-title">显示内容</div>
+                <label class="setting-row"><span>Codex额度</span><input type="checkbox" data-module-toggle="quota" checked></label>
+                <label class="setting-row"><span>订阅类型</span><input type="checkbox" data-module-toggle="account" checked></label>
+                <label class="setting-row"><span>模型专属额度</span><input type="checkbox" data-module-toggle="modelQuota" checked></label>
+                <label class="setting-row"><span>Token用量趋势</span><input type="checkbox" data-module-toggle="usage" checked></label>
+                <label class="setting-row"><span>电脑核心状态</span><input type="checkbox" data-module-toggle="system" checked></label>
+                <label class="setting-row"><span>Codex性能占用</span><input type="checkbox" data-module-toggle="attribution" checked></label>
+                <label class="setting-row"><span>10分钟趋势</span><input type="checkbox" data-module-toggle="trend" checked></label>
+              </div>
+              <div class="settings-group">
+                <div class="settings-group-title">外观与位置</div>
+                <div class="setting-row"><span>强调色</span><div class="swatches"><button class="swatch active" type="button" data-accent="#63e68b" style="background:#63e68b" aria-label="绿色"></button><button class="swatch" type="button" data-accent="#76b7ff" style="background:#76b7ff" aria-label="蓝色"></button><button class="swatch" type="button" data-accent="#d99cff" style="background:#d99cff" aria-label="紫色"></button><button class="swatch" type="button" data-accent="#ffc65c" style="background:#ffc65c" aria-label="黄色"></button></div></div>
+                <label class="setting-row"><span>透明度 <small id="opacityValue">80%</small></span><input id="opacitySlider" type="range" min="55" max="100" value="80"></label>
+                <label class="setting-row"><span>显示密度</span><select id="densitySelect"><option value="standard">标准</option><option value="compact">紧凑</option></select></label>
+                <label class="setting-row"><span>屏幕位置</span><select id="positionSelect"><option value="left-bottom">左下角</option><option value="left-top">左上角</option><option value="right-bottom">右下角</option><option value="right-top">右上角</option></select></label>
+              </div>
+              <div class="settings-group">
+                <div class="settings-group-title">行为与性能</div>
+                <label class="setting-row"><span>默认页面</span><select id="defaultPageSelect"><option value="remember">记住上次页面</option><option value="codex">Codex</option><option value="computer">电脑性能</option></select></label>
+                <label class="setting-row"><span>核心状态刷新</span><select><option>5秒</option><option>10秒</option><option>20秒</option></select></label>
+                <label class="setting-row"><span>热状态等慢数据</span><select><option>20秒</option><option>10秒</option><option>关闭</option></select></label>
+                <label class="setting-row"><span>开机启动</span><input type="checkbox" checked></label>
+                <label class="setting-row"><span>本地历史记录</span><input type="checkbox"></label>
+                <p class="privacy-note">默认只使用本机数据，不读取浏览器 Cookie，不要求屏幕录制、管理员权限或完整磁盘权限。关闭温度等慢模块可进一步降低负担。</p>
+              </div>
+            </section>
+          </article>
+        </div>
+        <div class="dock" aria-hidden="true"></div>
+      </div>
+
+      <aside class="controls">
+        <h2>原型切换</h2>
+        <p>这些按钮只改变页面里的示例状态，方便确定最终布局。</p>
+
+        <div class="control-group">
+          <span class="control-label">额度接口状态</span>
+          <div class="segmented three" id="quotaControls">
+            <button class="active" type="button" data-quota="current">当前：缺少5小时</button>
+            <button type="button" data-quota="future">未来：双额度</button>
+            <button type="button" data-quota="stale">数据已过期</button>
+          </div>
+        </div>
+
+        <div class="control-group">
+          <span class="control-label">电脑状态</span>
+          <div class="segmented" id="healthControls">
+            <button class="active" type="button" data-health="normal">正常状态</button>
+            <button type="button" data-health="warning">Codex造成吃紧</button>
+          </div>
+        </div>
+
+        <div class="control-group">
+          <span class="control-label">本版结构</span>
+          <ol class="principles">
+            <li>Codex页显示额度、订阅、模型专属额度和Token用量趋势。</li>
+            <li>电脑性能页先给结论，再显示瓶颈、Codex影响和10分钟趋势。</li>
+            <li>接口没有返回的数据明确写“当前未返回”，过期数据会变红提示。</li>
+            <li>标签上的黄点代表该页有需要注意的信息，切走也不会漏掉。</li>
+            <li>两页都可展开，次要数据不占用日常常驻空间。</li>
+            <li>齿轮设置可选择模块、颜色、透明度、位置和刷新频率。</li>
+          </ol>
+        </div>
+
+        <div class="note">我的建议：默认只开轻量模块；高级温度、功耗和传感器单独标注额外负担并允许关闭。“当前未返回”不是0%，也不伪造5小时剩余额度。</div>
+      </aside>
+    </section>
+  </main>
+
+  <script>
+    const hud = document.querySelector('#hud');
+    const hudWrap = document.querySelector('.hud-wrap');
+    const expandButton = document.querySelector('#expandButton');
+    let currentPage = 'codex';
+    try { currentPage = localStorage.getItem('codex-hud-prototype-page') || 'codex'; } catch (_) {}
+
+    function updateExpandLabel() {
+      const expanded = hud.classList.contains('expanded');
+      const name = currentPage === 'codex' ? 'Codex' : '电脑';
+      expandButton.textContent = expanded ? `收起${name}详情` : `展开${name}详情`;
+    }
+
+    function switchPage(page) {
+      currentPage = page;
+      try { localStorage.setItem('codex-hud-prototype-page', page); } catch (_) {}
+      document.querySelectorAll('.hud-tab').forEach(item => item.classList.toggle('active', item.dataset.page === page));
+      document.querySelectorAll('[data-page-content]').forEach(item => item.classList.toggle('active', item.dataset.pageContent === page));
+      document.querySelectorAll('[data-detail-page]').forEach(item => item.classList.toggle('active', item.dataset.detailPage === page));
+      updateExpandLabel();
+    }
+
+    document.querySelector('.hud-tabs').addEventListener('click', (event) => {
+      const button = event.target.closest('button[data-page]');
+      if (button) switchPage(button.dataset.page);
+    });
+
+    expandButton.addEventListener('click', () => {
+      const expanded = hud.classList.toggle('expanded');
+      expandButton.setAttribute('aria-expanded', String(expanded));
+      updateExpandLabel();
+    });
+
+    document.querySelector('#settingsButton').addEventListener('click', () => hud.classList.add('settings-open'));
+    document.querySelector('#settingsClose').addEventListener('click', () => hud.classList.remove('settings-open'));
+
+    document.querySelectorAll('[data-module-toggle]').forEach(toggle => {
+      toggle.addEventListener('change', () => {
+        document.querySelectorAll(`[data-module="${toggle.dataset.moduleToggle}"]`).forEach(module => { module.hidden = !toggle.checked; });
+      });
+    });
+
+    document.querySelectorAll('[data-accent]').forEach(swatch => {
+      swatch.addEventListener('click', () => {
+        document.documentElement.style.setProperty('--green', swatch.dataset.accent);
+        document.querySelectorAll('[data-accent]').forEach(item => item.classList.toggle('active', item === swatch));
+      });
+    });
+
+    document.querySelector('#opacitySlider').addEventListener('input', event => {
+      document.documentElement.style.setProperty('--panel-opacity', Number(event.target.value) / 100);
+      document.querySelector('#opacityValue').textContent = `${event.target.value}%`;
+    });
+
+    document.querySelector('#densitySelect').addEventListener('change', event => {
+      hud.classList.toggle('compact', event.target.value === 'compact');
+    });
+
+    document.querySelector('#positionSelect').addEventListener('change', event => {
+      hudWrap.classList.remove('position-left-top', 'position-right-bottom', 'position-right-top');
+      if (event.target.value !== 'left-bottom') hudWrap.classList.add(`position-${event.target.value}`);
+    });
+
+    document.querySelector('#defaultPageSelect').addEventListener('change', event => {
+      if (event.target.value === 'codex' || event.target.value === 'computer') switchPage(event.target.value);
+    });
+
+    document.querySelector('#quotaControls').addEventListener('click', (event) => {
+      const button = event.target.closest('button[data-quota]');
+      if (!button) return;
+      button.parentElement.querySelectorAll('button').forEach(item => item.classList.toggle('active', item === button));
+      const future = button.dataset.quota === 'future';
+      const stale = button.dataset.quota === 'stale';
+      const fiveValue = document.querySelector('#fiveValue');
+      hud.classList.toggle('stale', stale);
+      document.querySelector('#codexAlert').classList.toggle('visible', !future || stale);
+      document.querySelector('#codexStatusText').textContent = stale
+        ? '数据已过期 · 暂不能确认额度'
+        : future ? 'Pro · Codex额度正常' : 'Pro · 5小时额度暂未返回';
+      document.querySelector('#codexFreshness').textContent = stale
+        ? 'Codex本地账户接口 · 8分钟前更新（已过期）'
+        : 'Codex本地账户接口 · 12秒前更新';
+      document.querySelector('#fiveWindow').textContent = future ? '剩余' : '等待接口';
+      fiveValue.textContent = future ? '72%' : '当前未返回';
+      fiveValue.classList.toggle('unavailable', !future);
+      document.querySelector('#fiveReset').textContent = future ? '1小时48分后恢复' : '已预留显示位置';
+      document.querySelector('#fiveBar').classList.toggle('missing', !future);
+      document.querySelector('#fiveBar span').style.width = future ? '72%' : '0';
+    });
+
+    document.querySelector('#healthControls').addEventListener('click', (event) => {
+      const button = event.target.closest('button[data-health]');
+      if (!button) return;
+      button.parentElement.querySelectorAll('button').forEach(item => item.classList.toggle('active', item === button));
+      const warning = button.dataset.health === 'warning';
+      hud.classList.toggle('warning', warning);
+      document.querySelector('#computerAlert').classList.toggle('visible', warning);
+      document.querySelector('#computerStatusText').textContent = warning ? 'CPU吃紧 · 主要由Codex造成' : '电脑正常 · Codex未造成瓶颈';
+      document.querySelector('#computerMetric').textContent = warning ? '94%' : '18%';
+      document.querySelector('#pressureMetric').textContent = warning ? '注意' : '正常';
+      document.querySelector('#codexCpu').textContent = warning ? 'CPU 58%' : 'CPU 3%';
+      document.querySelector('#codexMemory').textContent = warning ? '内存 10.2 / 18G（57%）' : '内存 6.1 / 18G（34%）';
+      document.querySelector('#bottleneckText').textContent = warning ? 'CPU' : '无';
+      document.querySelector('#impactText').textContent = warning ? '高 · 主要来源' : '低';
+      document.querySelector('#trendMetric').textContent = warning ? '平均71% · 峰值96%' : '平均16% · 峰值31%';
+      const heights = warning ? [48, 58, 72, 66, 81, 88, 76, 94, 82, 96] : [28, 35, 31, 48, 42, 38, 46, 34, 40, 36];
+      document.querySelectorAll('#cpuSparkline i').forEach((bar, index) => bar.style.setProperty('--h', `${heights[index]}%`));
+    });
+
+    switchPage(currentPage === 'computer' ? 'computer' : 'codex');
+  </script>
+</body>
+</html>
