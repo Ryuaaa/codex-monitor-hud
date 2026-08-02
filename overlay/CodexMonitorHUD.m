@@ -645,8 +645,39 @@ static NSString *FormatModuleState(NSTimeInterval timestamp, NSString *error) {
 
 @implementation AppDelegate
 
+- (void)configureApplicationMenu {
+    NSMenu *mainMenu = [NSMenu new];
+
+    NSMenuItem *appRoot = [NSMenuItem new];
+    NSMenu *appMenu = [[NSMenu alloc] initWithTitle:@"Codex Monitor HUD"];
+    NSMenuItem *about = [appMenu addItemWithTitle:@"关于 Codex Monitor HUD" action:@selector(orderFrontStandardAboutPanel:) keyEquivalent:@""];
+    about.target = NSApp;
+    [appMenu addItem:NSMenuItem.separatorItem];
+    NSMenuItem *show = [appMenu addItemWithTitle:@"显示悬浮窗" action:@selector(showHUD:) keyEquivalent:@""];
+    show.target = self;
+    NSMenuItem *hide = [appMenu addItemWithTitle:@"隐藏 Codex Monitor HUD" action:@selector(hide:) keyEquivalent:@"h"];
+    hide.target = NSApp;
+    [appMenu addItem:NSMenuItem.separatorItem];
+    NSMenuItem *quit = [appMenu addItemWithTitle:@"退出 Codex Monitor HUD" action:@selector(terminate:) keyEquivalent:@"q"];
+    quit.target = NSApp;
+    appRoot.submenu = appMenu;
+    [mainMenu addItem:appRoot];
+
+    NSMenuItem *windowRoot = [NSMenuItem new];
+    NSMenu *windowMenu = [[NSMenu alloc] initWithTitle:@"窗口"];
+    NSMenuItem *minimize = [windowMenu addItemWithTitle:@"最小化到程序栏" action:@selector(minimizeToDock:) keyEquivalent:@"m"];
+    minimize.target = self;
+    NSMenuItem *restore = [windowMenu addItemWithTitle:@"显示悬浮窗" action:@selector(showHUD:) keyEquivalent:@""];
+    restore.target = self;
+    windowRoot.submenu = windowMenu;
+    [mainMenu addItem:windowRoot];
+    NSApp.windowsMenu = windowMenu;
+    NSApp.mainMenu = mainMenu;
+}
+
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
     [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
+    [self configureApplicationMenu];
     NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
     self.compact = [d objectForKey:@"compact"] ? [d boolForKey:@"compact"] : YES;
     BOOL legacyQuotaVisible = [d objectForKey:@"showQuota"] ? [d boolForKey:@"showQuota"] : YES;
@@ -699,9 +730,14 @@ static NSString *FormatModuleState(NSTimeInterval timestamp, NSString *error) {
 }
 
 - (BOOL)applicationShouldHandleReopen:(NSApplication *)sender hasVisibleWindows:(BOOL)hasVisibleWindows {
-    if (self.panel.isMiniaturized) [self.panel deminiaturize:nil];
-    else if (!hasVisibleWindows) [self.panel orderFrontRegardless];
+    [self showHUD:nil];
     return YES;
+}
+
+- (void)showHUD:(id)sender {
+    if (self.panel.isMiniaturized) [self.panel deminiaturize:nil];
+    [NSApp activateIgnoringOtherApps:YES];
+    [self.panel orderFrontRegardless];
 }
 
 - (NSColor *)accentColor {

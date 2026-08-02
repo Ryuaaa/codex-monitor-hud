@@ -72,7 +72,11 @@ def values(rows: list[dict[str, float | str]], field: str) -> list[float]:
 def main() -> int:
     parser = argparse.ArgumentParser(description="汇总最近一段时间的整机与 Codex 资源趋势")
     parser.add_argument("--hours", type=float, default=24.0, help="回看小时数，默认 24")
-    parser.add_argument("--data-dir", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "native-history"))
+    parser.add_argument(
+        "--data-dir",
+        default=os.path.expanduser("~/Library/Application Support/CodexSystemMonitor/native-history"),
+        help="原生一分钟历史目录；默认读取当前用户的应用支持目录",
+    )
     args = parser.parse_args()
     rows = read_rows(args.data_dir, int(time.time() - args.hours * 3600))
     if not rows:
