@@ -1,0 +1,15 @@
+name: build
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  macos-build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build native app
+        run: ./build-overlay.sh
+      - name: Run calendar logic test
+        run: '"/private/tmp/codex-monitor-hud-build/Codex Monitor HUD.app/Contents/MacOS/CodexMonitorHUD" --logic-diagnostic'
