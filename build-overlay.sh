@@ -9,7 +9,7 @@ contents_dir="$app_dir/Contents"
 macos_dir="$contents_dir/MacOS"
 
 /bin/mkdir -p "$macos_dir"
-/usr/bin/xcrun clang -O2 -fobjc-arc \
+/usr/bin/xcrun clang -O2 -fobjc-arc -Wall -Wextra -Werror \
   -framework Cocoa \
   "$source_dir/overlay/CodexMonitorHUD.m" \
   "$source_dir/overlay/CodexStatusProvider.m" \

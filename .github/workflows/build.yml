@@ -13,3 +13,5 @@ jobs:
         run: ./build-overlay.sh
       - name: Run calendar logic test
         run: '"/private/tmp/codex-monitor-hud-build/Codex Monitor HUD.app/Contents/MacOS/CodexMonitorHUD" --logic-diagnostic'
+      - name: Run settings and window size test
+        run: '"/private/tmp/codex-monitor-hud-build/Codex Monitor HUD.app/Contents/MacOS/CodexMonitorHUD" --ui-diagnostic'

@@ -1,6 +1,6 @@
 #import "CodexStatusProvider.h"
 
-NSDictionary<NSString *, NSNumber *> *CodexCalendarUsage(NSArray *buckets, NSDate *now) {
+NSDictionary<NSString *, id> *CodexCalendarUsage(NSArray *buckets, NSDate *now) {
     NSMutableDictionary<NSString *, NSNumber *> *tokensByDate = [NSMutableDictionary dictionary];
     for (NSDictionary *bucket in buckets ?: @[]) {
         NSString *date = [bucket[@"startDate"] isKindOfClass:NSString.class] ? bucket[@"startDate"] : nil;
@@ -15,13 +15,24 @@ NSDictionary<NSString *, NSNumber *> *CodexCalendarUsage(NSArray *buckets, NSDat
     dateFormatter.timeZone = calendar.timeZone; dateFormatter.dateFormat = @"yyyy-MM-dd";
     long long today = 0, recent = 0, previous = 0;
     NSDate *startOfToday = [calendar startOfDayForDate:now ?: NSDate.date];
+    NSString *todayKey = [dateFormatter stringFromDate:startOfToday];
+    BOOL todayAvailable = tokensByDate[todayKey] != nil;
+    NSString *latestDate = nil;
+    for (NSString *date in tokensByDate) {
+        NSDate *parsed = [dateFormatter dateFromString:date];
+        if (!parsed || ![[dateFormatter stringFromDate:parsed] isEqualToString:date] || [date compare:todayKey] == NSOrderedDescending) continue;
+        if (!latestDate || [date compare:latestDate] == NSOrderedDescending) latestDate = date;
+    }
+    NSDate *anchorDate = latestDate ? [dateFormatter dateFromString:latestDate] : startOfToday;
     for (NSInteger dayOffset = 0; dayOffset < 14; dayOffset++) {
-        NSDate *date = [calendar dateByAddingUnit:NSCalendarUnitDay value:-dayOffset toDate:startOfToday options:0];
+        NSDate *date = [calendar dateByAddingUnit:NSCalendarUnitDay value:-dayOffset toDate:anchorDate options:0];
         long long tokens = [tokensByDate[[dateFormatter stringFromDate:date]] longLongValue];
-        if (dayOffset == 0) today = tokens;
         if (dayOffset < 7) recent += tokens; else previous += tokens;
     }
-    return @{@"today": @(today), @"recent": @(recent), @"previous": @(previous)};
+    if (todayAvailable) today = [tokensByDate[todayKey] longLongValue];
+    long long latestTokens = latestDate ? [tokensByDate[latestDate] longLongValue] : 0;
+    return @{ @"today": @(today), @"todayAvailable": @(todayAvailable), @"recent": @(recent), @"previous": @(previous),
+              @"latestDate": latestDate ?: @"", @"latestTokens": @(latestTokens) };
 }
 
 @implementation CodexStatusSnapshot
@@ -120,8 +131,7 @@ NSDictionary<NSString *, NSNumber *> *CodexCalendarUsage(NSArray *buckets, NSDat
     [self sendObject:@{
         @"id": @1,
         @"method": @"initialize",
-        @"params": @{ @"clientInfo": @{ @"name": @"codex-monitor-hud", @"version": @"0.7.0" },
-                       @"capabilities": @{ @"experimentalApi": @YES } }
+        @"params": @{ @"clientInfo": @{ @"name": @"codex-monitor-hud", @"version": @"0.7.0" } }
     }];
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(8 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         if (weakSelf.task.running) {
@@ -238,7 +248,7 @@ NSDictionary<NSString *, NSNumber *> *CodexCalendarUsage(NSArray *buckets, NSDat
         break;
     }
     self.snapshot.updatedAt = NSDate.date.timeIntervalSince1970;
-    self.snapshot.statusText = self.snapshot.fiveHourAvailable ? @"Codex额度正常" : @"5小时额度暂未返回";
+    self.snapshot.statusText = @"Codex额度已更新";
     [self notifyUpdate];
 }
 
@@ -255,13 +265,16 @@ NSDictionary<NSString *, NSNumber *> *CodexCalendarUsage(NSArray *buckets, NSDat
     NSArray *buckets = [result[@"dailyUsageBuckets"] isKindOfClass:NSArray.class] ? result[@"dailyUsageBuckets"] : nil;
     NSDictionary *summary = [result[@"summary"] isKindOfClass:NSDictionary.class] ? result[@"summary"] : nil;
     if (!buckets && !summary) { self.snapshot.usageErrorText = @"用量当前未返回"; return; }
-    NSDictionary<NSString *, NSNumber *> *usage = CodexCalendarUsage(buckets, NSDate.date);
+    NSDictionary<NSString *, id> *usage = CodexCalendarUsage(buckets, NSDate.date);
     self.snapshot.usageAvailable = YES;
     self.snapshot.usageUpdatedAt = NSDate.date.timeIntervalSince1970;
     self.snapshot.usageErrorText = nil;
     self.snapshot.todayTokens = [usage[@"today"] longLongValue];
+    self.snapshot.todayUsageAvailable = [usage[@"todayAvailable"] boolValue];
     self.snapshot.sevenDayTokens = [usage[@"recent"] longLongValue];
     self.snapshot.previousSevenDayTokens = [usage[@"previous"] longLongValue];
+    self.snapshot.latestUsageDate = usage[@"latestDate"];
+    self.snapshot.latestUsageTokens = [usage[@"latestTokens"] longLongValue];
     self.snapshot.lifetimeTokens = [summary[@"lifetimeTokens"] longLongValue];
     self.snapshot.currentStreakDays = [summary[@"currentStreakDays"] integerValue];
 }
