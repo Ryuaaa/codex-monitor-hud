@@ -1,6 +1,6 @@
 #import <Foundation/Foundation.h>
 
-FOUNDATION_EXPORT NSDictionary<NSString *, NSNumber *> *CodexCalendarUsage(NSArray *buckets, NSDate *now);
+FOUNDATION_EXPORT NSDictionary<NSString *, id> *CodexCalendarUsage(NSArray *buckets, NSDate *now);
 
 @interface CodexStatusSnapshot : NSObject
 @property(nonatomic) BOOL quotaAvailable;
@@ -20,8 +20,11 @@ FOUNDATION_EXPORT NSDictionary<NSString *, NSNumber *> *CodexCalendarUsage(NSArr
 @property(nonatomic) NSTimeInterval usageUpdatedAt;
 @property(nonatomic, copy) NSString *usageErrorText;
 @property(nonatomic) long long todayTokens;
+@property(nonatomic) BOOL todayUsageAvailable;
 @property(nonatomic) long long sevenDayTokens;
 @property(nonatomic) long long previousSevenDayTokens;
+@property(nonatomic, copy) NSString *latestUsageDate;
+@property(nonatomic) long long latestUsageTokens;
 @property(nonatomic) long long lifetimeTokens;
 @property(nonatomic) NSInteger currentStreakDays;
 @property(nonatomic) BOOL modelQuotaAvailable;
