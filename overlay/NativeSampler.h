@@ -1,5 +1,7 @@
 #import <Cocoa/Cocoa.h>
 
+double NativeRawCPUPercentFromAbsoluteTime(uint64_t deltaCPUTime, NSTimeInterval elapsed, uint32_t timebaseNumer, uint32_t timebaseDenom);
+
 @interface NativeTopApp : NSObject
 @property(nonatomic, copy) NSString *name;
 @property(nonatomic) double cpuPercent;

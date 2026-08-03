@@ -4,6 +4,7 @@
 #import <ifaddrs.h>
 #import <libproc.h>
 #import <mach/mach.h>
+#import <mach/mach_time.h>
 #import <net/if.h>
 #import <net/if_var.h>
 #import <sys/proc_info.h>
@@ -69,6 +70,21 @@
 @end
 
 @implementation NativeSampler
+
+double NativeRawCPUPercentFromAbsoluteTime(uint64_t deltaCPUTime, NSTimeInterval elapsed, uint32_t timebaseNumer, uint32_t timebaseDenom) {
+    if (elapsed <= 0 || timebaseNumer == 0 || timebaseDenom == 0) return 0;
+    double nanoseconds = (double)deltaCPUTime * (double)timebaseNumer / (double)timebaseDenom;
+    return nanoseconds / (elapsed * 1e9) * 100.0;
+}
+
+static double NativeRawCPUPercent(uint64_t deltaCPUTime, NSTimeInterval elapsed) {
+    static mach_timebase_info_data_t timebase = {0};
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        mach_timebase_info(&timebase);
+    });
+    return NativeRawCPUPercentFromAbsoluteTime(deltaCPUTime, elapsed, timebase.numer, timebase.denom);
+}
 
 - (instancetype)init {
     self = [super init];
@@ -146,7 +162,7 @@
         uint64_t previousRead = [previous[@"read"] unsignedLongLongValue];
         uint64_t previousWrite = [previous[@"write"] unsignedLongLongValue];
         if (elapsed > 0.2) {
-            if (cpuTime >= previousCPU) cpuRawPercent = (double)(cpuTime - previousCPU) / (elapsed * 1e9) * 100.0;
+            if (cpuTime >= previousCPU) cpuRawPercent = NativeRawCPUPercent(cpuTime - previousCPU, elapsed);
             if (usage.ri_diskio_bytesread >= previousRead) readMBps = (double)(usage.ri_diskio_bytesread - previousRead) / elapsed / 1048576.0;
             if (usage.ri_diskio_byteswritten >= previousWrite) writeMBps = (double)(usage.ri_diskio_byteswritten - previousWrite) / elapsed / 1048576.0;
         }

@@ -9,6 +9,7 @@ import glob
 import math
 import os
 import statistics
+import tempfile
 import time
 from collections import Counter
 from datetime import datetime
@@ -64,6 +65,27 @@ def read_rows(data_dir: str, cutoff: int) -> list[dict[str, float | str]]:
     return sorted(rows, key=lambda item: float(item["epoch"]))
 
 
+def read_events(data_dir: str, cutoff: int) -> list[dict[str, float | str]]:
+    path = os.path.join(data_dir, "events.csv")
+    if not os.path.exists(path):
+        return []
+    events: list[dict[str, float | str]] = []
+    with open(path, newline="", encoding="utf-8") as handle:
+        for raw in csv.DictReader(handle):
+            try:
+                epoch = float(raw["epoch"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if epoch < cutoff:
+                continue
+            events.append({
+                "timestamp": raw.get("timestamp", ""), "epoch": epoch,
+                "event": raw.get("event", "unknown"),
+                "instance_id": raw.get("instance_id", "unknown"),
+            })
+    return sorted(events, key=lambda item: float(item["epoch"]))
+
+
 def values(rows: list[dict[str, float | str]], field: str) -> list[float]:
     result = [float(row[field]) for row in rows]
     return [value for value in result if not math.isnan(value)]
@@ -77,14 +99,35 @@ def main() -> int:
         default=os.path.expanduser("~/Library/Application Support/CodexSystemMonitor/native-history"),
         help="原生一分钟历史目录；默认读取当前用户的应用支持目录",
     )
+    parser.add_argument("--self-test", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
-    rows = read_rows(args.data_dir, int(time.time() - args.hours * 3600))
+    if args.self_test:
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "events.csv")
+            with open(path, "w", newline="", encoding="utf-8") as handle:
+                writer = csv.writer(handle)
+                writer.writerow(("timestamp", "epoch", "event", "instance_id"))
+                writer.writerow(("2026-01-01 00:00:00", 100, "start", "one"))
+                writer.writerow(("2026-01-01 00:10:00", 700, "wake", "one"))
+                writer.writerow(("2026-01-01 00:20:00", 1300, "terminate", "one"))
+                writer.writerow(("2026-01-01 00:21:00", 1360, "restart", "two"))
+            passed = [event["event"] for event in read_events(directory, 500)] == ["wake", "terminate", "restart"]
+        print(f"lifecycle_event_test={'pass' if passed else 'fail'}")
+        return 0 if passed else 6
+    cutoff = int(time.time() - args.hours * 3600)
+    rows = read_rows(args.data_dir, cutoff)
+    events = read_events(args.data_dir, cutoff)
     if not rows:
         print("没有找到指定时间范围内的原生一分钟趋势记录。")
         return 1
 
     epochs = values(rows, "epoch")
     gaps = [later - earlier for earlier, later in zip(epochs, epochs[1:])]
+    gap_windows = [(earlier, later) for earlier, later in zip(epochs, epochs[1:]) if later - earlier > 120]
+    explained_gaps = sum(
+        any(earlier - 60 <= float(event["epoch"]) <= later + 60 for event in events)
+        for earlier, later in gap_windows
+    )
     start = datetime.fromtimestamp(epochs[0]).astimezone().strftime("%Y-%m-%d %H:%M:%S %z")
     end = datetime.fromtimestamp(epochs[-1]).astimezone().strftime("%Y-%m-%d %H:%M:%S %z")
     coverage_hours = (epochs[-1] - epochs[0]) / 3600 if len(epochs) > 1 else 0
@@ -113,6 +156,16 @@ def main() -> int:
     print(f"- 实际覆盖：{start} 至 {end}（{coverage_hours:.2f} 小时）")
     print(f"- 一分钟摘要：{len(rows)} 条；完整度约 {min(100, len(rows) / expected * 100):.1f}%")
     print(f"- 超过 2 分钟的缺口：{sum(gap > 120 for gap in gaps)} 个\n")
+
+    if events:
+        event_counts = Counter(str(event["event"]) for event in events)
+        instance_count = len({str(event["instance_id"]) for event in events})
+        print("## 运行连续性\n")
+        print(f"- 实例 {instance_count} 个；启动 {event_counts['start']} 次；异常结束或系统重启后的再启动 {event_counts['restart']} 次；唤醒 {event_counts['wake']} 次；正常退出 {event_counts['terminate']} 次")
+        print(f"- 有启动或唤醒标记可解释的长缺口：{explained_gaps}/{len(gap_windows)} 个\n")
+    else:
+        print("## 运行连续性\n")
+        print("- 当前时间范围没有生命周期标记；旧版历史无法区分睡眠、重启与意外中断。\n")
 
     print("## 一眼结论\n")
     print("- 状态分钟数：" + "；".join(f"{labels.get(code, code)} {count}" for code, count in bottlenecks.most_common()))

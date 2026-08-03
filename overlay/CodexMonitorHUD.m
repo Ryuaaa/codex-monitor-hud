@@ -1,6 +1,7 @@
 #import <Cocoa/Cocoa.h>
 #import "NativeSampler.h"
 #import "CodexStatusProvider.h"
+#import "HUDView.h"
 
 static NSString *FormatRate(double value) {
     if (value >= 1.0) return [NSString stringWithFormat:@"%.1f MB/s", value];
@@ -58,558 +59,6 @@ static NSString *FormatModuleState(NSTimeInterval timestamp, NSString *error) {
     return FormatAge(timestamp);
 }
 
-@interface HUDProgressView : NSView
-@property(nonatomic) CGFloat progress;
-@property(nonatomic, strong) NSColor *accentColor;
-@end
-
-@implementation HUDProgressView
-- (instancetype)initWithFrame:(NSRect)frameRect {
-    self = [super initWithFrame:frameRect];
-    if (self) { _progress = 0; _accentColor = NSColor.systemGreenColor; self.wantsLayer = YES; }
-    return self;
-}
-- (NSSize)intrinsicContentSize { return NSMakeSize(NSViewNoIntrinsicMetric, 4); }
-- (void)setProgress:(CGFloat)progress { _progress = MAX(0, MIN(1, progress)); self.needsDisplay = YES; }
-- (void)setAccentColor:(NSColor *)accentColor { _accentColor = accentColor ?: NSColor.systemGreenColor; self.needsDisplay = YES; }
-- (void)drawRect:(NSRect)dirtyRect {
-    NSRect bounds = NSInsetRect(self.bounds, 0, 0.5);
-    NSBezierPath *track = [NSBezierPath bezierPathWithRoundedRect:bounds xRadius:2 yRadius:2];
-    [[NSColor colorWithWhite:1 alpha:0.08] setFill]; [track fill];
-    if (self.progress <= 0) return;
-    NSRect fillRect = bounds; fillRect.size.width *= self.progress;
-    NSBezierPath *fill = [NSBezierPath bezierPathWithRoundedRect:fillRect xRadius:2 yRadius:2];
-    [self.accentColor setFill]; [fill fill];
-}
-@end
-
-@interface HUDQuotaCard : NSBox
-@property(nonatomic, strong) NSTextField *titleLabel;
-@property(nonatomic, strong) NSTextField *windowLabel;
-@property(nonatomic, strong) NSTextField *valueLabel;
-@property(nonatomic, strong) NSTextField *resetLabel;
-@property(nonatomic, strong) HUDProgressView *progressView;
-- (instancetype)initWithTitle:(NSString *)title;
-- (void)showAvailable:(BOOL)available remaining:(double)remaining reset:(NSString *)reset accent:(NSColor *)accent;
-@end
-
-@implementation HUDQuotaCard
-- (NSTextField *)text:(NSString *)text size:(CGFloat)size color:(NSColor *)color weight:(NSFontWeight)weight {
-    NSTextField *label = [NSTextField labelWithString:text];
-    label.font = [NSFont monospacedDigitSystemFontOfSize:size weight:weight];
-    label.textColor = color; label.lineBreakMode = NSLineBreakByTruncatingTail; label.maximumNumberOfLines = 1;
-    return label;
-}
-- (instancetype)initWithTitle:(NSString *)title {
-    self = [super initWithFrame:NSZeroRect];
-    if (!self) return nil;
-    self.boxType = NSBoxCustom; self.titlePosition = NSNoTitle;
-    self.fillColor = [NSColor colorWithWhite:1 alpha:0.038];
-    self.borderColor = [NSColor colorWithWhite:1 alpha:0.08];
-    self.borderWidth = 1; self.cornerRadius = 10; self.contentViewMargins = NSMakeSize(10, 8);
-    _titleLabel = [self text:title size:11 color:NSColor.secondaryLabelColor weight:NSFontWeightMedium];
-    _windowLabel = [self text:@"剩余" size:10.5 color:NSColor.tertiaryLabelColor weight:NSFontWeightRegular];
-    NSStackView *head = [NSStackView stackViewWithViews:@[_titleLabel, _windowLabel]];
-    head.orientation = NSUserInterfaceLayoutOrientationHorizontal; head.distribution = NSStackViewDistributionFill;
-    [_titleLabel setContentHuggingPriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
-    [_windowLabel setContentHuggingPriority:NSLayoutPriorityRequired forOrientation:NSLayoutConstraintOrientationHorizontal];
-    _valueLabel = [self text:@"--" size:19 color:NSColor.systemGreenColor weight:NSFontWeightBold];
-    _resetLabel = [self text:@"等待接口" size:10.5 color:NSColor.tertiaryLabelColor weight:NSFontWeightRegular];
-    _progressView = [HUDProgressView new];
-    NSStackView *stack = [NSStackView stackViewWithViews:@[head, _valueLabel, _resetLabel, _progressView]];
-    stack.orientation = NSUserInterfaceLayoutOrientationVertical; stack.alignment = NSLayoutAttributeLeading; stack.spacing = 3;
-    stack.translatesAutoresizingMaskIntoConstraints = NO; [self.contentView addSubview:stack];
-    [NSLayoutConstraint activateConstraints:@[
-        [stack.leadingAnchor constraintEqualToAnchor:self.contentView.leadingAnchor], [stack.trailingAnchor constraintEqualToAnchor:self.contentView.trailingAnchor],
-        [stack.topAnchor constraintEqualToAnchor:self.contentView.topAnchor], [stack.bottomAnchor constraintEqualToAnchor:self.contentView.bottomAnchor],
-        [head.widthAnchor constraintEqualToAnchor:stack.widthAnchor], [_progressView.widthAnchor constraintEqualToAnchor:stack.widthAnchor]
-    ]];
-    return self;
-}
-- (void)showAvailable:(BOOL)available remaining:(double)remaining reset:(NSString *)reset accent:(NSColor *)accent {
-    self.windowLabel.stringValue = available ? @"剩余" : @"等待接口";
-    self.valueLabel.stringValue = available ? [NSString stringWithFormat:@"%.0f%%", remaining] : @"当前未返回";
-    self.valueLabel.font = [NSFont monospacedDigitSystemFontOfSize:(available ? 19 : 14) weight:NSFontWeightBold];
-    self.valueLabel.textColor = available ? accent : NSColor.tertiaryLabelColor;
-    self.resetLabel.stringValue = available ? reset : @"已预留显示位置";
-    self.progressView.accentColor = accent; self.progressView.progress = available ? remaining / 100.0 : 0;
-}
-@end
-
-@interface HUDMetricCard : NSBox
-@property(nonatomic, strong) NSTextField *titleLabel;
-@property(nonatomic, strong) NSTextField *valueLabel;
-@property(nonatomic, strong) NSTextField *subtitleLabel;
-- (instancetype)initWithTitle:(NSString *)title value:(NSString *)value subtitle:(NSString *)subtitle;
-@end
-
-@implementation HUDMetricCard
-- (instancetype)initWithTitle:(NSString *)title value:(NSString *)value subtitle:(NSString *)subtitle {
-    self = [super initWithFrame:NSZeroRect];
-    if (!self) return nil;
-    self.boxType = NSBoxCustom; self.titlePosition = NSNoTitle;
-    self.fillColor = [NSColor colorWithWhite:1 alpha:0.032]; self.borderColor = [NSColor colorWithWhite:1 alpha:0.075];
-    self.borderWidth = 1; self.cornerRadius = 9; self.contentViewMargins = NSMakeSize(9, 7);
-    _titleLabel = [NSTextField labelWithString:title]; _titleLabel.font = [NSFont systemFontOfSize:10.5 weight:NSFontWeightMedium]; _titleLabel.textColor = NSColor.tertiaryLabelColor;
-    _valueLabel = [NSTextField labelWithString:value]; _valueLabel.font = [NSFont monospacedDigitSystemFontOfSize:14 weight:NSFontWeightSemibold]; _valueLabel.textColor = NSColor.labelColor;
-    _subtitleLabel = [NSTextField labelWithString:subtitle ?: @""]; _subtitleLabel.font = [NSFont systemFontOfSize:10]; _subtitleLabel.textColor = NSColor.tertiaryLabelColor;
-    for (NSTextField *label in @[_titleLabel, _valueLabel, _subtitleLabel]) { label.lineBreakMode = NSLineBreakByTruncatingTail; label.maximumNumberOfLines = 1; }
-    NSStackView *stack = [NSStackView stackViewWithViews:@[_titleLabel, _valueLabel, _subtitleLabel]];
-    stack.orientation = NSUserInterfaceLayoutOrientationVertical; stack.alignment = NSLayoutAttributeLeading; stack.spacing = 2;
-    stack.translatesAutoresizingMaskIntoConstraints = NO; [self.contentView addSubview:stack];
-    [NSLayoutConstraint activateConstraints:@[
-        [stack.leadingAnchor constraintEqualToAnchor:self.contentView.leadingAnchor], [stack.trailingAnchor constraintEqualToAnchor:self.contentView.trailingAnchor],
-        [stack.topAnchor constraintEqualToAnchor:self.contentView.topAnchor], [stack.bottomAnchor constraintEqualToAnchor:self.contentView.bottomAnchor]
-    ]];
-    return self;
-}
-@end
-
-@interface HUDMemoryListCard : NSBox
-@property(nonatomic, strong) NSArray<NSTextField *> *rows;
-- (void)updateApps:(NSArray<NativeTopApp *> *)apps totalMemoryGiB:(double)totalMemoryGiB;
-@end
-
-@implementation HUDMemoryListCard
-- (instancetype)init {
-    self = [super initWithFrame:NSZeroRect];
-    if (!self) return nil;
-    self.boxType = NSBoxCustom; self.titlePosition = NSNoTitle;
-    self.fillColor = [NSColor colorWithWhite:1 alpha:0.032]; self.borderColor = [NSColor colorWithWhite:1 alpha:0.075];
-    self.borderWidth = 1; self.cornerRadius = 9; self.contentViewMargins = NSMakeSize(9, 7);
-    NSTextField *title = [NSTextField labelWithString:@"内存占用最高的软件"];
-    title.font = [NSFont systemFontOfSize:10.5 weight:NSFontWeightMedium]; title.textColor = NSColor.tertiaryLabelColor;
-    NSMutableArray<NSTextField *> *rows = [NSMutableArray array];
-    for (NSInteger index = 0; index < 5; index++) {
-        NSTextField *row = [NSTextField labelWithString:@"--"];
-        row.font = [NSFont monospacedDigitSystemFontOfSize:11 weight:NSFontWeightMedium]; row.textColor = NSColor.labelColor;
-        row.lineBreakMode = NSLineBreakByTruncatingMiddle; row.maximumNumberOfLines = 1;
-        [rows addObject:row];
-    }
-    _rows = rows;
-    NSMutableArray<NSView *> *views = [NSMutableArray arrayWithObject:title]; [views addObjectsFromArray:rows];
-    NSStackView *stack = [NSStackView stackViewWithViews:views];
-    stack.orientation = NSUserInterfaceLayoutOrientationVertical; stack.alignment = NSLayoutAttributeLeading; stack.spacing = 3;
-    stack.translatesAutoresizingMaskIntoConstraints = NO; [self.contentView addSubview:stack];
-    [NSLayoutConstraint activateConstraints:@[
-        [stack.leadingAnchor constraintEqualToAnchor:self.contentView.leadingAnchor], [stack.trailingAnchor constraintEqualToAnchor:self.contentView.trailingAnchor],
-        [stack.topAnchor constraintEqualToAnchor:self.contentView.topAnchor], [stack.bottomAnchor constraintEqualToAnchor:self.contentView.bottomAnchor]
-    ]];
-    return self;
-}
-- (void)updateApps:(NSArray<NativeTopApp *> *)apps totalMemoryGiB:(double)totalMemoryGiB {
-    for (NSUInteger index = 0; index < self.rows.count; index++) {
-        NSTextField *row = self.rows[index];
-        if (index < apps.count) {
-            NativeTopApp *app = apps[index];
-            double percent = totalMemoryGiB > 0 ? app.memoryGiB / totalMemoryGiB * 100.0 : 0;
-            row.stringValue = [NSString stringWithFormat:@"%lu  %@  %.1fG · %.0f%%", (unsigned long)(index + 1), app.name, app.memoryGiB, percent];
-        } else row.stringValue = @"--";
-    }
-}
-@end
-
-@interface HUDSparklineView : NSView
-@property(nonatomic, copy) NSArray<NSNumber *> *values;
-@property(nonatomic, strong) NSColor *accentColor;
-@end
-
-@implementation HUDSparklineView
-- (instancetype)initWithFrame:(NSRect)frameRect { self = [super initWithFrame:frameRect]; if (self) { _values = @[]; _accentColor = NSColor.systemGreenColor; } return self; }
-- (NSSize)intrinsicContentSize { return NSMakeSize(68, 22); }
-- (void)setValues:(NSArray<NSNumber *> *)values { _values = [values copy] ?: @[]; self.needsDisplay = YES; }
-- (void)setAccentColor:(NSColor *)accentColor { _accentColor = accentColor ?: NSColor.systemGreenColor; self.needsDisplay = YES; }
-- (void)drawRect:(NSRect)dirtyRect {
-    if (self.values.count == 0) return;
-    NSUInteger visibleCount = MIN((NSUInteger)18, self.values.count); CGFloat gap = 2;
-    CGFloat barWidth = MAX(2, (self.bounds.size.width - gap * (visibleCount - 1)) / visibleCount);
-    NSUInteger start = self.values.count - visibleCount;
-    for (NSUInteger index = 0; index < visibleCount; index++) {
-        CGFloat value = MAX(0.05, MIN(1, self.values[start + index].doubleValue / 100.0));
-        NSRect bar = NSMakeRect(index * (barWidth + gap), 0, barWidth, self.bounds.size.height * value);
-        NSBezierPath *path = [NSBezierPath bezierPathWithRoundedRect:bar xRadius:1.5 yRadius:1.5];
-        [[self.accentColor colorWithAlphaComponent:0.78] setFill]; [path fill];
-    }
-}
-@end
-
-@interface HUDTintView : NSView
-@property(nonatomic) CGFloat opacity;
-@end
-
-@implementation HUDTintView
-- (NSView *)hitTest:(NSPoint)point { return nil; }
-- (void)setOpacity:(CGFloat)opacity { _opacity = opacity; self.needsDisplay = YES; }
-- (void)drawRect:(NSRect)dirtyRect {
-    [[NSColor colorWithRed:23.0/255.0 green:28.0/255.0 blue:34.0/255.0 alpha:self.opacity] setFill];
-    NSRectFillUsingOperation(self.bounds, NSCompositingOperationSourceOver);
-    NSGradient *highlight = [[NSGradient alloc] initWithStartingColor:[NSColor colorWithWhite:1 alpha:0.07] endingColor:[NSColor colorWithWhite:1 alpha:0.0]];
-    [highlight drawInRect:self.bounds angle:-35];
-}
-@end
-
-@interface HUDView : NSVisualEffectView
-@property(nonatomic, strong) NSSegmentedControl *tabs;
-@property(nonatomic, strong) NSButton *minimizeButton;
-@property(nonatomic, strong) NSButton *pinButton;
-@property(nonatomic, strong) NSButton *settingsButton;
-@property(nonatomic, strong) HUDTintView *tintView;
-@property(nonatomic, strong) NSStackView *homeStack;
-@property(nonatomic, strong) NSTextField *homeCodexStatusLabel;
-@property(nonatomic, strong) NSStackView *homeQuotaRow;
-@property(nonatomic, strong) HUDQuotaCard *homeFiveHourCard;
-@property(nonatomic, strong) HUDQuotaCard *homeWeeklyCard;
-@property(nonatomic, strong) NSStackView *homeInsightsRow;
-@property(nonatomic, strong) HUDMetricCard *homePlanCard;
-@property(nonatomic, strong) HUDMetricCard *homeUsageCard;
-@property(nonatomic, strong) HUDMetricCard *homeModelQuotaCard;
-@property(nonatomic, strong) NSTextField *homeComputerStatusLabel;
-@property(nonatomic, strong) NSStackView *homeComputerCardsRow;
-@property(nonatomic, strong) HUDMetricCard *homeBottleneckCard;
-@property(nonatomic, strong) HUDMetricCard *homeSystemCard;
-@property(nonatomic, strong) NSTextField *homeAttributionLabel;
-@property(nonatomic, strong) HUDMemoryListCard *homeMemoryAppsCard;
-@property(nonatomic, strong) NSStackView *homeTrendRow;
-@property(nonatomic, strong) HUDSparklineView *homeSparkline;
-@property(nonatomic, strong) NSTextField *homeTrendTitleLabel;
-@property(nonatomic, strong) NSTextField *homeTrendLabel;
-@property(nonatomic, strong) NSTextField *homeFreshnessLabel;
-@property(nonatomic, strong) NSStackView *codexStack;
-@property(nonatomic, strong) NSStackView *computerStack;
-@property(nonatomic, strong) NSStackView *detailStack;
-@property(nonatomic, strong) NSTextField *codexStatusLabel;
-@property(nonatomic, strong) NSStackView *quotaRow;
-@property(nonatomic, strong) HUDQuotaCard *fiveHourCard;
-@property(nonatomic, strong) HUDQuotaCard *weeklyCard;
-@property(nonatomic, strong) NSStackView *codexInsightsRow;
-@property(nonatomic, strong) HUDMetricCard *planCard;
-@property(nonatomic, strong) HUDMetricCard *usageCard;
-@property(nonatomic, strong) HUDMetricCard *modelQuotaCard;
-@property(nonatomic, strong) NSTextField *codexFreshnessLabel;
-@property(nonatomic, strong) NSTextField *computerStatusLabel;
-@property(nonatomic, strong) NSStackView *diagnosisRow;
-@property(nonatomic, strong) HUDMetricCard *bottleneckCard;
-@property(nonatomic, strong) HUDMetricCard *impactCard;
-@property(nonatomic, strong) NSStackView *healthCardsRow;
-@property(nonatomic, strong) HUDMetricCard *cpuCard;
-@property(nonatomic, strong) HUDMetricCard *memoryPressureCard;
-@property(nonatomic, strong) NSTextField *attributionLabel;
-@property(nonatomic, strong) NSTextField *healthLabel;
-@property(nonatomic, strong) HUDMemoryListCard *memoryAppsCard;
-@property(nonatomic, strong) NSStackView *trendRow;
-@property(nonatomic, strong) HUDSparklineView *sparkline;
-@property(nonatomic, strong) NSTextField *trendTitleLabel;
-@property(nonatomic, strong) NSTextField *trendLabel;
-@property(nonatomic, strong) NSTextField *computerFreshnessLabel;
-@property(nonatomic, strong) NSArray<NSTextField *> *detailLabels;
-@property(nonatomic, copy) NSMenu *(^menuProvider)(void);
-@property(nonatomic, copy) void (^settingsRequested)(void);
-@property(nonatomic, copy) void (^pageChanged)(NSInteger page);
-@property(nonatomic, copy) void (^topmostChanged)(BOOL enabled);
-@property(nonatomic, copy) void (^minimizeRequested)(void);
-@property(nonatomic, strong) NSColor *accentColor;
-@property(nonatomic) BOOL alwaysOnTop;
-@property(nonatomic) BOOL collapsed;
-@property(nonatomic) BOOL compactMode;
-- (void)setPage:(NSInteger)page;
-- (void)setCompact:(BOOL)compact;
-- (void)setFiveHourQuotaVisible:(BOOL)visible;
-- (void)setWeeklyQuotaVisible:(BOOL)visible;
-- (void)setPlanVisible:(BOOL)visible;
-- (void)setUsageVisible:(BOOL)visible;
-- (void)setModelQuotaVisible:(BOOL)visible;
-- (void)setSystemVisible:(BOOL)visible;
-- (void)setAttributionVisible:(BOOL)visible;
-- (void)setTrendVisible:(BOOL)visible;
-- (void)setHomeFiveHourVisible:(BOOL)visible;
-- (void)setHomeWeeklyVisible:(BOOL)visible;
-- (void)setHomePlanVisible:(BOOL)visible;
-- (void)setHomeUsageVisible:(BOOL)visible;
-- (void)setHomeModelQuotaVisible:(BOOL)visible;
-- (void)setHomeDiagnosisVisible:(BOOL)visible;
-- (void)setHomeSystemVisible:(BOOL)visible;
-- (void)setHomeAttributionVisible:(BOOL)visible;
-- (void)setHomeTrendVisible:(BOOL)visible;
-- (void)setMemoryAppsVisible:(BOOL)visible;
-- (void)setHomeMemoryAppsVisible:(BOOL)visible;
-- (void)setBackgroundOpacity:(CGFloat)opacity;
-- (void)setAlwaysOnTop:(BOOL)enabled;
-- (void)setCollapsed:(BOOL)collapsed;
-@end
-
-@implementation HUDView
-
-- (NSTextField *)label:(NSString *)text size:(CGFloat)size color:(NSColor *)color {
-    NSTextField *label = [NSTextField labelWithString:text];
-    label.font = [NSFont monospacedDigitSystemFontOfSize:size weight:NSFontWeightRegular];
-    label.textColor = color;
-    label.lineBreakMode = NSLineBreakByTruncatingTail;
-    label.maximumNumberOfLines = 1;
-    return label;
-}
-
-- (instancetype)initWithFrame:(NSRect)frameRect {
-    self = [super initWithFrame:frameRect];
-    if (!self) return nil;
-    self.material = NSVisualEffectMaterialHUDWindow;
-    self.blendingMode = NSVisualEffectBlendingModeBehindWindow;
-    self.state = NSVisualEffectStateActive;
-    self.appearance = [NSAppearance appearanceNamed:NSAppearanceNameVibrantDark];
-    self.wantsLayer = YES;
-    self.layer.cornerRadius = 16.0;
-    self.layer.masksToBounds = YES;
-    self.layer.borderWidth = 1.0;
-    self.layer.borderColor = [NSColor colorWithWhite:1 alpha:0.15].CGColor;
-    _tintView = [HUDTintView new];
-    _tintView.translatesAutoresizingMaskIntoConstraints = NO;
-    [self addSubview:_tintView];
-    [NSLayoutConstraint activateConstraints:@[
-        [_tintView.leadingAnchor constraintEqualToAnchor:self.leadingAnchor],
-        [_tintView.trailingAnchor constraintEqualToAnchor:self.trailingAnchor],
-        [_tintView.topAnchor constraintEqualToAnchor:self.topAnchor],
-        [_tintView.bottomAnchor constraintEqualToAnchor:self.bottomAnchor]
-    ]];
-    self.accentColor = NSColor.systemGreenColor;
-
-    _tabs = [NSSegmentedControl segmentedControlWithLabels:@[@"主页", @"Codex", @"电脑性能"] trackingMode:NSSegmentSwitchTrackingSelectOne target:self action:@selector(tabSelected:)];
-    _tabs.selectedSegment = 0;
-    _tabs.controlSize = NSControlSizeSmall;
-    _tabs.segmentStyle = NSSegmentStyleRounded;
-    _tabs.font = [NSFont systemFontOfSize:11.5 weight:NSFontWeightSemibold];
-    _minimizeButton = [NSButton buttonWithImage:[NSImage imageWithSystemSymbolName:@"minus" accessibilityDescription:@"最小化到程序栏"] target:self action:@selector(toggleMinimize:)];
-    _minimizeButton.bezelStyle = NSBezelStyleInline; _minimizeButton.bordered = NO;
-    _minimizeButton.contentTintColor = [NSColor colorWithWhite:1 alpha:0.68]; _minimizeButton.toolTip = @"最小化到程序栏";
-    _pinButton = [NSButton buttonWithImage:[NSImage imageWithSystemSymbolName:@"pin.fill" accessibilityDescription:@"取消置顶"] target:self action:@selector(togglePin:)];
-    _pinButton.bezelStyle = NSBezelStyleInline;
-    _pinButton.bordered = NO;
-    _settingsButton = [NSButton buttonWithImage:[NSImage imageWithSystemSymbolName:@"gearshape" accessibilityDescription:@"设置"] target:self action:@selector(showSettings:)];
-    _settingsButton.bezelStyle = NSBezelStyleInline;
-    _settingsButton.bordered = NO;
-    _settingsButton.contentTintColor = [NSColor colorWithWhite:1 alpha:0.76];
-    _settingsButton.toolTip = @"悬浮窗设置";
-    NSStackView *header = [NSStackView stackViewWithViews:@[_tabs, _minimizeButton, _pinButton, _settingsButton]];
-    header.orientation = NSUserInterfaceLayoutOrientationHorizontal;
-    header.alignment = NSLayoutAttributeCenterY;
-    header.distribution = NSStackViewDistributionFill;
-    [_tabs setContentHuggingPriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
-    [_minimizeButton setContentHuggingPriority:NSLayoutPriorityRequired forOrientation:NSLayoutConstraintOrientationHorizontal];
-    [_pinButton setContentHuggingPriority:NSLayoutPriorityRequired forOrientation:NSLayoutConstraintOrientationHorizontal];
-    [_settingsButton setContentHuggingPriority:NSLayoutPriorityRequired forOrientation:NSLayoutConstraintOrientationHorizontal];
-    [self setAlwaysOnTop:YES];
-    NSBox *headerSeparator = [[NSBox alloc] initWithFrame:NSZeroRect];
-    headerSeparator.boxType = NSBoxCustom;
-    headerSeparator.titlePosition = NSNoTitle;
-    headerSeparator.fillColor = [NSColor colorWithWhite:1 alpha:0.085];
-    headerSeparator.borderWidth = 0;
-
-    _codexStatusLabel = [self label:@"● 正在连接本机Codex" size:13 color:self.accentColor];
-    _codexStatusLabel.font = [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold];
-    _fiveHourCard = [[HUDQuotaCard alloc] initWithTitle:@"5小时额度"];
-    _weeklyCard = [[HUDQuotaCard alloc] initWithTitle:@"每周额度"];
-    _quotaRow = [NSStackView stackViewWithViews:@[_fiveHourCard, _weeklyCard]];
-    _quotaRow.orientation = NSUserInterfaceLayoutOrientationHorizontal; _quotaRow.distribution = NSStackViewDistributionFillEqually; _quotaRow.spacing = 8;
-    _planCard = [[HUDMetricCard alloc] initWithTitle:@"订阅" value:@"等待接口" subtitle:@"不显示邮箱"];
-    _usageCard = [[HUDMetricCard alloc] initWithTitle:@"Token用量" value:@"今日 --" subtitle:@"7天 -- · 不等于额度"];
-    _modelQuotaCard = [[HUDMetricCard alloc] initWithTitle:@"模型专属额度" value:@"当前未返回" subtitle:@"高级显示"];
-    _codexInsightsRow = [NSStackView stackViewWithViews:@[_planCard, _usageCard, _modelQuotaCard]];
-    _codexInsightsRow.orientation = NSUserInterfaceLayoutOrientationHorizontal; _codexInsightsRow.distribution = NSStackViewDistributionFillEqually; _codexInsightsRow.spacing = 7;
-    _codexFreshnessLabel = [self label:@"来源  Codex本机接口" size:10.5 color:NSColor.tertiaryLabelColor];
-    _codexStack = [NSStackView stackViewWithViews:@[_codexStatusLabel, _quotaRow, _codexInsightsRow, _codexFreshnessLabel]];
-    _codexStack.orientation = NSUserInterfaceLayoutOrientationVertical;
-    _codexStack.alignment = NSLayoutAttributeLeading;
-    _codexStack.spacing = 7;
-
-    _homeCodexStatusLabel = [self label:@"● 正在连接本机Codex" size:13 color:self.accentColor];
-    _homeCodexStatusLabel.font = [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold];
-    _homeFiveHourCard = [[HUDQuotaCard alloc] initWithTitle:@"5小时额度"];
-    _homeWeeklyCard = [[HUDQuotaCard alloc] initWithTitle:@"每周额度"];
-    _homeQuotaRow = [NSStackView stackViewWithViews:@[_homeFiveHourCard, _homeWeeklyCard]];
-    _homeQuotaRow.orientation = NSUserInterfaceLayoutOrientationHorizontal; _homeQuotaRow.distribution = NSStackViewDistributionFillEqually; _homeQuotaRow.spacing = 8;
-    _homePlanCard = [[HUDMetricCard alloc] initWithTitle:@"订阅" value:@"等待接口" subtitle:@"不显示邮箱"];
-    _homeUsageCard = [[HUDMetricCard alloc] initWithTitle:@"Token用量" value:@"今日 --" subtitle:@"7天 -- · 不等于额度"];
-    _homeModelQuotaCard = [[HUDMetricCard alloc] initWithTitle:@"模型专属额度" value:@"当前未返回" subtitle:@"高级显示"];
-    _homeInsightsRow = [NSStackView stackViewWithViews:@[_homePlanCard, _homeUsageCard, _homeModelQuotaCard]];
-    _homeInsightsRow.orientation = NSUserInterfaceLayoutOrientationHorizontal; _homeInsightsRow.distribution = NSStackViewDistributionFillEqually; _homeInsightsRow.spacing = 7;
-    _homeComputerStatusLabel = [self label:@"● 正在读取电脑状态" size:13 color:NSColor.systemGreenColor];
-    _homeComputerStatusLabel.font = [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold];
-    _homeBottleneckCard = [[HUDMetricCard alloc] initWithTitle:@"当前瓶颈" value:@"无" subtitle:@"Codex影响 --"];
-    _homeSystemCard = [[HUDMetricCard alloc] initWithTitle:@"电脑状态" value:@"CPU --" subtitle:@"内存压力 --"];
-    _homeComputerCardsRow = [NSStackView stackViewWithViews:@[_homeBottleneckCard, _homeSystemCard]];
-    _homeComputerCardsRow.orientation = NSUserInterfaceLayoutOrientationHorizontal; _homeComputerCardsRow.distribution = NSStackViewDistributionFillEqually; _homeComputerCardsRow.spacing = 7;
-    _homeAttributionLabel = [self label:@"Codex CPU -- · 内存 -- / -- (--%)" size:12 color:NSColor.labelColor];
-    _homeMemoryAppsCard = [HUDMemoryListCard new];
-    _homeSparkline = [HUDSparklineView new];
-    _homeTrendTitleLabel = [self label:@"CPU趋势" size:10.5 color:NSColor.secondaryLabelColor];
-    _homeTrendLabel = [self label:@"平均 -- · 峰值 --" size:10.5 color:NSColor.labelColor];
-    _homeTrendRow = [NSStackView stackViewWithViews:@[_homeTrendTitleLabel, _homeSparkline, _homeTrendLabel]];
-    _homeTrendRow.orientation = NSUserInterfaceLayoutOrientationHorizontal; _homeTrendRow.alignment = NSLayoutAttributeCenterY; _homeTrendRow.spacing = 8;
-    _homeFreshnessLabel = [self label:@"电脑每5秒 · Codex每60秒" size:10.5 color:NSColor.tertiaryLabelColor];
-    _homeStack = [NSStackView stackViewWithViews:@[_homeCodexStatusLabel, _homeQuotaRow, _homeInsightsRow, _homeComputerStatusLabel, _homeComputerCardsRow, _homeAttributionLabel, _homeMemoryAppsCard, _homeTrendRow, _homeFreshnessLabel]];
-    _homeStack.orientation = NSUserInterfaceLayoutOrientationVertical; _homeStack.alignment = NSLayoutAttributeLeading; _homeStack.spacing = 7;
-
-    _computerStatusLabel = [self label:@"● 正在读取电脑状态" size:13 color:NSColor.systemGreenColor];
-    _computerStatusLabel.font = [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold];
-    _bottleneckCard = [[HUDMetricCard alloc] initWithTitle:@"当前瓶颈" value:@"无" subtitle:@""];
-    _impactCard = [[HUDMetricCard alloc] initWithTitle:@"Codex影响" value:@"低" subtitle:@""];
-    _diagnosisRow = [NSStackView stackViewWithViews:@[_bottleneckCard, _impactCard]];
-    _diagnosisRow.orientation = NSUserInterfaceLayoutOrientationHorizontal; _diagnosisRow.distribution = NSStackViewDistributionFillEqually; _diagnosisRow.spacing = 7;
-    _cpuCard = [[HUDMetricCard alloc] initWithTitle:@"整机CPU" value:@"--" subtitle:@""];
-    _memoryPressureCard = [[HUDMetricCard alloc] initWithTitle:@"内存压力" value:@"--" subtitle:@""];
-    _cpuCard.valueLabel.font = [NSFont monospacedDigitSystemFontOfSize:18 weight:NSFontWeightBold];
-    _memoryPressureCard.valueLabel.font = [NSFont systemFontOfSize:18 weight:NSFontWeightBold];
-    _healthCardsRow = [NSStackView stackViewWithViews:@[_cpuCard, _memoryPressureCard]];
-    _healthCardsRow.orientation = NSUserInterfaceLayoutOrientationHorizontal; _healthCardsRow.distribution = NSStackViewDistributionFillEqually; _healthCardsRow.spacing = 8;
-    _attributionLabel = [self label:@"Codex CPU --  ·  内存 -- / -- (--%)" size:13 color:NSColor.labelColor];
-    _healthLabel = [self label:@"系统  Swap --  ·  热状态 --" size:12 color:NSColor.secondaryLabelColor];
-    _memoryAppsCard = [HUDMemoryListCard new];
-    _sparkline = [HUDSparklineView new];
-    _trendTitleLabel = [self label:@"CPU趋势" size:10.5 color:NSColor.secondaryLabelColor];
-    _trendLabel = [self label:@"平均 -- · 峰值 --" size:10.5 color:NSColor.labelColor];
-    _trendRow = [NSStackView stackViewWithViews:@[_trendTitleLabel, _sparkline, _trendLabel]];
-    _trendRow.orientation = NSUserInterfaceLayoutOrientationHorizontal; _trendRow.alignment = NSLayoutAttributeCenterY; _trendRow.spacing = 8;
-    _computerFreshnessLabel = [self label:@"来源  macOS系统接口" size:10.5 color:NSColor.tertiaryLabelColor];
-    _computerStack = [NSStackView stackViewWithViews:@[_computerStatusLabel, _diagnosisRow, _healthCardsRow, _attributionLabel, _healthLabel, _memoryAppsCard, _trendRow, _computerFreshnessLabel]];
-    _computerStack.orientation = NSUserInterfaceLayoutOrientationVertical;
-    _computerStack.alignment = NSLayoutAttributeLeading;
-    _computerStack.spacing = 6;
-
-    NSMutableArray<NSTextField *> *details = [NSMutableArray array];
-    for (NSInteger index = 0; index < 5; index++) [details addObject:[self label:@"" size:11.5 color:NSColor.secondaryLabelColor]];
-    _detailLabels = details;
-    _detailStack = [NSStackView stackViewWithViews:details];
-    _detailStack.orientation = NSUserInterfaceLayoutOrientationVertical;
-    _detailStack.alignment = NSLayoutAttributeLeading;
-    _detailStack.spacing = 3;
-    _detailStack.hidden = YES;
-
-    NSStackView *root = [NSStackView stackViewWithViews:@[header, headerSeparator, _homeStack, _codexStack, _computerStack, _detailStack]];
-    root.orientation = NSUserInterfaceLayoutOrientationVertical;
-    root.alignment = NSLayoutAttributeLeading;
-    root.spacing = 8;
-    root.translatesAutoresizingMaskIntoConstraints = NO;
-    [self addSubview:root];
-    [NSLayoutConstraint activateConstraints:@[
-        [root.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:14],
-        [root.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-14],
-        [root.topAnchor constraintEqualToAnchor:self.topAnchor constant:10],
-        [root.bottomAnchor constraintLessThanOrEqualToAnchor:self.bottomAnchor constant:-10],
-        [header.widthAnchor constraintEqualToAnchor:root.widthAnchor],
-        [headerSeparator.widthAnchor constraintEqualToAnchor:root.widthAnchor],
-        [headerSeparator.heightAnchor constraintEqualToConstant:1],
-        [_homeStack.widthAnchor constraintEqualToAnchor:root.widthAnchor],
-        [_codexStack.widthAnchor constraintEqualToAnchor:root.widthAnchor],
-        [_computerStack.widthAnchor constraintEqualToAnchor:root.widthAnchor],
-        [_detailStack.widthAnchor constraintEqualToAnchor:root.widthAnchor],
-        [_quotaRow.widthAnchor constraintEqualToAnchor:_codexStack.widthAnchor],
-        [_codexInsightsRow.widthAnchor constraintEqualToAnchor:_codexStack.widthAnchor],
-        [_homeQuotaRow.widthAnchor constraintEqualToAnchor:_homeStack.widthAnchor],
-        [_homeInsightsRow.widthAnchor constraintEqualToAnchor:_homeStack.widthAnchor],
-        [_homeComputerCardsRow.widthAnchor constraintEqualToAnchor:_homeStack.widthAnchor],
-        [_homeMemoryAppsCard.widthAnchor constraintEqualToAnchor:_homeStack.widthAnchor],
-        [_diagnosisRow.widthAnchor constraintEqualToAnchor:_computerStack.widthAnchor],
-        [_healthCardsRow.widthAnchor constraintEqualToAnchor:_computerStack.widthAnchor],
-        [_memoryAppsCard.widthAnchor constraintEqualToAnchor:_computerStack.widthAnchor]
-    ]];
-    [self setAccentColor:self.accentColor];
-    [self setPage:0];
-    return self;
-}
-
-- (void)tabSelected:(NSSegmentedControl *)sender {
-    [self setPage:sender.selectedSegment];
-    if (self.pageChanged) self.pageChanged(sender.selectedSegment);
-}
-
-- (void)showSettings:(NSButton *)sender {
-    if (self.settingsRequested) { self.settingsRequested(); return; }
-    NSMenu *menu = self.menuProvider ? self.menuProvider() : nil;
-    if (menu) [menu popUpMenuPositioningItem:nil atLocation:NSMakePoint(NSMinX(sender.frame), NSMinY(sender.frame) - 4) inView:self];
-}
-
-- (void)togglePin:(NSButton *)sender {
-    [self setAlwaysOnTop:!self.alwaysOnTop];
-    if (self.topmostChanged) self.topmostChanged(self.alwaysOnTop);
-}
-
-- (void)toggleMinimize:(NSButton *)sender {
-    if (self.minimizeRequested) self.minimizeRequested();
-}
-
-- (void)setCollapsed:(BOOL)collapsed {
-    _collapsed = collapsed;
-    [self setPage:self.tabs.selectedSegment];
-    self.detailStack.hidden = collapsed || self.compactMode;
-}
-
-- (void)setAlwaysOnTop:(BOOL)enabled {
-    _alwaysOnTop = enabled;
-    NSString *symbol = enabled ? @"pin.fill" : @"pin";
-    NSString *description = enabled ? @"取消置顶" : @"开启置顶";
-    self.pinButton.image = [NSImage imageWithSystemSymbolName:symbol accessibilityDescription:description];
-    self.pinButton.toolTip = enabled ? @"当前置顶，点击取消置顶" : @"当前不置顶，点击置顶";
-    self.pinButton.contentTintColor = enabled ? self.accentColor : [NSColor colorWithWhite:1 alpha:0.52];
-}
-
-- (void)setPage:(NSInteger)page {
-    NSInteger safePage = MAX(0, MIN(2, page));
-    self.tabs.selectedSegment = safePage;
-    self.homeStack.hidden = self.collapsed || safePage != 0;
-    self.codexStack.hidden = self.collapsed || safePage != 1;
-    self.computerStack.hidden = self.collapsed || safePage != 2;
-}
-
-- (void)setCompact:(BOOL)compact { self.compactMode = compact; self.detailStack.hidden = compact || self.collapsed; }
-- (void)refreshQuotaRowVisibility { self.quotaRow.hidden = self.fiveHourCard.hidden && self.weeklyCard.hidden; }
-- (void)refreshCodexInsightsRow { self.codexInsightsRow.hidden = self.planCard.hidden && self.usageCard.hidden && self.modelQuotaCard.hidden; }
-- (void)setFiveHourQuotaVisible:(BOOL)visible { self.fiveHourCard.hidden = !visible; [self refreshQuotaRowVisibility]; }
-- (void)setWeeklyQuotaVisible:(BOOL)visible { self.weeklyCard.hidden = !visible; [self refreshQuotaRowVisibility]; }
-- (void)setPlanVisible:(BOOL)visible { self.planCard.hidden = !visible; [self refreshCodexInsightsRow]; }
-- (void)setUsageVisible:(BOOL)visible { self.usageCard.hidden = !visible; [self refreshCodexInsightsRow]; }
-- (void)setModelQuotaVisible:(BOOL)visible { self.modelQuotaCard.hidden = !visible; [self refreshCodexInsightsRow]; }
-- (void)setSystemVisible:(BOOL)visible { self.healthCardsRow.hidden = !visible; self.healthLabel.hidden = !visible; }
-- (void)setAttributionVisible:(BOOL)visible { self.attributionLabel.hidden = !visible; }
-- (void)setTrendVisible:(BOOL)visible { self.trendRow.hidden = !visible; }
-- (void)setMemoryAppsVisible:(BOOL)visible { self.memoryAppsCard.hidden = !visible; }
-- (void)refreshHomeCodexSection { self.homeCodexStatusLabel.hidden = self.homeQuotaRow.hidden && self.homeInsightsRow.hidden; }
-- (void)refreshHomeComputerSection { self.homeComputerStatusLabel.hidden = self.homeComputerCardsRow.hidden && self.homeAttributionLabel.hidden && self.homeMemoryAppsCard.hidden && self.homeTrendRow.hidden; }
-- (void)refreshHomeQuotaRow { self.homeQuotaRow.hidden = self.homeFiveHourCard.hidden && self.homeWeeklyCard.hidden; [self refreshHomeCodexSection]; }
-- (void)refreshHomeInsightsRow { self.homeInsightsRow.hidden = self.homePlanCard.hidden && self.homeUsageCard.hidden && self.homeModelQuotaCard.hidden; [self refreshHomeCodexSection]; }
-- (void)refreshHomeComputerCardsRow { self.homeComputerCardsRow.hidden = self.homeBottleneckCard.hidden && self.homeSystemCard.hidden; [self refreshHomeComputerSection]; }
-- (void)setHomeFiveHourVisible:(BOOL)visible { self.homeFiveHourCard.hidden = !visible; [self refreshHomeQuotaRow]; }
-- (void)setHomeWeeklyVisible:(BOOL)visible { self.homeWeeklyCard.hidden = !visible; [self refreshHomeQuotaRow]; }
-- (void)setHomePlanVisible:(BOOL)visible { self.homePlanCard.hidden = !visible; [self refreshHomeInsightsRow]; }
-- (void)setHomeUsageVisible:(BOOL)visible { self.homeUsageCard.hidden = !visible; [self refreshHomeInsightsRow]; }
-- (void)setHomeModelQuotaVisible:(BOOL)visible { self.homeModelQuotaCard.hidden = !visible; [self refreshHomeInsightsRow]; }
-- (void)setHomeDiagnosisVisible:(BOOL)visible { self.homeBottleneckCard.hidden = !visible; [self refreshHomeComputerCardsRow]; }
-- (void)setHomeSystemVisible:(BOOL)visible { self.homeSystemCard.hidden = !visible; [self refreshHomeComputerCardsRow]; }
-- (void)setHomeAttributionVisible:(BOOL)visible { self.homeAttributionLabel.hidden = !visible; [self refreshHomeComputerSection]; }
-- (void)setHomeTrendVisible:(BOOL)visible { self.homeTrendRow.hidden = !visible; [self refreshHomeComputerSection]; }
-- (void)setHomeMemoryAppsVisible:(BOOL)visible { self.homeMemoryAppsCard.hidden = !visible; [self refreshHomeComputerSection]; }
-- (void)setAccentColor:(NSColor *)accentColor {
-    _accentColor = accentColor ?: NSColor.systemGreenColor;
-    self.codexStatusLabel.textColor = _accentColor;
-    self.homeCodexStatusLabel.textColor = _accentColor; self.homeComputerStatusLabel.textColor = _accentColor;
-    self.fiveHourCard.progressView.accentColor = _accentColor; self.weeklyCard.progressView.accentColor = _accentColor;
-    self.homeFiveHourCard.progressView.accentColor = _accentColor; self.homeWeeklyCard.progressView.accentColor = _accentColor;
-    self.cpuCard.valueLabel.textColor = _accentColor; self.memoryPressureCard.valueLabel.textColor = _accentColor;
-    self.bottleneckCard.valueLabel.textColor = _accentColor; self.impactCard.valueLabel.textColor = _accentColor;
-    self.sparkline.accentColor = _accentColor;
-    self.homeSystemCard.valueLabel.textColor = _accentColor; self.homeBottleneckCard.valueLabel.textColor = _accentColor; self.homeSparkline.accentColor = _accentColor;
-    [self setAlwaysOnTop:self.alwaysOnTop];
-}
-- (void)setBackgroundOpacity:(CGFloat)opacity {
-    CGFloat clamped = MAX(0.55, MIN(1.0, opacity));
-    self.tintView.opacity = clamped;
-    self.layer.backgroundColor = NSColor.clearColor.CGColor;
-}
-- (BOOL)mouseDownCanMoveWindow { return YES; }
-- (void)rightMouseDown:(NSEvent *)event {
-    NSMenu *menu = self.menuProvider ? self.menuProvider() : nil;
-    if (menu) [NSMenu popUpContextMenu:menu withEvent:event forView:self];
-}
-
-@end
-
 @interface AppDelegate : NSObject <NSApplicationDelegate, NSWindowDelegate>
 @property(nonatomic, strong) NSPanel *panel;
 @property(nonatomic, strong) NSPanel *settingsWindow;
@@ -622,6 +71,7 @@ static NSString *FormatModuleState(NSTimeInterval timestamp, NSString *error) {
 @property(nonatomic, strong) NSMutableArray<NativeSnapshot *> *minuteSamples;
 @property(nonatomic, strong) NSMutableArray<NSDictionary *> *cpuHistory;
 @property(nonatomic, strong) NSURL *historyDirectory;
+@property(nonatomic, copy) NSString *instanceID;
 @property(nonatomic) NSTimeInterval minuteStart;
 @property(nonatomic) NSTimeInterval refreshInterval;
 @property(nonatomic) NSInteger codexTick;
@@ -729,6 +179,8 @@ static NSString *FormatModuleState(NSTimeInterval timestamp, NSString *error) {
     NSString *historyPath = [NSHomeDirectory() stringByAppendingPathComponent:@"Library/Application Support/CodexSystemMonitor/native-history"];
     self.historyDirectory = [NSURL fileURLWithPath:historyPath isDirectory:YES];
     [[NSFileManager defaultManager] createDirectoryAtURL:self.historyDirectory withIntermediateDirectories:YES attributes:nil error:nil];
+    self.instanceID = NSUUID.UUID.UUIDString;
+    [self appendLifecycleEvent:[self launchLifecycleEvent]];
     [self createPanel];
     [self startSystemTimer];
     [self startCodexProviderIfNeeded];
@@ -737,6 +189,7 @@ static NSString *FormatModuleState(NSTimeInterval timestamp, NSString *error) {
 }
 
 - (void)applicationWillTerminate:(NSNotification *)notification {
+    [self appendLifecycleEvent:@"terminate"];
     [self savePosition];
     [self.systemTimer invalidate];
     [self.codexTimer invalidate];
@@ -913,6 +366,7 @@ static NSString *FormatModuleState(NSTimeInterval timestamp, NSString *error) {
 - (void)windowDidMove:(NSNotification *)notification { [self savePosition]; }
 
 - (void)workspaceDidWake:(NSNotification *)notification {
+    [self appendLifecycleEvent:@"wake"];
     self.sampler = [NativeSampler new];
     [self.minuteSamples removeAllObjects];
     [self.cpuHistory removeAllObjects];
@@ -920,6 +374,31 @@ static NSString *FormatModuleState(NSTimeInterval timestamp, NSString *error) {
     [self updateDisplay];
     [self.codexProvider refreshQuota];
     [self.panel orderFrontRegardless];
+}
+
+- (void)appendLifecycleEvent:(NSString *)event {
+    if (!self.historyDirectory || self.instanceID.length == 0 || event.length == 0) return;
+    NSDate *now = NSDate.date;
+    NSDateFormatter *stamp = [NSDateFormatter new];
+    stamp.dateFormat = @"yyyy-MM-dd HH:mm:ss";
+    stamp.locale = [NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
+    NSURL *file = [self.historyDirectory URLByAppendingPathComponent:@"events.csv"];
+    NSString *header = @"timestamp,epoch,event,instance_id\n";
+    NSString *line = [NSString stringWithFormat:@"%@,%.0f,%@,%@\n", [stamp stringFromDate:now], now.timeIntervalSince1970, CSVSafe(event), CSVSafe(self.instanceID)];
+    if (![NSFileManager.defaultManager fileExistsAtPath:file.path]) [header writeToURL:file atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    NSFileHandle *handle = [NSFileHandle fileHandleForWritingAtPath:file.path];
+    if (handle) { [handle seekToEndOfFile]; [handle writeData:[line dataUsingEncoding:NSUTF8StringEncoding]]; [handle closeFile]; }
+}
+
+- (NSString *)launchLifecycleEvent {
+    NSURL *file = [self.historyDirectory URLByAppendingPathComponent:@"events.csv"];
+    NSString *contents = [NSString stringWithContentsOfURL:file encoding:NSUTF8StringEncoding error:nil];
+    for (NSString *line in [contents componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet].reverseObjectEnumerator) {
+        if (line.length == 0 || [line hasPrefix:@"timestamp,"]) continue;
+        NSArray<NSString *> *fields = [line componentsSeparatedByString:@","];
+        return fields.count >= 3 && [fields[2] isEqualToString:@"terminate"] ? @"start" : @"restart";
+    }
+    return @"start";
 }
 
 - (NSDictionary *)statusForSnapshot:(NativeSnapshot *)snapshot {
@@ -1476,9 +955,25 @@ static int RunUIDiagnostic(void) {
     BOOL scalePass = selectedSizeSegment == 2 && fabs([delegate panelSize].width - 516.0) < 0.1;
     delegate.windowScale = 0.85; scalePass = scalePass && fabs([delegate panelSize].width - 366.0) < 0.1;
     delegate.windowScale = 1.0; scalePass = scalePass && fabs([delegate panelSize].width - 430.0) < 0.1;
+    delegate.hudView = [[HUDView alloc] initWithFrame:NSMakeRect(0, 0, 430, 600)];
+    [delegate.hudView setHomeFiveHourVisible:NO]; [delegate.hudView setFiveHourQuotaVisible:NO];
+    [delegate.hudView setHomePlanVisible:NO]; [delegate.hudView setPlanVisible:NO];
+    [delegate.hudView setHomeWeeklyVisible:YES]; [delegate.hudView setWeeklyQuotaVisible:YES];
+    BOOL cardVisibilityPass = delegate.hudView.homeFiveHourCard.hidden && delegate.hudView.fiveHourCard.hidden && delegate.hudView.homePlanCard.hidden && delegate.hudView.planCard.hidden && !delegate.hudView.homeWeeklyCard.hidden && !delegate.hudView.weeklyCard.hidden;
+    delegate.compact = NO; delegate.homeShowUsage = NO; delegate.homeShowDiagnosis = NO; delegate.homeShowSystem = NO; delegate.homeShowAttribution = NO;
+    CodexStatusProvider *provider = [CodexStatusProvider new]; delegate.codexProvider = provider;
+    provider.snapshot.quotaAvailable = YES; provider.snapshot.weeklyAvailable = YES; provider.snapshot.weeklyRemainingPercent = 42;
+    provider.snapshot.accountAvailable = YES; provider.snapshot.planType = @"pro"; provider.snapshot.accountErrorText = @"test-error";
+    [delegate updateDetailLabels];
+    NSMutableArray<NSString *> *visibleDetails = [NSMutableArray array];
+    for (NSTextField *label in delegate.hudView.detailLabels) if (!label.hidden) [visibleDetails addObject:label.stringValue];
+    NSString *details = [visibleDetails componentsJoinedByString:@" | "];
+    NSString *status = [delegate visibleCodexStatus:provider.snapshot fiveHour:NO weekly:YES plan:NO usage:NO model:NO];
+    BOOL hiddenContentPass = [details containsString:@"每周"] && ![details containsString:@"5小时"] && ![details containsString:@"订阅"] && [status isEqualToString:@"Codex数据正常"];
     printf("settings_visibility_test=%s\n", settingsPass ? "pass" : "fail");
     printf("window_scale_test=%s\n", scalePass ? "pass" : "fail");
-    return settingsPass && scalePass ? 0 : 5;
+    printf("hidden_content_test=%s\n", cardVisibilityPass && hiddenContentPass ? "pass" : "fail");
+    return settingsPass && scalePass && cardVisibilityPass && hiddenContentPass ? 0 : 5;
 }
 
 static int RunDiagnostic(void) {
@@ -1519,6 +1014,7 @@ static int RunCodexDiagnostic(void) {
 }
 
 static int RunLogicDiagnostic(void) {
+    BOOL cpuTimebasePass = fabs(NativeRawCPUPercentFromAbsoluteTime(24000000, 1.0, 125, 3) - 100.0) < 0.001;
     NSCalendar *calendar = [NSCalendar calendarWithIdentifier:NSCalendarIdentifierGregorian];
     calendar.timeZone = NSTimeZone.localTimeZone;
     NSDate *now = [calendar startOfDayForDate:NSDate.date];
@@ -1541,8 +1037,9 @@ static int RunLogicDiagnostic(void) {
     BOOL delayedPass = ![delayed[@"todayAvailable"] boolValue] && [delayed[@"today"] longLongValue] == 0 && [delayed[@"recent"] longLongValue] == 75 && [delayed[@"previous"] longLongValue] == 40 && [delayed[@"latestDate"] isEqualToString:yesterdayKey];
     NSDictionary *empty = CodexCalendarUsage(@[], now);
     BOOL emptyPass = ![empty[@"todayAvailable"] boolValue] && [empty[@"recent"] longLongValue] == 0 && [empty[@"previous"] longLongValue] == 0 && [empty[@"latestDate"] length] == 0;
-    BOOL pass = currentPass && delayedPass && emptyPass;
+    BOOL pass = currentPass && delayedPass && emptyPass && cpuTimebasePass;
     printf("calendar_usage_test=%s\n", pass ? "pass" : "fail");
+    printf("cpu_timebase_test=%s\n", cpuTimebasePass ? "pass" : "fail");
     return pass ? 0 : 4;
 }
 

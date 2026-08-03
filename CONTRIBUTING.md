@@ -8,6 +8,8 @@
 ./build-overlay.sh
 "/private/tmp/codex-monitor-hud-build/Codex Monitor HUD.app/Contents/MacOS/CodexMonitorHUD" --logic-diagnostic
 "/private/tmp/codex-monitor-hud-build/Codex Monitor HUD.app/Contents/MacOS/CodexMonitorHUD" --diagnostic
+"/private/tmp/codex-monitor-hud-build/Codex Monitor HUD.app/Contents/MacOS/CodexMonitorHUD" --ui-diagnostic
+./report.py --self-test
 ```
 
 涉及Codex账户接口的修改，还应在已登录桌面版的Mac上运行 `--codex-diagnostic`。提交截图或日志前，请删除账号、路径和其他私人信息。
