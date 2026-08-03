@@ -15,3 +15,5 @@ jobs:
         run: '"/private/tmp/codex-monitor-hud-build/Codex Monitor HUD.app/Contents/MacOS/CodexMonitorHUD" --logic-diagnostic'
       - name: Run settings and window size test
         run: '"/private/tmp/codex-monitor-hud-build/Codex Monitor HUD.app/Contents/MacOS/CodexMonitorHUD" --ui-diagnostic'
+      - name: Run lifecycle report test
+        run: './report.py --self-test'

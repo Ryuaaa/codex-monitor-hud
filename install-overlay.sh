@@ -29,6 +29,13 @@ uid=$(/usr/bin/id -u)
   </array>
   <key>RunAtLoad</key>
   <true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
   <key>LimitLoadToSessionType</key>
   <string>Aqua</string>
   <key>ProcessType</key>

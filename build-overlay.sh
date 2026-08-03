@@ -12,6 +12,7 @@ macos_dir="$contents_dir/MacOS"
 /usr/bin/xcrun clang -O2 -fobjc-arc -Wall -Wextra -Werror \
   -framework Cocoa \
   "$source_dir/overlay/CodexMonitorHUD.m" \
+  "$source_dir/overlay/HUDView.m" \
   "$source_dir/overlay/CodexStatusProvider.m" \
   "$source_dir/overlay/NativeSampler.m" \
   -o "$macos_dir/CodexMonitorHUD"
