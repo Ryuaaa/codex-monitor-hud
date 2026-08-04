@@ -1,0 +1,43 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  macos-release:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify tag matches app version
+        run: |
+          app_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' overlay/Info.plist)"
+          test "v$app_version" = "$GITHUB_REF_NAME"
+      - name: Build and test
+        run: |
+          ./build-overlay.sh
+          app="/private/tmp/codex-monitor-hud-build/Codex Monitor HUD.app/Contents/MacOS/CodexMonitorHUD"
+          "$app" --logic-diagnostic
+          "$app" --ui-diagnostic
+          "$app" --update-diagnostic
+          ./report.py --self-test
+      - name: Package signed app
+        run: |
+          cd /private/tmp/codex-monitor-hud-build
+          /usr/bin/ditto -c -k --norsrc --noextattr --noqtn --noacl --keepParent "Codex Monitor HUD.app" "$GITHUB_WORKSPACE/Codex-Monitor-HUD.app.zip"
+          cd "$GITHUB_WORKSPACE"
+          /usr/bin/shasum -a 256 Codex-Monitor-HUD.app.zip > Codex-Monitor-HUD.app.zip.sha256
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            Codex-Monitor-HUD.app.zip \
+            Codex-Monitor-HUD.app.zip.sha256 \
+            --verify-tag \
+            --generate-notes \
+            --title "Codex Monitor HUD $GITHUB_REF_NAME"

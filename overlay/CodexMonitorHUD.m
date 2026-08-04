@@ -2,6 +2,7 @@
 #import "NativeSampler.h"
 #import "CodexStatusProvider.h"
 #import "HUDView.h"
+#import "UpdateManager.h"
 
 static NSString *FormatRate(double value) {
     if (value >= 1.0) return [NSString stringWithFormat:@"%.1f MB/s", value];
@@ -31,6 +32,15 @@ static NSString *FormatTokens(long long tokens) {
     return [NSString stringWithFormat:@"%lld", tokens];
 }
 
+static NSString *FormatDuration(NSInteger seconds) {
+    if (seconds < 60) return [NSString stringWithFormat:@"%ld秒", (long)MAX(0, seconds)];
+    NSInteger minutes = seconds / 60;
+    if (minutes < 60) return [NSString stringWithFormat:@"%ld分钟", (long)minutes];
+    NSInteger hours = minutes / 60;
+    NSInteger rest = minutes % 60;
+    return rest ? [NSString stringWithFormat:@"%ld小时%ld分", (long)hours, (long)rest] : [NSString stringWithFormat:@"%ld小时", (long)hours];
+}
+
 static NSString *FormatUsageDate(NSString *date) {
     NSArray<NSString *> *parts = [date componentsSeparatedByString:@"-"];
     if (parts.count != 3) return date.length > 0 ? date : @"--";
@@ -54,6 +64,16 @@ static NSString *FormatAge(NSTimeInterval timestamp) {
     return [NSString stringWithFormat:@"%ld分钟前", (long)(age / 60)];
 }
 
+static CGFloat HUDScaleForContentSize(NSSize contentSize, NSSize baseSize) {
+    if (contentSize.width <= 0 || baseSize.width <= 0) return 1.0;
+    return MAX(0.75, MIN(1.5, contentSize.width / baseSize.width));
+}
+
+static NSSize HUDLogicalSizeForUniformScale(NSSize contentSize, CGFloat scale) {
+    CGFloat safeScale = MAX(0.01, scale);
+    return NSMakeSize(contentSize.width / safeScale, contentSize.height / safeScale);
+}
+
 static NSString *FormatModuleState(NSTimeInterval timestamp, NSString *error) {
     if (error.length > 0) return timestamp > 0 ? [NSString stringWithFormat:@"失败·上次%@", FormatAge(timestamp)] : @"失败";
     return FormatAge(timestamp);
@@ -65,8 +85,10 @@ static NSString *FormatModuleState(NSTimeInterval timestamp, NSString *error) {
 @property(nonatomic, strong) HUDView *hudView;
 @property(nonatomic, strong) NSTimer *systemTimer;
 @property(nonatomic, strong) NSTimer *codexTimer;
+@property(nonatomic, strong) NSTimer *updateTimer;
 @property(nonatomic, strong) NativeSampler *sampler;
 @property(nonatomic, strong) CodexStatusProvider *codexProvider;
+@property(nonatomic, strong) HUDUpdateManager *updateManager;
 @property(nonatomic, strong) NativeSnapshot *lastSnapshot;
 @property(nonatomic, strong) NSMutableArray<NativeSnapshot *> *minuteSamples;
 @property(nonatomic, strong) NSMutableArray<NSDictionary *> *cpuHistory;
@@ -82,6 +104,8 @@ static NSString *FormatModuleState(NSTimeInterval timestamp, NSString *error) {
 @property(nonatomic) BOOL showPlan;
 @property(nonatomic) BOOL showUsage;
 @property(nonatomic) BOOL showModelQuota;
+@property(nonatomic) BOOL showLongestTurn;
+@property(nonatomic) BOOL showLongestStreak;
 @property(nonatomic) BOOL showSystem;
 @property(nonatomic) BOOL showAttribution;
 @property(nonatomic) BOOL showTrend;
@@ -91,6 +115,8 @@ static NSString *FormatModuleState(NSTimeInterval timestamp, NSString *error) {
 @property(nonatomic) BOOL homeShowPlan;
 @property(nonatomic) BOOL homeShowUsage;
 @property(nonatomic) BOOL homeShowModelQuota;
+@property(nonatomic) BOOL homeShowLongestTurn;
+@property(nonatomic) BOOL homeShowLongestStreak;
 @property(nonatomic) BOOL homeShowDiagnosis;
 @property(nonatomic) BOOL homeShowSystem;
 @property(nonatomic) BOOL homeShowAttribution;
@@ -98,12 +124,26 @@ static NSString *FormatModuleState(NSTimeInterval timestamp, NSString *error) {
 @property(nonatomic) BOOL homeShowMemoryApps;
 @property(nonatomic) BOOL historyEnabled;
 @property(nonatomic) BOOL alwaysOnTop;
+@property(nonatomic) BOOL positionLocked;
 @property(nonatomic) BOOL collapsed;
 @property(nonatomic) CGFloat backgroundOpacity;
 @property(nonatomic) CGFloat windowScale;
 @property(nonatomic, copy) NSString *accentName;
+@property(nonatomic, strong) NSTextField *updateStatusLabel;
+@property(nonatomic, strong) NSButton *updateButton;
+@property(nonatomic) BOOL updateCheckInProgress;
+@property(nonatomic) BOOL updateInstalling;
 - (void)showSettingsWindow:(id)sender;
 - (NSView *)settingsContentView;
+- (NSSize)frameSizeForContentSize:(NSSize)contentSize;
+- (void)configureResizeLimitsForBaseSize:(NSSize)baseSize contentSize:(NSSize)contentSize;
+- (void)updateHUDGeometryForContentSize:(NSSize)contentSize baseSize:(NSSize)baseSize;
+- (void)configureSamplingAndTimers;
+- (void)applyPositionLock;
+- (BOOL)systemDataNeeded;
+- (void)performUpdateCheckManual:(BOOL)manual;
+- (void)presentUpdatePrompt:(HUDReleaseInfo *)release;
+- (void)installRelease:(HUDReleaseInfo *)release;
 @end
 
 @implementation AppDelegate
@@ -120,6 +160,8 @@ static NSString *FormatModuleState(NSTimeInterval timestamp, NSString *error) {
     show.target = self;
     NSMenuItem *hide = [appMenu addItemWithTitle:@"隐藏 Codex Monitor HUD" action:@selector(hide:) keyEquivalent:@"h"];
     hide.target = NSApp;
+    NSMenuItem *checkUpdates = [appMenu addItemWithTitle:@"检查更新…" action:@selector(checkForUpdatesManually:) keyEquivalent:@""];
+    checkUpdates.target = self;
     [appMenu addItem:NSMenuItem.separatorItem];
     NSMenuItem *quit = [appMenu addItemWithTitle:@"退出 Codex Monitor HUD" action:@selector(terminate:) keyEquivalent:@"q"];
     quit.target = NSApp;
@@ -149,6 +191,8 @@ static NSString *FormatModuleState(NSTimeInterval timestamp, NSString *error) {
     self.showPlan = [d objectForKey:@"showPlan"] ? [d boolForKey:@"showPlan"] : YES;
     self.showUsage = [d objectForKey:@"showUsage"] ? [d boolForKey:@"showUsage"] : YES;
     self.showModelQuota = [d objectForKey:@"showModelQuota"] ? [d boolForKey:@"showModelQuota"] : NO;
+    self.showLongestTurn = [d objectForKey:@"showLongestTurn"] ? [d boolForKey:@"showLongestTurn"] : NO;
+    self.showLongestStreak = [d objectForKey:@"showLongestStreak"] ? [d boolForKey:@"showLongestStreak"] : NO;
     self.showSystem = [d objectForKey:@"showSystem"] ? [d boolForKey:@"showSystem"] : YES;
     self.showAttribution = [d objectForKey:@"showAttribution"] ? [d boolForKey:@"showAttribution"] : YES;
     self.showTrend = [d objectForKey:@"showTrend"] ? [d boolForKey:@"showTrend"] : YES;
@@ -158,6 +202,8 @@ static NSString *FormatModuleState(NSTimeInterval timestamp, NSString *error) {
     self.homeShowPlan = [d objectForKey:@"homeShowPlan"] ? [d boolForKey:@"homeShowPlan"] : YES;
     self.homeShowUsage = [d objectForKey:@"homeShowUsage"] ? [d boolForKey:@"homeShowUsage"] : YES;
     self.homeShowModelQuota = [d objectForKey:@"homeShowModelQuota"] ? [d boolForKey:@"homeShowModelQuota"] : NO;
+    self.homeShowLongestTurn = [d objectForKey:@"homeShowLongestTurn"] ? [d boolForKey:@"homeShowLongestTurn"] : NO;
+    self.homeShowLongestStreak = [d objectForKey:@"homeShowLongestStreak"] ? [d boolForKey:@"homeShowLongestStreak"] : NO;
     self.homeShowDiagnosis = [d objectForKey:@"homeShowDiagnosis"] ? [d boolForKey:@"homeShowDiagnosis"] : YES;
     self.homeShowSystem = [d objectForKey:@"homeShowSystem"] ? [d boolForKey:@"homeShowSystem"] : YES;
     self.homeShowAttribution = [d objectForKey:@"homeShowAttribution"] ? [d boolForKey:@"homeShowAttribution"] : YES;
@@ -165,15 +211,17 @@ static NSString *FormatModuleState(NSTimeInterval timestamp, NSString *error) {
     self.homeShowMemoryApps = [d objectForKey:@"homeShowMemoryApps"] ? [d boolForKey:@"homeShowMemoryApps"] : NO;
     self.historyEnabled = [d objectForKey:@"historyEnabled"] ? [d boolForKey:@"historyEnabled"] : YES;
     self.alwaysOnTop = [d objectForKey:@"alwaysOnTop"] ? [d boolForKey:@"alwaysOnTop"] : YES;
+    self.positionLocked = [d objectForKey:@"positionLocked"] ? [d boolForKey:@"positionLocked"] : NO;
     self.backgroundOpacity = [d objectForKey:@"opacity"] ? [d doubleForKey:@"opacity"] : 0.82;
     self.backgroundOpacity = MAX(0.55, MIN(1.0, self.backgroundOpacity));
     double savedScale = [d objectForKey:@"windowScale"] ? [d doubleForKey:@"windowScale"] : 1.0;
-    self.windowScale = fabs(savedScale - 0.85) < 0.05 ? 0.85 : (fabs(savedScale - 1.2) < 0.1 ? 1.2 : 1.0);
+    self.windowScale = MAX(0.75, MIN(1.5, savedScale));
     self.refreshInterval = [d objectForKey:@"refreshInterval"] ? [d doubleForKey:@"refreshInterval"] : 5.0;
     self.refreshInterval = MAX(5.0, MIN(20.0, self.refreshInterval));
     self.currentPage = MAX(0, MIN(2, [d integerForKey:@"currentPage"]));
     self.accentName = [d stringForKey:@"accentName"] ?: @"green";
     self.sampler = [NativeSampler new];
+    self.updateManager = [HUDUpdateManager new];
     self.minuteSamples = [NSMutableArray array];
     self.cpuHistory = [NSMutableArray array];
     NSString *historyPath = [NSHomeDirectory() stringByAppendingPathComponent:@"Library/Application Support/CodexSystemMonitor/native-history"];
@@ -182,9 +230,12 @@ static NSString *FormatModuleState(NSTimeInterval timestamp, NSString *error) {
     self.instanceID = NSUUID.UUID.UUIDString;
     [self appendLifecycleEvent:[self launchLifecycleEvent]];
     [self createPanel];
-    [self startSystemTimer];
+    [self configureSamplingAndTimers];
     [self startCodexProviderIfNeeded];
-    [self updateDisplay];
+    [self performSelector:@selector(checkForUpdatesAutomatically) withObject:nil afterDelay:4.0];
+    self.updateTimer = [NSTimer scheduledTimerWithTimeInterval:12.0 * 60.0 * 60.0 target:self selector:@selector(checkForUpdatesAutomatically) userInfo:nil repeats:YES];
+    self.updateTimer.tolerance = 60.0 * 60.0;
+    [[NSRunLoop mainRunLoop] addTimer:self.updateTimer forMode:NSRunLoopCommonModes];
     [[[NSWorkspace sharedWorkspace] notificationCenter] addObserver:self selector:@selector(workspaceDidWake:) name:NSWorkspaceDidWakeNotification object:nil];
 }
 
@@ -193,6 +244,7 @@ static NSString *FormatModuleState(NSTimeInterval timestamp, NSString *error) {
     [self savePosition];
     [self.systemTimer invalidate];
     [self.codexTimer invalidate];
+    [self.updateTimer invalidate];
     [self.codexProvider stop];
     [[[NSWorkspace sharedWorkspace] notificationCenter] removeObserver:self];
 }
@@ -217,23 +269,25 @@ static NSString *FormatModuleState(NSTimeInterval timestamp, NSString *error) {
 
 - (CGFloat)homePanelHeight {
     CGFloat height = 52;
-    BOOL hasCodex = self.homeShowFiveHour || self.homeShowWeekly || self.homeShowPlan || self.homeShowUsage || self.homeShowModelQuota;
+    BOOL hasCodex = self.homeShowFiveHour || self.homeShowWeekly || self.homeShowPlan || self.homeShowUsage || self.homeShowModelQuota || self.homeShowLongestTurn || self.homeShowLongestStreak;
     BOOL hasComputer = self.homeShowDiagnosis || self.homeShowSystem || self.homeShowAttribution || self.homeShowMemoryApps || self.homeShowTrend;
     if (hasCodex) height += 26;
     if (self.homeShowFiveHour || self.homeShowWeekly) height += 82;
     if (self.homeShowPlan || self.homeShowUsage || self.homeShowModelQuota) height += 66;
+    if (self.homeShowLongestTurn || self.homeShowLongestStreak) height += 66;
     if (hasComputer) height += 26;
     if (self.homeShowDiagnosis || self.homeShowSystem) height += 66;
     if (self.homeShowAttribution) height += 25;
     if (self.homeShowMemoryApps) height += 118;
     if (self.homeShowTrend) height += 25;
     height += 22;
-    return MAX(170, MIN(460, height + (self.compact ? 0 : 110)));
+    return MAX(170, MIN(526, height + (self.compact ? 0 : 110)));
 }
 
 - (NSSize)basePanelSize {
     if (self.collapsed) return NSMakeSize(430, 54);
-    CGFloat height = self.currentPage == 0 ? [self homePanelHeight] : (self.currentPage == 1 ? 260 : (self.showMemoryApps ? 421 : 303));
+    CGFloat codexHeight = 260 + ((self.showLongestTurn || self.showLongestStreak) ? 66 : 0);
+    CGFloat height = self.currentPage == 0 ? [self homePanelHeight] : (self.currentPage == 1 ? codexHeight : (self.showMemoryApps ? 421 : 303));
     if (!self.compact && self.currentPage != 0) height += 110;
     return NSMakeSize(430, height);
 }
@@ -243,11 +297,40 @@ static NSString *FormatModuleState(NSTimeInterval timestamp, NSString *error) {
     return NSMakeSize(round(base.width * self.windowScale), round(base.height * self.windowScale));
 }
 
+- (NSSize)frameSizeForContentSize:(NSSize)contentSize {
+    if (!self.panel) return contentSize;
+    NSRect contentRect = NSMakeRect(0, 0, contentSize.width, contentSize.height);
+    return [self.panel frameRectForContentRect:contentRect].size;
+}
+
+- (void)configureResizeLimitsForBaseSize:(NSSize)baseSize contentSize:(NSSize)contentSize {
+    self.panel.contentAspectRatio = baseSize;
+    if (self.collapsed || self.positionLocked) {
+        self.panel.contentMinSize = contentSize;
+        self.panel.contentMaxSize = contentSize;
+        return;
+    }
+    self.panel.contentMinSize = NSMakeSize(round(baseSize.width * 0.75), round(baseSize.height * 0.75));
+    self.panel.contentMaxSize = NSMakeSize(round(baseSize.width * 1.5), round(baseSize.height * 1.5));
+}
+
+- (void)updateHUDGeometryForContentSize:(NSSize)contentSize baseSize:(NSSize)baseSize {
+    if (!self.hudView || contentSize.width <= 0 || contentSize.height <= 0) return;
+    CGFloat scale = HUDScaleForContentSize(contentSize, baseSize);
+    NSSize logicalSize = HUDLogicalSizeForUniformScale(contentSize, scale);
+    self.windowScale = scale;
+    self.hudView.bounds = NSMakeRect(0, 0, logicalSize.width, logicalSize.height);
+}
+
+- (NSWindowStyleMask)panelStyleMask {
+    return NSWindowStyleMaskTitled | NSWindowStyleMaskFullSizeContentView | NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable | NSWindowStyleMaskNonactivatingPanel;
+}
+
 - (void)createPanel {
     NSSize size = [self panelSize];
     NSSize baseSize = [self basePanelSize];
     self.panel = [[NSPanel alloc] initWithContentRect:NSMakeRect(0, 0, size.width, size.height)
-                                            styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskFullSizeContentView | NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskNonactivatingPanel)
+                                            styleMask:[self panelStyleMask]
                                               backing:NSBackingStoreBuffered defer:NO];
     self.panel.level = self.alwaysOnTop ? NSFloatingWindowLevel : NSNormalWindowLevel;
     self.panel.opaque = NO;
@@ -265,20 +348,24 @@ static NSString *FormatModuleState(NSTimeInterval timestamp, NSString *error) {
     self.panel.collectionBehavior = NSWindowCollectionBehaviorCanJoinAllSpaces | NSWindowCollectionBehaviorFullScreenAuxiliary;
     self.panel.delegate = self;
     self.panel.alphaValue = 1.0;
+    [self configureResizeLimitsForBaseSize:baseSize contentSize:size];
 
     self.hudView = [[HUDView alloc] initWithFrame:NSMakeRect(0, 0, size.width, size.height)];
-    self.hudView.bounds = NSMakeRect(0, 0, baseSize.width, baseSize.height);
+    [self updateHUDGeometryForContentSize:size baseSize:baseSize];
     self.hudView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     self.hudView.accentColor = [self accentColor];
     self.hudView.codexStatusLabel.textColor = self.hudView.accentColor;
     [self.hudView setBackgroundOpacity:self.backgroundOpacity];
     [self.hudView setAlwaysOnTop:self.alwaysOnTop];
+    [self.hudView setPositionLocked:self.positionLocked];
     [self.hudView setCompact:self.compact];
     [self.hudView setFiveHourQuotaVisible:self.showFiveHourQuota];
     [self.hudView setWeeklyQuotaVisible:self.showWeeklyQuota];
     [self.hudView setPlanVisible:self.showPlan];
     [self.hudView setUsageVisible:self.showUsage];
     [self.hudView setModelQuotaVisible:NO];
+    [self.hudView setLongestTurnVisible:self.showLongestTurn];
+    [self.hudView setLongestStreakVisible:self.showLongestStreak];
     [self.hudView setSystemVisible:self.showSystem];
     [self.hudView setAttributionVisible:self.showAttribution];
     [self.hudView setTrendVisible:self.showTrend];
@@ -288,6 +375,8 @@ static NSString *FormatModuleState(NSTimeInterval timestamp, NSString *error) {
     [self.hudView setHomePlanVisible:self.homeShowPlan];
     [self.hudView setHomeUsageVisible:self.homeShowUsage];
     [self.hudView setHomeModelQuotaVisible:NO];
+    [self.hudView setHomeLongestTurnVisible:self.homeShowLongestTurn];
+    [self.hudView setHomeLongestStreakVisible:self.homeShowLongestStreak];
     [self.hudView setHomeDiagnosisVisible:self.homeShowDiagnosis];
     [self.hudView setHomeSystemVisible:self.homeShowSystem];
     [self.hudView setHomeAttributionVisible:self.homeShowAttribution];
@@ -302,6 +391,7 @@ static NSString *FormatModuleState(NSTimeInterval timestamp, NSString *error) {
         [NSUserDefaults.standardUserDefaults setInteger:page forKey:@"currentPage"];
         [weakSelf updateDetailLabels];
         [weakSelf resizePanel];
+        [weakSelf configureSamplingAndTimers];
     };
     self.hudView.topmostChanged = ^(BOOL enabled) {
         weakSelf.alwaysOnTop = enabled;
@@ -309,22 +399,58 @@ static NSString *FormatModuleState(NSTimeInterval timestamp, NSString *error) {
         weakSelf.panel.level = enabled ? NSFloatingWindowLevel : NSNormalWindowLevel;
         if (enabled) [weakSelf.panel orderFrontRegardless];
     };
+    self.hudView.positionLockChanged = ^(BOOL enabled) {
+        weakSelf.positionLocked = enabled;
+        [NSUserDefaults.standardUserDefaults setBool:enabled forKey:@"positionLocked"];
+        [weakSelf applyPositionLock];
+    };
     self.hudView.minimizeRequested = ^{
         [weakSelf.panel miniaturize:nil];
     };
     self.panel.contentView = self.hudView;
     if (![self restorePosition]) [self moveToCorner:@"bottomLeft"];
+    [self applyPositionLock];
     [self.panel orderFrontRegardless];
+}
+
+- (BOOL)systemDataNeeded {
+    BOOL homeNeedsComputer = self.homeShowDiagnosis || self.homeShowSystem || self.homeShowAttribution || self.homeShowTrend || self.homeShowMemoryApps;
+    return self.historyEnabled || self.currentPage == 2 || (self.currentPage == 0 && homeNeedsComputer);
+}
+
+- (void)configureSamplingAndTimers {
+    BOOL wasRunning = self.systemTimer.valid;
+    BOOL computerPage = self.currentPage == 2;
+    BOOL homePage = self.currentPage == 0;
+    self.sampler.collectTopApps = (computerPage && (self.showMemoryApps || (!self.compact && self.showSystem))) || (homePage && self.homeShowMemoryApps);
+    self.sampler.collectSecondaryMetrics = self.historyEnabled || (computerPage && (self.showSystem || !self.compact)) || (homePage && self.homeShowSystem);
+    self.sampler.collectThermalMetrics = self.historyEnabled || computerPage || (homePage && (self.homeShowDiagnosis || self.homeShowSystem));
+    [self startSystemTimer];
+    if (!wasRunning && [self systemDataNeeded] && self.hudView) [self updateDisplay];
+}
+
+- (void)applyPositionLock {
+    if (!self.panel) return;
+    self.panel.movableByWindowBackground = !self.positionLocked;
+    NSWindowStyleMask mask = self.panel.styleMask;
+    if (self.positionLocked) mask &= ~NSWindowStyleMaskResizable;
+    else mask |= NSWindowStyleMaskResizable;
+    self.panel.styleMask = mask;
+    [self.hudView setPositionLocked:self.positionLocked];
+    [self configureResizeLimitsForBaseSize:[self basePanelSize] contentSize:self.panel.contentView.frame.size];
 }
 
 - (void)startSystemTimer {
     [self.systemTimer invalidate];
+    self.systemTimer = nil;
+    if (![self systemDataNeeded]) return;
     self.systemTimer = [NSTimer scheduledTimerWithTimeInterval:self.refreshInterval target:self selector:@selector(updateDisplay) userInfo:nil repeats:YES];
+    self.systemTimer.tolerance = MIN(0.5, self.refreshInterval * 0.1);
     [[NSRunLoop mainRunLoop] addTimer:self.systemTimer forMode:NSRunLoopCommonModes];
 }
 
 - (void)startCodexProviderIfNeeded {
-    BOOL needsCodexData = self.showFiveHourQuota || self.showWeeklyQuota || self.showPlan || self.showUsage || self.showModelQuota || self.homeShowFiveHour || self.homeShowWeekly || self.homeShowPlan || self.homeShowUsage || self.homeShowModelQuota;
+    BOOL needsCodexData = self.showFiveHourQuota || self.showWeeklyQuota || self.showPlan || self.showUsage || self.showModelQuota || self.showLongestTurn || self.showLongestStreak || self.homeShowFiveHour || self.homeShowWeekly || self.homeShowPlan || self.homeShowUsage || self.homeShowModelQuota || self.homeShowLongestTurn || self.homeShowLongestStreak;
     if (!needsCodexData) { [self.codexProvider stop]; self.codexProvider = nil; [self.codexTimer invalidate]; self.codexTimer = nil; return; }
     if (!self.codexProvider) {
         self.codexProvider = [CodexStatusProvider new];
@@ -334,6 +460,7 @@ static NSString *FormatModuleState(NSTimeInterval timestamp, NSString *error) {
     [self.codexProvider start];
     [self.codexTimer invalidate];
     self.codexTimer = [NSTimer scheduledTimerWithTimeInterval:60.0 target:self selector:@selector(refreshCodexData) userInfo:nil repeats:YES];
+    self.codexTimer.tolerance = 5.0;
     [[NSRunLoop mainRunLoop] addTimer:self.codexTimer forMode:NSRunLoopCommonModes];
 }
 
@@ -345,7 +472,8 @@ static NSString *FormatModuleState(NSTimeInterval timestamp, NSString *error) {
 - (BOOL)restorePosition {
     NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
     if ([defaults objectForKey:@"originX"] == nil || [defaults objectForKey:@"originY"] == nil) return NO;
-    NSRect proposed = NSMakeRect([defaults doubleForKey:@"originX"], [defaults doubleForKey:@"originY"], [self panelSize].width, [self panelSize].height);
+    NSSize frameSize = [self frameSizeForContentSize:[self panelSize]];
+    NSRect proposed = NSMakeRect([defaults doubleForKey:@"originX"], [defaults doubleForKey:@"originY"], frameSize.width, frameSize.height);
     for (NSScreen *screen in NSScreen.screens) {
         if (NSIntersectsRect(screen.visibleFrame, proposed)) {
             NSRect visible = screen.visibleFrame;
@@ -365,13 +493,27 @@ static NSString *FormatModuleState(NSTimeInterval timestamp, NSString *error) {
 
 - (void)windowDidMove:(NSNotification *)notification { [self savePosition]; }
 
+- (void)windowDidResize:(NSNotification *)notification {
+    if (notification.object != self.panel) return;
+    NSSize base = [self basePanelSize];
+    NSSize content = self.hudView.frame.size;
+    [self updateHUDGeometryForContentSize:content baseSize:base];
+}
+
+- (void)windowDidEndLiveResize:(NSNotification *)notification {
+    if (notification.object != self.panel) return;
+    [self updateHUDGeometryForContentSize:self.hudView.frame.size baseSize:[self basePanelSize]];
+    [NSUserDefaults.standardUserDefaults setDouble:self.windowScale forKey:@"windowScale"];
+    [self savePosition];
+}
+
 - (void)workspaceDidWake:(NSNotification *)notification {
     [self appendLifecycleEvent:@"wake"];
     self.sampler = [NativeSampler new];
     [self.minuteSamples removeAllObjects];
     [self.cpuHistory removeAllObjects];
     self.minuteStart = 0;
-    [self updateDisplay];
+    [self configureSamplingAndTimers];
     [self.codexProvider refreshQuota];
     [self.panel orderFrontRegardless];
 }
@@ -480,14 +622,16 @@ static NSString *FormatModuleState(NSTimeInterval timestamp, NSString *error) {
     self.hudView.homeBottleneckCard.subtitleLabel.stringValue = [NSString stringWithFormat:@"Codex影响 %@ · %@", diagnosis[@"impact"], diagnosis[@"confidence"]];
     self.hudView.homeBottleneckCard.valueLabel.textColor = status[@"color"];
     self.hudView.cpuCard.valueLabel.stringValue = [NSString stringWithFormat:@"%.0f%%", snapshot.systemCPUPercent];
-    self.hudView.memoryPressureCard.valueLabel.stringValue = snapshot.memoryPressureText ?: @"未知";
+    self.hudView.cpuCard.subtitleLabel.stringValue = @"整机总算力占用";
+    self.hudView.memoryPressureCard.valueLabel.stringValue = [NSString stringWithFormat:@"%.1f / %.0fG", snapshot.systemMemoryUsedGiB, snapshot.totalMemoryGiB];
+    self.hudView.memoryPressureCard.subtitleLabel.stringValue = [NSString stringWithFormat:@"已用 %.0f%% · 压力 %@", snapshot.systemMemoryUsedPercent, snapshot.memoryPressureText ?: @"未知"];
     self.hudView.cpuCard.valueLabel.textColor = snapshot.systemCPUPercent >= 75 ? NSColor.systemOrangeColor : [self accentColor];
     self.hudView.memoryPressureCard.valueLabel.textColor = snapshot.memoryPressureLevel > 0 ? NSColor.systemOrangeColor : [self accentColor];
-    self.hudView.homeSystemCard.valueLabel.stringValue = [NSString stringWithFormat:@"CPU %.0f%%", snapshot.systemCPUPercent];
-    self.hudView.homeSystemCard.subtitleLabel.stringValue = [NSString stringWithFormat:@"内存压力 %@ · Swap %.1fG", snapshot.memoryPressureText ?: @"未知", snapshot.swapUsedGiB];
+    self.hudView.homeSystemCard.valueLabel.stringValue = [NSString stringWithFormat:@"CPU %.0f%% · 内存 %.0f%%", snapshot.systemCPUPercent, snapshot.systemMemoryUsedPercent];
+    self.hudView.homeSystemCard.subtitleLabel.stringValue = [NSString stringWithFormat:@"已用 %.1f / %.0fG · 压力 %@", snapshot.systemMemoryUsedGiB, snapshot.totalMemoryGiB, snapshot.memoryPressureText ?: @"未知"];
     self.hudView.homeSystemCard.valueLabel.textColor = snapshot.systemCPUPercent >= 75 ? NSColor.systemOrangeColor : [self accentColor];
-    self.hudView.attributionLabel.stringValue = [NSString stringWithFormat:@"Codex CPU %.1f%%  ·  内存 %.1f / %.0fG (%.0f%%)", snapshot.codexCPUPercent, snapshot.codexMemoryGiB, snapshot.totalMemoryGiB, snapshot.codexMemoryPercent];
-    self.hudView.homeAttributionLabel.stringValue = [NSString stringWithFormat:@"Codex CPU %.1f%% · 内存 %.1f / %.0fG (%.0f%%)", snapshot.codexCPUPercent, snapshot.codexMemoryGiB, snapshot.totalMemoryGiB, snapshot.codexMemoryPercent];
+    self.hudView.attributionLabel.stringValue = [NSString stringWithFormat:@"Codex：CPU %.1f%%（整机） · 内存 %.1fG（占总内存 %.0f%%）", snapshot.codexCPUPercent, snapshot.codexMemoryGiB, snapshot.codexMemoryPercent];
+    self.hudView.homeAttributionLabel.stringValue = self.hudView.attributionLabel.stringValue;
     [self.hudView.memoryAppsCard updateApps:snapshot.topMemoryApps totalMemoryGiB:snapshot.totalMemoryGiB];
     [self.hudView.homeMemoryAppsCard updateApps:snapshot.topMemoryApps totalMemoryGiB:snapshot.totalMemoryGiB];
     self.hudView.healthLabel.stringValue = [NSString stringWithFormat:@"系统  Swap %.1fG (%+.0fM/10分)  ·  热状态 %@", snapshot.swapUsedGiB, snapshot.swapDelta10MinMiB, snapshot.thermalText];
@@ -539,9 +683,11 @@ static NSString *FormatModuleState(NSTimeInterval timestamp, NSString *error) {
     CodexStatusSnapshot *s = self.codexProvider.snapshot;
     if (!s) { [self updateDetailLabels]; return; }
     NSString *plan = s.accountAvailable ? FormatPlan(s.planType) : nil;
-    NSString *statusText = [self visibleCodexStatus:s fiveHour:self.showFiveHourQuota weekly:self.showWeeklyQuota plan:self.showPlan usage:self.showUsage model:self.showModelQuota];
+    BOOL pageUsesUsageData = self.showUsage || self.showLongestTurn || self.showLongestStreak;
+    BOOL homeUsesUsageData = self.homeShowUsage || self.homeShowLongestTurn || self.homeShowLongestStreak;
+    NSString *statusText = [self visibleCodexStatus:s fiveHour:self.showFiveHourQuota weekly:self.showWeeklyQuota plan:self.showPlan usage:pageUsesUsageData model:self.showModelQuota];
     self.hudView.codexStatusLabel.stringValue = self.showPlan && plan ? [NSString stringWithFormat:@"● %@ · %@", plan, statusText] : [NSString stringWithFormat:@"● %@", statusText];
-    NSString *homeStatusText = [self visibleCodexStatus:s fiveHour:self.homeShowFiveHour weekly:self.homeShowWeekly plan:self.homeShowPlan usage:self.homeShowUsage model:self.homeShowModelQuota];
+    NSString *homeStatusText = [self visibleCodexStatus:s fiveHour:self.homeShowFiveHour weekly:self.homeShowWeekly plan:self.homeShowPlan usage:homeUsesUsageData model:self.homeShowModelQuota];
     self.hudView.homeCodexStatusLabel.stringValue = self.homeShowPlan && plan ? [NSString stringWithFormat:@"● %@ · %@", plan, homeStatusText] : [NSString stringWithFormat:@"● %@", homeStatusText];
     [self.hudView.fiveHourCard showAvailable:s.fiveHourAvailable remaining:s.fiveHourRemainingPercent reset:FormatReset(s.fiveHourResetAt) accent:[self accentColor]];
     [self.hudView.weeklyCard showAvailable:s.weeklyAvailable remaining:s.weeklyRemainingPercent reset:FormatReset(s.weeklyResetAt) accent:[self accentColor]];
@@ -574,6 +720,14 @@ static NSString *FormatModuleState(NSTimeInterval timestamp, NSString *error) {
         self.hudView.homeUsageCard.valueLabel.stringValue = self.hudView.usageCard.valueLabel.stringValue;
         self.hudView.homeUsageCard.subtitleLabel.stringValue = self.hudView.usageCard.subtitleLabel.stringValue;
     }
+    self.hudView.longestTurnCard.valueLabel.stringValue = s.longestRunningTurnAvailable ? FormatDuration(s.longestRunningTurnSec) : @"当前未返回";
+    self.hudView.longestTurnCard.subtitleLabel.stringValue = s.usageErrorText.length > 0 ? @"显示上次数据 · 更新失败" : @"账户历史最长";
+    self.hudView.homeLongestTurnCard.valueLabel.stringValue = self.hudView.longestTurnCard.valueLabel.stringValue;
+    self.hudView.homeLongestTurnCard.subtitleLabel.stringValue = self.hudView.longestTurnCard.subtitleLabel.stringValue;
+    self.hudView.longestStreakCard.valueLabel.stringValue = s.longestStreakAvailable ? [NSString stringWithFormat:@"%ld天", (long)s.longestStreakDays] : @"当前未返回";
+    self.hudView.longestStreakCard.subtitleLabel.stringValue = s.usageErrorText.length > 0 ? @"显示上次数据 · 更新失败" : @"账户历史最长";
+    self.hudView.homeLongestStreakCard.valueLabel.stringValue = self.hudView.longestStreakCard.valueLabel.stringValue;
+    self.hudView.homeLongestStreakCard.subtitleLabel.stringValue = self.hudView.longestStreakCard.subtitleLabel.stringValue;
     if (s.modelQuotaAvailable) {
         self.hudView.modelQuotaCard.valueLabel.stringValue = [NSString stringWithFormat:@"%@ %.0f%%", s.modelQuotaName, s.modelQuotaRemainingPercent];
         self.hudView.modelQuotaCard.subtitleLabel.stringValue = [NSString stringWithFormat:@"%@ · %@", s.modelQuotaWindowLabel ?: @"独立额度", FormatReset(s.modelQuotaResetAt)];
@@ -582,13 +736,17 @@ static NSString *FormatModuleState(NSTimeInterval timestamp, NSString *error) {
     }
     [self.hudView setModelQuotaVisible:self.showModelQuota && s.modelQuotaAvailable];
     [self.hudView setHomeModelQuotaVisible:self.homeShowModelQuota && s.modelQuotaAvailable];
+    [self.hudView setLongestTurnVisible:self.showLongestTurn];
+    [self.hudView setLongestStreakVisible:self.showLongestStreak];
+    [self.hudView setHomeLongestTurnVisible:self.homeShowLongestTurn];
+    [self.hudView setHomeLongestStreakVisible:self.homeShowLongestStreak];
     BOOL quotaStale = (self.showFiveHourQuota || self.showWeeklyQuota || self.showModelQuota || self.homeShowFiveHour || self.homeShowWeekly || self.homeShowModelQuota) && s.quotaUpdatedAt > 0 && NSDate.date.timeIntervalSince1970 - s.quotaUpdatedAt > 180;
-    BOOL anyError = ((self.showFiveHourQuota || self.showWeeklyQuota || self.showModelQuota || self.homeShowFiveHour || self.homeShowWeekly || self.homeShowModelQuota) && s.quotaErrorText.length > 0) || ((self.showPlan || self.homeShowPlan) && s.accountErrorText.length > 0) || ((self.showUsage || self.homeShowUsage) && s.usageErrorText.length > 0);
-    self.hudView.codexFreshnessLabel.stringValue = [self freshnessText:s fiveHour:self.showFiveHourQuota weekly:self.showWeeklyQuota plan:self.showPlan usage:self.showUsage model:self.showModelQuota];
+    BOOL anyError = ((self.showFiveHourQuota || self.showWeeklyQuota || self.showModelQuota || self.homeShowFiveHour || self.homeShowWeekly || self.homeShowModelQuota) && s.quotaErrorText.length > 0) || ((self.showPlan || self.homeShowPlan) && s.accountErrorText.length > 0) || ((pageUsesUsageData || homeUsesUsageData) && s.usageErrorText.length > 0);
+    self.hudView.codexFreshnessLabel.stringValue = [self freshnessText:s fiveHour:self.showFiveHourQuota weekly:self.showWeeklyQuota plan:self.showPlan usage:pageUsesUsageData model:self.showModelQuota];
     self.hudView.codexFreshnessLabel.textColor = quotaStale ? NSColor.systemRedColor : (anyError ? NSColor.systemOrangeColor : NSColor.tertiaryLabelColor);
     self.hudView.codexStatusLabel.textColor = quotaStale ? NSColor.systemRedColor : [self accentColor];
     self.hudView.homeCodexStatusLabel.textColor = self.hudView.codexStatusLabel.textColor;
-    NSString *homeCodexFreshness = [self freshnessText:s fiveHour:self.homeShowFiveHour weekly:self.homeShowWeekly plan:self.homeShowPlan usage:self.homeShowUsage model:self.homeShowModelQuota];
+    NSString *homeCodexFreshness = [self freshnessText:s fiveHour:self.homeShowFiveHour weekly:self.homeShowWeekly plan:self.homeShowPlan usage:homeUsesUsageData model:self.homeShowModelQuota];
     self.hudView.homeFreshnessLabel.stringValue = [homeCodexFreshness isEqualToString:@"未启用Codex显示模块"] ? @"电脑 刚刚" : [NSString stringWithFormat:@"电脑 刚刚 · %@", homeCodexFreshness];
     self.hudView.homeFreshnessLabel.textColor = self.hudView.codexFreshnessLabel.textColor;
     [self updateDetailLabels];
@@ -610,9 +768,11 @@ static NSString *FormatModuleState(NSTimeInterval timestamp, NSString *error) {
             self.hudView.detailLabels[row].stringValue = s.usageAvailable ? [NSString stringWithFormat:@"用量摘要   %@ · 7天 %@", today, FormatTokens(s.sevenDayTokens)] : @"用量摘要   当前接口未返回";
             self.hudView.detailLabels[row++].hidden = NO;
         }
+        if (self.homeShowLongestTurn && row < 5) { self.hudView.detailLabels[row].stringValue = s.longestRunningTurnAvailable ? [NSString stringWithFormat:@"最长单次   %@", FormatDuration(s.longestRunningTurnSec)] : @"最长单次   当前接口未返回"; self.hudView.detailLabels[row++].hidden = NO; }
+        if (self.homeShowLongestStreak && row < 5) { self.hudView.detailLabels[row].stringValue = s.longestStreakAvailable ? [NSString stringWithFormat:@"最长连续   %ld天", (long)s.longestStreakDays] : @"最长连续   当前接口未返回"; self.hudView.detailLabels[row++].hidden = NO; }
         NativeSnapshot *n = self.lastSnapshot;
-        if ((self.homeShowDiagnosis || self.homeShowSystem) && row < 5) { self.hudView.detailLabels[row].stringValue = n ? [NSString stringWithFormat:@"电脑摘要   CPU %.0f%% · 内存压力 %@ · Swap %.1fG", n.systemCPUPercent, n.memoryPressureText, n.swapUsedGiB] : @"电脑摘要   正在采样"; self.hudView.detailLabels[row++].hidden = NO; }
-        if (self.homeShowAttribution && row < 5) { self.hudView.detailLabels[row].stringValue = n ? [NSString stringWithFormat:@"Codex摘要  CPU %.1f%% · 内存 %.1fG", n.codexCPUPercent, n.codexMemoryGiB] : @"Codex摘要  正在采样"; self.hudView.detailLabels[row++].hidden = NO; }
+        if ((self.homeShowDiagnosis || self.homeShowSystem) && row < 5) { self.hudView.detailLabels[row].stringValue = n ? [NSString stringWithFormat:@"电脑摘要   CPU %.0f%% · 内存 %.1f/%.0fG (%.0f%%) · 压力 %@", n.systemCPUPercent, n.systemMemoryUsedGiB, n.totalMemoryGiB, n.systemMemoryUsedPercent, n.memoryPressureText] : @"电脑摘要   正在采样"; self.hudView.detailLabels[row++].hidden = NO; }
+        if (self.homeShowAttribution && row < 5) { self.hudView.detailLabels[row].stringValue = n ? [NSString stringWithFormat:@"Codex摘要  CPU %.1f%%（整机） · 内存 %.1fG（总量%.0f%%）", n.codexCPUPercent, n.codexMemoryGiB, n.codexMemoryPercent] : @"Codex摘要  正在采样"; self.hudView.detailLabels[row++].hidden = NO; }
         if (row < 5) { self.hudView.detailLabels[row].stringValue = @"齿轮可一次查看并修改全部显示选项"; self.hudView.detailLabels[row++].hidden = NO; }
     } else if (self.currentPage == 1) {
         CodexStatusSnapshot *s = self.codexProvider.snapshot;
@@ -624,13 +784,15 @@ static NSString *FormatModuleState(NSTimeInterval timestamp, NSString *error) {
             self.hudView.detailLabels[row].stringValue = s.usageAvailable ? [NSString stringWithFormat:@"用量趋势   %@ · 7天 %@ · 连续%ld天", today, FormatTokens(s.sevenDayTokens), (long)s.currentStreakDays] : @"用量趋势   当前接口未返回";
             self.hudView.detailLabels[row++].hidden = NO;
         }
+        if (self.showLongestTurn && row < 5) { self.hudView.detailLabels[row].stringValue = s.longestRunningTurnAvailable ? [NSString stringWithFormat:@"最长单次   %@", FormatDuration(s.longestRunningTurnSec)] : @"最长单次   当前接口未返回"; self.hudView.detailLabels[row++].hidden = NO; }
+        if (self.showLongestStreak && row < 5) { self.hudView.detailLabels[row].stringValue = s.longestStreakAvailable ? [NSString stringWithFormat:@"最长连续   %ld天", (long)s.longestStreakDays] : @"最长连续   当前接口未返回"; self.hudView.detailLabels[row++].hidden = NO; }
         if (self.showModelQuota && row < 5) { self.hudView.detailLabels[row].stringValue = s.modelQuotaAvailable ? [NSString stringWithFormat:@"模型额度   %@ %.0f%%", s.modelQuotaName, s.modelQuotaRemainingPercent] : @"模型额度   当前未返回"; self.hudView.detailLabels[row++].hidden = NO; }
         if (row < 5) { self.hudView.detailLabels[row].stringValue = @"数据来源   Codex本机账户接口 · 60秒读取一次"; self.hudView.detailLabels[row++].hidden = NO; }
     } else if (self.lastSnapshot) {
         NativeSnapshot *s = self.lastSnapshot;
         if (self.showAttribution && row < 5) { self.hudView.detailLabels[row].stringValue = [NSString stringWithFormat:@"Codex %ld进程 · 渲染%ld · 工具%ld · 最大 %.1fG", (long)s.codexProcessCount, (long)s.codexRendererCount, (long)s.codexHelperCount, s.codexLargestGiB]; self.hudView.detailLabels[row++].hidden = NO; }
         if (self.showAttribution && row < 5) { self.hudView.detailLabels[row].stringValue = [NSString stringWithFormat:@"Codex磁盘  读 %@ · 写 %@", FormatRate(s.codexDiskReadMBps), FormatRate(s.codexDiskWriteMBps)]; self.hudView.detailLabels[row++].hidden = NO; }
-        if (self.showSystem && row < 5) { self.hudView.detailLabels[row].stringValue = [NSString stringWithFormat:@"物理网卡  ↓ %@ · ↑ %@ · 压缩内存 %.1fG", FormatRate(s.networkDownMBps), FormatRate(s.networkUpMBps), s.compressedGiB]; self.hudView.detailLabels[row++].hidden = NO; }
+        if (self.showSystem && row < 5) { self.hudView.detailLabels[row].stringValue = [NSString stringWithFormat:@"整机内存  %.1f/%.0fG (%.0f%%) · 压缩 %.1fG", s.systemMemoryUsedGiB, s.totalMemoryGiB, s.systemMemoryUsedPercent, s.compressedGiB]; self.hudView.detailLabels[row++].hidden = NO; }
         if (self.showSystem && row < 5) { self.hudView.detailLabels[row].stringValue = [NSString stringWithFormat:@"CPU前列  %@", [self topAppsText:s.topCPUApps cpu:YES]]; self.hudView.detailLabels[row++].hidden = NO; }
         if (self.showMemoryApps && row < 5) { self.hudView.detailLabels[row].stringValue = [NSString stringWithFormat:@"内存前列 %@", [self topAppsText:s.topMemoryApps cpu:NO]]; self.hudView.detailLabels[row++].hidden = NO; }
     }
@@ -668,64 +830,63 @@ static NSString *FormatModuleState(NSTimeInterval timestamp, NSString *error) {
 }
 
 - (void)resizePanel {
-    NSRect old = self.panel.frame; NSSize size = [self panelSize]; NSSize baseSize = [self basePanelSize]; NSScreen *screen = self.panel.screen ?: NSScreen.mainScreen;
-    CGFloat y = old.origin.y; if (screen && NSMidY(old) >= NSMidY(screen.visibleFrame)) y = NSMaxY(old) - size.height;
-    [self.panel setFrame:NSMakeRect(old.origin.x, y, size.width, size.height) display:YES animate:YES];
-    self.hudView.frame = NSMakeRect(0, 0, size.width, size.height);
-    self.hudView.bounds = NSMakeRect(0, 0, baseSize.width, baseSize.height);
+    NSRect old = self.panel.frame; NSSize contentSize = [self panelSize]; NSSize baseSize = [self basePanelSize]; NSScreen *screen = self.panel.screen ?: NSScreen.mainScreen;
+    [self configureResizeLimitsForBaseSize:baseSize contentSize:contentSize];
+    NSSize frameSize = [self frameSizeForContentSize:contentSize];
+    CGFloat y = old.origin.y; if (screen && NSMidY(old) >= NSMidY(screen.visibleFrame)) y = NSMaxY(old) - frameSize.height;
+    [self.panel setFrame:NSMakeRect(old.origin.x, y, frameSize.width, frameSize.height) display:YES animate:YES];
     [self.hudView setCompact:self.compact]; [self updateDetailLabels]; [self savePosition];
 }
 
-- (void)toggleDetail:(id)sender { self.compact = !self.compact; [NSUserDefaults.standardUserDefaults setBool:self.compact forKey:@"compact"]; [self resizePanel]; }
+- (void)toggleDetail:(id)sender { self.compact = !self.compact; [NSUserDefaults.standardUserDefaults setBool:self.compact forKey:@"compact"]; [self resizePanel]; [self configureSamplingAndTimers]; }
 - (void)toggleFiveHourQuota:(id)sender { self.showFiveHourQuota = !self.showFiveHourQuota; [NSUserDefaults.standardUserDefaults setBool:self.showFiveHourQuota forKey:@"showFiveHourQuota"]; [self.hudView setFiveHourQuotaVisible:self.showFiveHourQuota]; [self startCodexProviderIfNeeded]; [self updateCodexDisplay]; }
 - (void)toggleWeeklyQuota:(id)sender { self.showWeeklyQuota = !self.showWeeklyQuota; [NSUserDefaults.standardUserDefaults setBool:self.showWeeklyQuota forKey:@"showWeeklyQuota"]; [self.hudView setWeeklyQuotaVisible:self.showWeeklyQuota]; [self startCodexProviderIfNeeded]; [self updateCodexDisplay]; }
 - (void)togglePlan:(id)sender { self.showPlan = !self.showPlan; [NSUserDefaults.standardUserDefaults setBool:self.showPlan forKey:@"showPlan"]; [self.hudView setPlanVisible:self.showPlan]; [self startCodexProviderIfNeeded]; [self updateCodexDisplay]; }
 - (void)toggleUsage:(id)sender { self.showUsage = !self.showUsage; [NSUserDefaults.standardUserDefaults setBool:self.showUsage forKey:@"showUsage"]; [self.hudView setUsageVisible:self.showUsage]; [self startCodexProviderIfNeeded]; [self updateCodexDisplay]; }
 - (void)toggleModelQuota:(id)sender { self.showModelQuota = !self.showModelQuota; [NSUserDefaults.standardUserDefaults setBool:self.showModelQuota forKey:@"showModelQuota"]; [self.hudView setModelQuotaVisible:self.showModelQuota && self.codexProvider.snapshot.modelQuotaAvailable]; [self startCodexProviderIfNeeded]; [self updateCodexDisplay]; }
-- (void)toggleSystem:(id)sender { self.showSystem = !self.showSystem; [NSUserDefaults.standardUserDefaults setBool:self.showSystem forKey:@"showSystem"]; [self.hudView setSystemVisible:self.showSystem]; [self updateDetailLabels]; }
-- (void)toggleAttribution:(id)sender { self.showAttribution = !self.showAttribution; [NSUserDefaults.standardUserDefaults setBool:self.showAttribution forKey:@"showAttribution"]; [self.hudView setAttributionVisible:self.showAttribution]; [self updateDetailLabels]; }
-- (void)toggleTrend:(id)sender { self.showTrend = !self.showTrend; [NSUserDefaults.standardUserDefaults setBool:self.showTrend forKey:@"showTrend"]; [self.hudView setTrendVisible:self.showTrend]; [self updateDetailLabels]; }
-- (void)toggleMemoryApps:(id)sender { self.showMemoryApps = !self.showMemoryApps; [NSUserDefaults.standardUserDefaults setBool:self.showMemoryApps forKey:@"showMemoryApps"]; [self.hudView setMemoryAppsVisible:self.showMemoryApps]; [self resizePanel]; }
+- (void)toggleLongestTurn:(id)sender { self.showLongestTurn = !self.showLongestTurn; [NSUserDefaults.standardUserDefaults setBool:self.showLongestTurn forKey:@"showLongestTurn"]; [self.hudView setLongestTurnVisible:self.showLongestTurn]; [self startCodexProviderIfNeeded]; [self updateCodexDisplay]; [self resizePanel]; }
+- (void)toggleLongestStreak:(id)sender { self.showLongestStreak = !self.showLongestStreak; [NSUserDefaults.standardUserDefaults setBool:self.showLongestStreak forKey:@"showLongestStreak"]; [self.hudView setLongestStreakVisible:self.showLongestStreak]; [self startCodexProviderIfNeeded]; [self updateCodexDisplay]; [self resizePanel]; }
+- (void)toggleSystem:(id)sender { self.showSystem = !self.showSystem; [NSUserDefaults.standardUserDefaults setBool:self.showSystem forKey:@"showSystem"]; [self.hudView setSystemVisible:self.showSystem]; [self updateDetailLabels]; [self configureSamplingAndTimers]; }
+- (void)toggleAttribution:(id)sender { self.showAttribution = !self.showAttribution; [NSUserDefaults.standardUserDefaults setBool:self.showAttribution forKey:@"showAttribution"]; [self.hudView setAttributionVisible:self.showAttribution]; [self updateDetailLabels]; [self configureSamplingAndTimers]; }
+- (void)toggleTrend:(id)sender { self.showTrend = !self.showTrend; [NSUserDefaults.standardUserDefaults setBool:self.showTrend forKey:@"showTrend"]; [self.hudView setTrendVisible:self.showTrend]; [self updateDetailLabels]; [self configureSamplingAndTimers]; }
+- (void)toggleMemoryApps:(id)sender { self.showMemoryApps = !self.showMemoryApps; [NSUserDefaults.standardUserDefaults setBool:self.showMemoryApps forKey:@"showMemoryApps"]; [self.hudView setMemoryAppsVisible:self.showMemoryApps]; [self resizePanel]; [self configureSamplingAndTimers]; }
 - (void)toggleHomeFiveHour:(id)sender { self.homeShowFiveHour = !self.homeShowFiveHour; [NSUserDefaults.standardUserDefaults setBool:self.homeShowFiveHour forKey:@"homeShowFiveHour"]; [self.hudView setHomeFiveHourVisible:self.homeShowFiveHour]; [self startCodexProviderIfNeeded]; [self updateCodexDisplay]; [self resizePanel]; }
 - (void)toggleHomeWeekly:(id)sender { self.homeShowWeekly = !self.homeShowWeekly; [NSUserDefaults.standardUserDefaults setBool:self.homeShowWeekly forKey:@"homeShowWeekly"]; [self.hudView setHomeWeeklyVisible:self.homeShowWeekly]; [self startCodexProviderIfNeeded]; [self updateCodexDisplay]; [self resizePanel]; }
 - (void)toggleHomePlan:(id)sender { self.homeShowPlan = !self.homeShowPlan; [NSUserDefaults.standardUserDefaults setBool:self.homeShowPlan forKey:@"homeShowPlan"]; [self.hudView setHomePlanVisible:self.homeShowPlan]; [self startCodexProviderIfNeeded]; [self updateCodexDisplay]; [self resizePanel]; }
 - (void)toggleHomeUsage:(id)sender { self.homeShowUsage = !self.homeShowUsage; [NSUserDefaults.standardUserDefaults setBool:self.homeShowUsage forKey:@"homeShowUsage"]; [self.hudView setHomeUsageVisible:self.homeShowUsage]; [self startCodexProviderIfNeeded]; [self updateCodexDisplay]; [self resizePanel]; }
 - (void)toggleHomeModelQuota:(id)sender { self.homeShowModelQuota = !self.homeShowModelQuota; [NSUserDefaults.standardUserDefaults setBool:self.homeShowModelQuota forKey:@"homeShowModelQuota"]; [self.hudView setHomeModelQuotaVisible:self.homeShowModelQuota && self.codexProvider.snapshot.modelQuotaAvailable]; [self startCodexProviderIfNeeded]; [self updateCodexDisplay]; [self resizePanel]; }
-- (void)toggleHomeDiagnosis:(id)sender { self.homeShowDiagnosis = !self.homeShowDiagnosis; [NSUserDefaults.standardUserDefaults setBool:self.homeShowDiagnosis forKey:@"homeShowDiagnosis"]; [self.hudView setHomeDiagnosisVisible:self.homeShowDiagnosis]; [self resizePanel]; }
-- (void)toggleHomeSystem:(id)sender { self.homeShowSystem = !self.homeShowSystem; [NSUserDefaults.standardUserDefaults setBool:self.homeShowSystem forKey:@"homeShowSystem"]; [self.hudView setHomeSystemVisible:self.homeShowSystem]; [self resizePanel]; }
-- (void)toggleHomeAttribution:(id)sender { self.homeShowAttribution = !self.homeShowAttribution; [NSUserDefaults.standardUserDefaults setBool:self.homeShowAttribution forKey:@"homeShowAttribution"]; [self.hudView setHomeAttributionVisible:self.homeShowAttribution]; [self resizePanel]; }
-- (void)toggleHomeTrend:(id)sender { self.homeShowTrend = !self.homeShowTrend; [NSUserDefaults.standardUserDefaults setBool:self.homeShowTrend forKey:@"homeShowTrend"]; [self.hudView setHomeTrendVisible:self.homeShowTrend]; [self resizePanel]; }
-- (void)toggleHomeMemoryApps:(id)sender { self.homeShowMemoryApps = !self.homeShowMemoryApps; [NSUserDefaults.standardUserDefaults setBool:self.homeShowMemoryApps forKey:@"homeShowMemoryApps"]; [self.hudView setHomeMemoryAppsVisible:self.homeShowMemoryApps]; [self resizePanel]; }
-- (void)toggleHistory:(id)sender { self.historyEnabled = !self.historyEnabled; [NSUserDefaults.standardUserDefaults setBool:self.historyEnabled forKey:@"historyEnabled"]; }
+- (void)toggleHomeLongestTurn:(id)sender { self.homeShowLongestTurn = !self.homeShowLongestTurn; [NSUserDefaults.standardUserDefaults setBool:self.homeShowLongestTurn forKey:@"homeShowLongestTurn"]; [self.hudView setHomeLongestTurnVisible:self.homeShowLongestTurn]; [self startCodexProviderIfNeeded]; [self updateCodexDisplay]; [self resizePanel]; }
+- (void)toggleHomeLongestStreak:(id)sender { self.homeShowLongestStreak = !self.homeShowLongestStreak; [NSUserDefaults.standardUserDefaults setBool:self.homeShowLongestStreak forKey:@"homeShowLongestStreak"]; [self.hudView setHomeLongestStreakVisible:self.homeShowLongestStreak]; [self startCodexProviderIfNeeded]; [self updateCodexDisplay]; [self resizePanel]; }
+- (void)toggleHomeDiagnosis:(id)sender { self.homeShowDiagnosis = !self.homeShowDiagnosis; [NSUserDefaults.standardUserDefaults setBool:self.homeShowDiagnosis forKey:@"homeShowDiagnosis"]; [self.hudView setHomeDiagnosisVisible:self.homeShowDiagnosis]; [self resizePanel]; [self configureSamplingAndTimers]; }
+- (void)toggleHomeSystem:(id)sender { self.homeShowSystem = !self.homeShowSystem; [NSUserDefaults.standardUserDefaults setBool:self.homeShowSystem forKey:@"homeShowSystem"]; [self.hudView setHomeSystemVisible:self.homeShowSystem]; [self resizePanel]; [self configureSamplingAndTimers]; }
+- (void)toggleHomeAttribution:(id)sender { self.homeShowAttribution = !self.homeShowAttribution; [NSUserDefaults.standardUserDefaults setBool:self.homeShowAttribution forKey:@"homeShowAttribution"]; [self.hudView setHomeAttributionVisible:self.homeShowAttribution]; [self resizePanel]; [self configureSamplingAndTimers]; }
+- (void)toggleHomeTrend:(id)sender { self.homeShowTrend = !self.homeShowTrend; [NSUserDefaults.standardUserDefaults setBool:self.homeShowTrend forKey:@"homeShowTrend"]; [self.hudView setHomeTrendVisible:self.homeShowTrend]; [self resizePanel]; [self configureSamplingAndTimers]; }
+- (void)toggleHomeMemoryApps:(id)sender { self.homeShowMemoryApps = !self.homeShowMemoryApps; [NSUserDefaults.standardUserDefaults setBool:self.homeShowMemoryApps forKey:@"homeShowMemoryApps"]; [self.hudView setHomeMemoryAppsVisible:self.homeShowMemoryApps]; [self resizePanel]; [self configureSamplingAndTimers]; }
+- (void)toggleHistory:(id)sender { self.historyEnabled = !self.historyEnabled; [NSUserDefaults.standardUserDefaults setBool:self.historyEnabled forKey:@"historyEnabled"]; [self configureSamplingAndTimers]; }
 - (void)toggleAlwaysOnTop:(id)sender { self.alwaysOnTop = !self.alwaysOnTop; [NSUserDefaults.standardUserDefaults setBool:self.alwaysOnTop forKey:@"alwaysOnTop"]; self.panel.level = self.alwaysOnTop ? NSFloatingWindowLevel : NSNormalWindowLevel; [self.hudView setAlwaysOnTop:self.alwaysOnTop]; if (self.alwaysOnTop) [self.panel orderFrontRegardless]; }
+- (void)togglePositionLock:(id)sender { self.positionLocked = !self.positionLocked; [NSUserDefaults.standardUserDefaults setBool:self.positionLocked forKey:@"positionLocked"]; [self applyPositionLock]; }
 - (void)minimizeToDock:(id)sender { [self.panel miniaturize:nil]; }
 - (void)toggleCollapsed:(id)sender { self.collapsed = !self.collapsed; [self.hudView setCollapsed:self.collapsed]; [self resizePanel]; }
-- (void)selectPage:(NSMenuItem *)sender { self.currentPage = sender.tag; [NSUserDefaults.standardUserDefaults setInteger:self.currentPage forKey:@"currentPage"]; [self.hudView setPage:self.currentPage]; [self updateDetailLabels]; [self resizePanel]; }
+- (void)selectPage:(NSMenuItem *)sender { self.currentPage = sender.tag; [NSUserDefaults.standardUserDefaults setInteger:self.currentPage forKey:@"currentPage"]; [self.hudView setPage:self.currentPage]; [self updateDetailLabels]; [self resizePanel]; [self configureSamplingAndTimers]; }
 - (void)setOpacity:(NSMenuItem *)sender { self.backgroundOpacity = sender.tag / 100.0; [NSUserDefaults.standardUserDefaults setDouble:self.backgroundOpacity forKey:@"opacity"]; [self.hudView setBackgroundOpacity:self.backgroundOpacity]; }
-- (void)setAccent:(NSMenuItem *)sender { self.accentName = sender.representedObject; [NSUserDefaults.standardUserDefaults setObject:self.accentName forKey:@"accentName"]; self.hudView.accentColor = [self accentColor]; self.hudView.codexStatusLabel.textColor = self.hudView.accentColor; [self updateDisplay]; [self updateCodexDisplay]; }
-- (void)setRefresh:(NSMenuItem *)sender { self.refreshInterval = sender.tag; [NSUserDefaults.standardUserDefaults setDouble:self.refreshInterval forKey:@"refreshInterval"]; [self startSystemTimer]; [self updateDisplay]; }
-- (void)chooseWindowScale:(NSMenuItem *)sender {
-    self.windowScale = sender.tag / 100.0;
-    [NSUserDefaults.standardUserDefaults setDouble:self.windowScale forKey:@"windowScale"];
-    [self resizePanel];
-}
-- (void)setWindowScaleFromControl:(NSSegmentedControl *)sender {
-    NSArray<NSNumber *> *scales = @[@0.85, @1.0, @1.2];
-    NSInteger index = MAX(0, MIN((NSInteger)scales.count - 1, sender.selectedSegment));
-    self.windowScale = scales[(NSUInteger)index].doubleValue;
+- (void)setAccent:(NSMenuItem *)sender { self.accentName = sender.representedObject; [NSUserDefaults.standardUserDefaults setObject:self.accentName forKey:@"accentName"]; self.hudView.accentColor = [self accentColor]; self.hudView.codexStatusLabel.textColor = self.hudView.accentColor; if ([self systemDataNeeded]) [self updateDisplay]; [self updateCodexDisplay]; }
+- (void)setRefresh:(NSMenuItem *)sender { self.refreshInterval = sender.tag; [NSUserDefaults.standardUserDefaults setDouble:self.refreshInterval forKey:@"refreshInterval"]; [self startSystemTimer]; if ([self systemDataNeeded]) [self updateDisplay]; }
+- (void)resetWindowScale:(id)sender {
+    if (self.positionLocked) return;
+    self.windowScale = 1.0;
     [NSUserDefaults.standardUserDefaults setDouble:self.windowScale forKey:@"windowScale"];
     [self resizePanel];
 }
 
 - (void)moveToCorner:(NSString *)corner {
     NSScreen *screen = self.panel.screen ?: NSScreen.mainScreen; if (!screen) return;
-    NSRect v = screen.visibleFrame; NSSize s = [self panelSize]; CGFloat p = 16;
+    NSRect v = screen.visibleFrame; NSSize s = [self frameSizeForContentSize:[self panelSize]]; CGFloat p = 16;
     BOOL right = [corner containsString:@"Right"], top = [corner containsString:@"top"] || [corner containsString:@"Top"];
     CGFloat x = right ? NSMaxX(v) - s.width - p : NSMinX(v) + p;
     CGFloat y = top ? NSMaxY(v) - s.height - p : NSMinY(v) + p;
     [self.panel setFrame:NSMakeRect(x, y, s.width, s.height) display:YES]; [self savePosition];
 }
-- (void)moveCornerFromMenu:(NSMenuItem *)sender { [self moveToCorner:sender.representedObject]; }
+- (void)moveCornerFromMenu:(NSMenuItem *)sender { if (!self.positionLocked) [self moveToCorner:sender.representedObject]; }
 - (void)openDataFolder:(id)sender { [[NSWorkspace sharedWorkspace] openURL:self.historyDirectory]; }
 - (NSString *)launchAgentPath { return [NSHomeDirectory() stringByAppendingPathComponent:@"Library/LaunchAgents/com.codexmonitorhud.app.plist"]; }
 - (BOOL)launchAtLoginEnabled { return [NSFileManager.defaultManager fileExistsAtPath:[self launchAgentPath]]; }
@@ -748,6 +909,76 @@ static NSString *FormatModuleState(NSTimeInterval timestamp, NSString *error) {
     };
     [plist writeToFile:path atomically:YES];
 }
+
+- (void)checkForUpdatesAutomatically { [self performUpdateCheckManual:NO]; }
+- (void)checkForUpdatesManually:(id)sender { [self performUpdateCheckManual:YES]; }
+
+- (void)performUpdateCheckManual:(BOOL)manual {
+    if (self.updateCheckInProgress || self.updateInstalling) return;
+    self.updateCheckInProgress = YES;
+    self.updateButton.enabled = NO;
+    self.updateStatusLabel.stringValue = @"正在检查 GitHub 新版本…";
+    __weak typeof(self) weakSelf = self;
+    [self.updateManager checkForUpdates:^(HUDUpdateCheckResult result, HUDReleaseInfo *release, NSString *message) {
+        weakSelf.updateCheckInProgress = NO;
+        weakSelf.updateButton.enabled = YES;
+        weakSelf.updateStatusLabel.stringValue = message;
+        if (result == HUDUpdateCheckResultAvailable) {
+            NSString *lastPrompted = [NSUserDefaults.standardUserDefaults stringForKey:@"lastPromptedUpdateVersion"];
+            NSTimeInterval lastPromptedAt = [NSUserDefaults.standardUserDefaults doubleForKey:@"lastPromptedUpdateAt"];
+            BOOL reminderDue = NSDate.date.timeIntervalSince1970 - lastPromptedAt >= 24.0 * 60.0 * 60.0;
+            if (manual || ![lastPrompted isEqualToString:release.version] || reminderDue) {
+                [NSUserDefaults.standardUserDefaults setObject:release.version forKey:@"lastPromptedUpdateVersion"];
+                [NSUserDefaults.standardUserDefaults setDouble:NSDate.date.timeIntervalSince1970 forKey:@"lastPromptedUpdateAt"];
+                [weakSelf presentUpdatePrompt:release];
+            }
+        } else if (manual) {
+            NSAlert *alert = [NSAlert new];
+            alert.messageText = result == HUDUpdateCheckResultUpToDate ? @"已经是最新版" : @"暂时无法检查更新";
+            alert.informativeText = message;
+            [alert addButtonWithTitle:@"好"];
+            [alert runModal];
+        }
+    }];
+}
+
+- (void)presentUpdatePrompt:(HUDReleaseInfo *)release {
+    NSAlert *alert = [NSAlert new];
+    alert.messageText = [NSString stringWithFormat:@"发现 Codex Monitor HUD %@", release.version];
+    NSString *notes = release.releaseNotes.length ? release.releaseNotes : @"新版本已经可以下载。";
+    alert.informativeText = notes.length > 700 ? [[notes substringToIndex:700] stringByAppendingString:@"…"] : notes;
+    [alert addButtonWithTitle:@"一键更新"];
+    [alert addButtonWithTitle:@"稍后"];
+    [alert addButtonWithTitle:@"查看发布页面"];
+    NSModalResponse response = [alert runModal];
+    if (response == NSAlertFirstButtonReturn) [self installRelease:release];
+    else if (response == NSAlertThirdButtonReturn && release.releasePageURL) [[NSWorkspace sharedWorkspace] openURL:release.releasePageURL];
+}
+
+- (void)installRelease:(HUDReleaseInfo *)release {
+    if (self.updateInstalling) return;
+    self.updateInstalling = YES;
+    self.updateButton.enabled = NO;
+    self.updateStatusLabel.stringValue = @"正在下载并验证更新…";
+    __weak typeof(self) weakSelf = self;
+    [self.updateManager installRelease:release completion:^(BOOL prepared, NSString *message) {
+        weakSelf.updateStatusLabel.stringValue = message;
+        if (prepared) {
+            [weakSelf appendLifecycleEvent:@"update"];
+            [NSApp terminate:nil];
+            return;
+        }
+        weakSelf.updateInstalling = NO;
+        weakSelf.updateButton.enabled = YES;
+        NSAlert *alert = [NSAlert new];
+        alert.messageText = @"一键更新未完成";
+        alert.informativeText = message;
+        [alert addButtonWithTitle:@"打开发布页面"];
+        [alert addButtonWithTitle:@"取消"];
+        if ([alert runModal] == NSAlertFirstButtonReturn && release.releasePageURL) [[NSWorkspace sharedWorkspace] openURL:release.releasePageURL];
+    }];
+}
+
 - (void)quitHUD:(id)sender { [NSApp terminate:nil]; }
 
 - (NSMenuItem *)item:(NSString *)title action:(SEL)action state:(BOOL)state {
@@ -790,6 +1021,8 @@ static NSString *FormatModuleState(NSTimeInterval timestamp, NSString *error) {
         [self settingsCheckbox:@"订阅类型" action:@selector(toggleHomePlan:) state:self.homeShowPlan],
         [self settingsCheckbox:@"Token用量" action:@selector(toggleHomeUsage:) state:self.homeShowUsage],
         [self settingsCheckbox:@"模型专属额度" action:@selector(toggleHomeModelQuota:) state:self.homeShowModelQuota],
+        [self settingsCheckbox:@"最长单次任务时长" action:@selector(toggleHomeLongestTurn:) state:self.homeShowLongestTurn],
+        [self settingsCheckbox:@"历史最长连续天数" action:@selector(toggleHomeLongestStreak:) state:self.homeShowLongestStreak],
         [self settingsCheckbox:@"瓶颈判断" action:@selector(toggleHomeDiagnosis:) state:self.homeShowDiagnosis],
         [self settingsCheckbox:@"电脑核心状态" action:@selector(toggleHomeSystem:) state:self.homeShowSystem],
         [self settingsCheckbox:@"Codex性能占用" action:@selector(toggleHomeAttribution:) state:self.homeShowAttribution],
@@ -801,7 +1034,9 @@ static NSString *FormatModuleState(NSTimeInterval timestamp, NSString *error) {
         [self settingsCheckbox:@"每周额度" action:@selector(toggleWeeklyQuota:) state:self.showWeeklyQuota],
         [self settingsCheckbox:@"订阅类型" action:@selector(togglePlan:) state:self.showPlan],
         [self settingsCheckbox:@"Token用量趋势" action:@selector(toggleUsage:) state:self.showUsage],
-        [self settingsCheckbox:@"模型专属额度" action:@selector(toggleModelQuota:) state:self.showModelQuota]
+        [self settingsCheckbox:@"模型专属额度" action:@selector(toggleModelQuota:) state:self.showModelQuota],
+        [self settingsCheckbox:@"最长单次任务时长" action:@selector(toggleLongestTurn:) state:self.showLongestTurn],
+        [self settingsCheckbox:@"历史最长连续天数" action:@selector(toggleLongestStreak:) state:self.showLongestStreak]
     ];
     NSArray<NSView *> *computerControls = @[
         [self settingsCheckbox:@"电脑核心状态" action:@selector(toggleSystem:) state:self.showSystem],
@@ -818,25 +1053,34 @@ static NSString *FormatModuleState(NSTimeInterval timestamp, NSString *error) {
     moduleColumns.alignment = NSLayoutAttributeTop;
     moduleColumns.spacing = 12;
 
-    NSSegmentedControl *sizeControl = [NSSegmentedControl segmentedControlWithLabels:@[@"小 85%", @"标准 100%", @"大 120%"] trackingMode:NSSegmentSwitchTrackingSelectOne target:self action:@selector(setWindowScaleFromControl:)];
-    sizeControl.selectedSegment = fabs(self.windowScale - 0.85) < 0.05 ? 0 : (fabs(self.windowScale - 1.2) < 0.05 ? 2 : 1);
-    sizeControl.controlSize = NSControlSizeRegular;
-    NSTextField *sizeLabel = [NSTextField labelWithString:@"悬浮窗整体大小"];
-    sizeLabel.font = [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold];
+    NSTextField *sizeLabel = [NSTextField wrappingLabelWithString:@"拖动悬浮窗任意边角调整整体大小（75%–150%）"];
+    sizeLabel.font = [NSFont systemFontOfSize:12.5 weight:NSFontWeightRegular];
+    NSButton *resetSize = [NSButton buttonWithTitle:@"恢复标准大小" target:self action:@selector(resetWindowScale:)];
+    resetSize.bezelStyle = NSBezelStyleRounded;
+    resetSize.enabled = !self.positionLocked;
     NSArray<NSView *> *behaviorControls = @[
         [self settingsCheckbox:@"始终置顶" action:@selector(toggleAlwaysOnTop:) state:self.alwaysOnTop],
+        [self settingsCheckbox:@"锁定位置和大小" action:@selector(togglePositionLock:) state:self.positionLocked],
         [self settingsCheckbox:@"显示详细信息" action:@selector(toggleDetail:) state:!self.compact],
         [self settingsCheckbox:@"保存每分钟趋势" action:@selector(toggleHistory:) state:self.historyEnabled],
         [self settingsCheckbox:@"登录后自动启动" action:@selector(toggleLaunchAtLogin:) state:[self launchAtLoginEnabled]]
     ];
-    NSStackView *sizeStack = [NSStackView stackViewWithViews:@[sizeLabel, sizeControl]];
+    NSStackView *sizeStack = [NSStackView stackViewWithViews:@[sizeLabel, resetSize]];
     sizeStack.orientation = NSUserInterfaceLayoutOrientationVertical; sizeStack.alignment = NSLayoutAttributeLeading; sizeStack.spacing = 7;
     NSBox *behaviorBox = [self settingsGroup:@"常驻与显示" controls:behaviorControls];
     NSBox *sizeBox = [self settingsGroup:@"外观" controls:@[sizeStack]];
-    NSStackView *bottom = [NSStackView stackViewWithViews:@[behaviorBox, sizeBox]];
+    NSString *version = self.updateManager.currentVersion ?: ([NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleShortVersionString"] ?: @"--");
+    self.updateStatusLabel = [NSTextField wrappingLabelWithString:[NSString stringWithFormat:@"当前版本 %@ · 每12小时自动检查", version]];
+    self.updateStatusLabel.font = [NSFont systemFontOfSize:12.5 weight:NSFontWeightRegular];
+    self.updateButton = [NSButton buttonWithTitle:@"检查更新" target:self action:@selector(checkForUpdatesManually:)];
+    self.updateButton.bezelStyle = NSBezelStyleRounded;
+    NSStackView *updateStack = [NSStackView stackViewWithViews:@[self.updateStatusLabel, self.updateButton]];
+    updateStack.orientation = NSUserInterfaceLayoutOrientationVertical; updateStack.alignment = NSLayoutAttributeLeading; updateStack.spacing = 7;
+    NSBox *updateBox = [self settingsGroup:@"软件更新" controls:@[updateStack]];
+    NSStackView *bottom = [NSStackView stackViewWithViews:@[behaviorBox, sizeBox, updateBox]];
     bottom.orientation = NSUserInterfaceLayoutOrientationHorizontal; bottom.distribution = NSStackViewDistributionFillEqually; bottom.spacing = 12;
 
-    NSTextField *hint = [NSTextField labelWithString:@"所有勾选状态集中显示；修改后立即生效。更多颜色、透明度、刷新频率仍可在悬浮窗右键菜单调整。"];
+    NSTextField *hint = [NSTextField labelWithString:@"所有勾选状态集中显示；历史型Codex数据默认关闭，按需勾选。"];
     hint.font = [NSFont systemFontOfSize:12]; hint.textColor = NSColor.secondaryLabelColor;
     NSStackView *root = [NSStackView stackViewWithViews:@[hint, moduleColumns, bottom]];
     root.orientation = NSUserInterfaceLayoutOrientationVertical; root.alignment = NSLayoutAttributeLeading; root.spacing = 14;
@@ -852,7 +1096,7 @@ static NSString *FormatModuleState(NSTimeInterval timestamp, NSString *error) {
 
 - (void)showSettingsWindow:(id)sender {
     if (self.settingsWindow.visible) { [NSApp activateIgnoringOtherApps:YES]; [self.settingsWindow makeKeyAndOrderFront:nil]; return; }
-    self.settingsWindow = [[NSPanel alloc] initWithContentRect:NSMakeRect(0, 0, 760, 520) styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable) backing:NSBackingStoreBuffered defer:NO];
+    self.settingsWindow = [[NSPanel alloc] initWithContentRect:NSMakeRect(0, 0, 840, 600) styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable) backing:NSBackingStoreBuffered defer:NO];
     self.settingsWindow.title = @"Codex Monitor HUD 设置";
     self.settingsWindow.contentView = [self settingsContentView];
     self.settingsWindow.releasedWhenClosed = NO;
@@ -876,6 +1120,8 @@ static NSString *FormatModuleState(NSTimeInterval timestamp, NSString *error) {
     [homeModules addItem:[self item:@"订阅类型" action:@selector(toggleHomePlan:) state:self.homeShowPlan]];
     [homeModules addItem:[self item:@"Token用量" action:@selector(toggleHomeUsage:) state:self.homeShowUsage]];
     [homeModules addItem:[self item:@"模型专属额度" action:@selector(toggleHomeModelQuota:) state:self.homeShowModelQuota]];
+    [homeModules addItem:[self item:@"最长单次任务时长" action:@selector(toggleHomeLongestTurn:) state:self.homeShowLongestTurn]];
+    [homeModules addItem:[self item:@"历史最长连续天数" action:@selector(toggleHomeLongestStreak:) state:self.homeShowLongestStreak]];
     [homeModules addItem:NSMenuItem.separatorItem];
     [homeModules addItem:[self item:@"瓶颈判断" action:@selector(toggleHomeDiagnosis:) state:self.homeShowDiagnosis]];
     [homeModules addItem:[self item:@"电脑核心状态" action:@selector(toggleHomeSystem:) state:self.homeShowSystem]];
@@ -888,6 +1134,8 @@ static NSString *FormatModuleState(NSTimeInterval timestamp, NSString *error) {
     [modules addItem:[self item:@"每周额度" action:@selector(toggleWeeklyQuota:) state:self.showWeeklyQuota]];
     [modules addItem:[self item:@"订阅类型" action:@selector(togglePlan:) state:self.showPlan]];
     [modules addItem:[self item:@"Token用量趋势" action:@selector(toggleUsage:) state:self.showUsage]];
+    [modules addItem:[self item:@"最长单次任务时长" action:@selector(toggleLongestTurn:) state:self.showLongestTurn]];
+    [modules addItem:[self item:@"历史最长连续天数" action:@selector(toggleLongestStreak:) state:self.showLongestStreak]];
     [modules addItem:[self item:@"电脑核心状态" action:@selector(toggleSystem:) state:self.showSystem]];
     [modules addItem:[self item:@"Codex性能占用" action:@selector(toggleAttribution:) state:self.showAttribution]];
     [modules addItem:[self item:@"10分钟CPU趋势" action:@selector(toggleTrend:) state:self.showTrend]];
@@ -901,9 +1149,7 @@ static NSString *FormatModuleState(NSTimeInterval timestamp, NSString *error) {
     NSMenu *opacity = [NSMenu new];
     for (NSNumber *value in @[@55, @70, @82, @90, @100]) { NSMenuItem *i = [self item:[NSString stringWithFormat:@"%@%%", value] action:@selector(setOpacity:) state:fabs(self.backgroundOpacity - value.doubleValue/100.0) < 0.01]; i.tag = value.integerValue; [opacity addItem:i]; }
     NSMenuItem *opacityRoot = [[NSMenuItem alloc] initWithTitle:@"透明度" action:nil keyEquivalent:@""]; opacityRoot.submenu = opacity; [menu addItem:opacityRoot];
-    NSMenu *sizes = [NSMenu new];
-    for (NSNumber *value in @[@85, @100, @120]) { NSMenuItem *i = [self item:[NSString stringWithFormat:@"%@%%", value] action:@selector(chooseWindowScale:) state:fabs(self.windowScale - value.doubleValue/100.0) < 0.01]; i.tag = value.integerValue; [sizes addItem:i]; }
-    NSMenuItem *sizeRoot = [[NSMenuItem alloc] initWithTitle:@"整体大小" action:nil keyEquivalent:@""]; sizeRoot.submenu = sizes; [menu addItem:sizeRoot];
+    NSMenuItem *resetScale = [self item:@"恢复标准大小" action:@selector(resetWindowScale:) state:NO]; resetScale.enabled = !self.positionLocked; [menu addItem:resetScale];
     NSMenu *colors = [NSMenu new];
     for (NSArray *pair in @[@[@"绿色", @"green"], @[@"蓝色", @"blue"], @[@"紫色", @"purple"], @[@"橙色", @"orange"]]) { NSMenuItem *i = [self item:pair[0] action:@selector(setAccent:) state:[self.accentName isEqualToString:pair[1]]]; i.representedObject = pair[1]; [colors addItem:i]; }
     NSMenuItem *colorRoot = [[NSMenuItem alloc] initWithTitle:@"强调颜色" action:nil keyEquivalent:@""]; colorRoot.submenu = colors; [menu addItem:colorRoot];
@@ -911,14 +1157,16 @@ static NSString *FormatModuleState(NSTimeInterval timestamp, NSString *error) {
     for (NSNumber *value in @[@5, @10, @20]) { NSMenuItem *i = [self item:[NSString stringWithFormat:@"%@秒", value] action:@selector(setRefresh:) state:fabs(self.refreshInterval - value.doubleValue) < 0.1]; i.tag = value.integerValue; [refresh addItem:i]; }
     NSMenuItem *refreshRoot = [[NSMenuItem alloc] initWithTitle:@"电脑数据刷新" action:nil keyEquivalent:@""]; refreshRoot.submenu = refresh; [menu addItem:refreshRoot];
     NSMenu *positions = [NSMenu new];
-    for (NSArray *pair in @[@[@"左下角", @"bottomLeft"], @[@"左上角", @"topLeft"], @[@"右下角", @"bottomRight"], @[@"右上角", @"topRight"]]) { NSMenuItem *i = [self item:pair[0] action:@selector(moveCornerFromMenu:) state:NO]; i.representedObject = pair[1]; [positions addItem:i]; }
+    for (NSArray *pair in @[@[@"左下角", @"bottomLeft"], @[@"左上角", @"topLeft"], @[@"右下角", @"bottomRight"], @[@"右上角", @"topRight"]]) { NSMenuItem *i = [self item:pair[0] action:@selector(moveCornerFromMenu:) state:NO]; i.representedObject = pair[1]; i.enabled = !self.positionLocked; [positions addItem:i]; }
     NSMenuItem *positionRoot = [[NSMenuItem alloc] initWithTitle:@"屏幕位置" action:nil keyEquivalent:@""]; positionRoot.submenu = positions; [menu addItem:positionRoot];
     [menu addItem:[self item:@"始终置顶" action:@selector(toggleAlwaysOnTop:) state:self.alwaysOnTop]];
+    [menu addItem:[self item:@"锁定位置和大小" action:@selector(togglePositionLock:) state:self.positionLocked]];
     [menu addItem:[self item:@"最小化到程序栏" action:@selector(minimizeToDock:) state:NO]];
     [menu addItem:[self item:(self.collapsed ? @"退出窄栏模式" : @"窄栏模式") action:@selector(toggleCollapsed:) state:self.collapsed]];
     [menu addItem:[self item:@"显示详细信息" action:@selector(toggleDetail:) state:!self.compact]];
     [menu addItem:[self item:@"保存每分钟趋势" action:@selector(toggleHistory:) state:self.historyEnabled]];
     [menu addItem:[self item:@"登录后自动启动" action:@selector(toggleLaunchAtLogin:) state:[self launchAtLoginEnabled]]];
+    [menu addItem:[self item:@"检查更新…" action:@selector(checkForUpdatesManually:) state:NO]];
     [menu addItem:NSMenuItem.separatorItem];
     NSMenuItem *open = [[NSMenuItem alloc] initWithTitle:@"打开趋势数据文件夹" action:@selector(openDataFolder:) keyEquivalent:@""]; open.target = self; [menu addItem:open];
     NSMenuItem *quit = [[NSMenuItem alloc] initWithTitle:@"退出悬浮窗" action:@selector(quitHUD:) keyEquivalent:@""]; quit.target = self; [menu addItem:quit];
@@ -927,17 +1175,17 @@ static NSString *FormatModuleState(NSTimeInterval timestamp, NSString *error) {
 
 @end
 
-static void CountSettingsControls(NSView *view, NSInteger *checkboxCount, NSInteger *hiddenFiveHourCount, NSInteger *hiddenPlanCount, NSInteger *selectedSizeSegment) {
+static void CountSettingsControls(NSView *view, NSInteger *checkboxCount, NSInteger *hiddenFiveHourCount, NSInteger *hiddenPlanCount, NSInteger *optionalHistoryOffCount, NSInteger *resetButtonCount) {
     if ([view isKindOfClass:NSButton.class]) {
         NSButton *button = (NSButton *)view;
-        (*checkboxCount)++;
-        if ([button.title isEqualToString:@"5小时额度"] && button.state == NSControlStateValueOff) (*hiddenFiveHourCount)++;
-        if ([button.title isEqualToString:@"订阅类型"] && button.state == NSControlStateValueOff) (*hiddenPlanCount)++;
-    } else if ([view isKindOfClass:NSSegmentedControl.class]) {
-        NSSegmentedControl *control = (NSSegmentedControl *)view;
-        if (control.segmentCount == 3) *selectedSizeSegment = control.selectedSegment;
+        if (![button.title isEqualToString:@"恢复标准大小"] && ![button.title isEqualToString:@"检查更新"]) {
+            (*checkboxCount)++;
+            if ([button.title isEqualToString:@"5小时额度"] && button.state == NSControlStateValueOff) (*hiddenFiveHourCount)++;
+            if ([button.title isEqualToString:@"订阅类型"] && button.state == NSControlStateValueOff) (*hiddenPlanCount)++;
+            if (([button.title isEqualToString:@"最长单次任务时长"] || [button.title isEqualToString:@"历史最长连续天数"]) && button.state == NSControlStateValueOff) (*optionalHistoryOffCount)++;
+        } else if ([button.title isEqualToString:@"恢复标准大小"]) (*resetButtonCount)++;
     }
-    for (NSView *subview in view.subviews) CountSettingsControls(subview, checkboxCount, hiddenFiveHourCount, hiddenPlanCount, selectedSizeSegment);
+    for (NSView *subview in view.subviews) CountSettingsControls(subview, checkboxCount, hiddenFiveHourCount, hiddenPlanCount, optionalHistoryOffCount, resetButtonCount);
 }
 
 static int RunUIDiagnostic(void) {
@@ -947,19 +1195,49 @@ static int RunUIDiagnostic(void) {
     delegate.homeShowPlan = NO; delegate.showPlan = NO;
     delegate.homeShowWeekly = YES; delegate.showWeeklyQuota = YES;
     delegate.homeShowUsage = YES; delegate.showUsage = YES;
-    delegate.windowScale = 1.2; delegate.compact = YES; delegate.currentPage = 0;
+    delegate.homeShowLongestTurn = NO; delegate.showLongestTurn = NO;
+    delegate.homeShowLongestStreak = NO; delegate.showLongestStreak = NO;
+    delegate.windowScale = 1.13; delegate.compact = YES; delegate.currentPage = 0;
     NSView *settings = [delegate settingsContentView];
-    NSInteger checkboxCount = 0, hiddenFiveHourCount = 0, hiddenPlanCount = 0, selectedSizeSegment = -1;
-    CountSettingsControls(settings, &checkboxCount, &hiddenFiveHourCount, &hiddenPlanCount, &selectedSizeSegment);
-    BOOL settingsPass = checkboxCount == 23 && hiddenFiveHourCount == 2 && hiddenPlanCount == 2;
-    BOOL scalePass = selectedSizeSegment == 2 && fabs([delegate panelSize].width - 516.0) < 0.1;
-    delegate.windowScale = 0.85; scalePass = scalePass && fabs([delegate panelSize].width - 366.0) < 0.1;
+    NSInteger checkboxCount = 0, hiddenFiveHourCount = 0, hiddenPlanCount = 0, optionalHistoryOffCount = 0, resetButtonCount = 0;
+    CountSettingsControls(settings, &checkboxCount, &hiddenFiveHourCount, &hiddenPlanCount, &optionalHistoryOffCount, &resetButtonCount);
+    BOOL settingsPass = checkboxCount == 28 && hiddenFiveHourCount == 2 && hiddenPlanCount == 2 && optionalHistoryOffCount == 4 && resetButtonCount == 1;
+    BOOL scalePass = fabs([delegate panelSize].width - 486.0) < 0.1 && ([delegate panelStyleMask] & NSWindowStyleMaskResizable) != 0;
+    delegate.windowScale = 0.75; scalePass = scalePass && fabs([delegate panelSize].width - 323.0) < 0.1;
     delegate.windowScale = 1.0; scalePass = scalePass && fabs([delegate panelSize].width - 430.0) < 0.1;
+    delegate.windowScale = 1.5; scalePass = scalePass && fabs([delegate panelSize].width - 645.0) < 0.1;
+    NSSize transientContent = NSMakeSize(501, 317), transientBase = NSMakeSize(430, 260);
+    CGFloat transientScale = HUDScaleForContentSize(transientContent, transientBase);
+    NSSize logicalSize = HUDLogicalSizeForUniformScale(transientContent, transientScale);
+    CGFloat horizontalScale = transientContent.width / logicalSize.width;
+    CGFloat verticalScale = transientContent.height / logicalSize.height;
+    BOOL oldFixedBoundsWouldDistort = fabs(transientContent.width / transientBase.width - transientContent.height / transientBase.height) > 0.01;
+    scalePass = scalePass && oldFixedBoundsWouldDistort && fabs(horizontalScale - verticalScale) < 0.0001;
     delegate.hudView = [[HUDView alloc] initWithFrame:NSMakeRect(0, 0, 430, 600)];
     [delegate.hudView setHomeFiveHourVisible:NO]; [delegate.hudView setFiveHourQuotaVisible:NO];
     [delegate.hudView setHomePlanVisible:NO]; [delegate.hudView setPlanVisible:NO];
     [delegate.hudView setHomeWeeklyVisible:YES]; [delegate.hudView setWeeklyQuotaVisible:YES];
-    BOOL cardVisibilityPass = delegate.hudView.homeFiveHourCard.hidden && delegate.hudView.fiveHourCard.hidden && delegate.hudView.homePlanCard.hidden && delegate.hudView.planCard.hidden && !delegate.hudView.homeWeeklyCard.hidden && !delegate.hudView.weeklyCard.hidden;
+    [delegate.hudView setHomeLongestTurnVisible:NO]; [delegate.hudView setLongestTurnVisible:NO];
+    [delegate.hudView setHomeLongestStreakVisible:NO]; [delegate.hudView setLongestStreakVisible:NO];
+    BOOL cardVisibilityPass = delegate.hudView.homeFiveHourCard.hidden && delegate.hudView.fiveHourCard.hidden && delegate.hudView.homePlanCard.hidden && delegate.hudView.planCard.hidden && !delegate.hudView.homeWeeklyCard.hidden && !delegate.hudView.weeklyCard.hidden && delegate.hudView.homeUsageHistoryRow.hidden && delegate.hudView.usageHistoryRow.hidden;
+    delegate.currentPage = 1; delegate.compact = YES; delegate.collapsed = NO; delegate.windowScale = 1.0;
+    delegate.panel = [[NSPanel alloc] initWithContentRect:NSMakeRect(0, 0, transientContent.width, transientContent.height) styleMask:[delegate panelStyleMask] backing:NSBackingStoreBuffered defer:NO];
+    delegate.panel.contentView = delegate.hudView;
+    [delegate windowDidResize:[NSNotification notificationWithName:NSWindowDidResizeNotification object:delegate.panel]];
+    NSSize actualFrame = delegate.hudView.frame.size, actualBounds = delegate.hudView.bounds.size;
+    CGFloat actualHorizontalScale = actualFrame.width / actualBounds.width;
+    CGFloat actualVerticalScale = actualFrame.height / actualBounds.height;
+    scalePass = scalePass && fabs(actualHorizontalScale - actualVerticalScale) < 0.0001;
+    delegate.positionLocked = YES; [delegate applyPositionLock];
+    BOOL positionLockPass = (delegate.panel.styleMask & NSWindowStyleMaskResizable) == 0 && !delegate.panel.movableByWindowBackground && delegate.hudView.positionLocked;
+    delegate.positionLocked = NO; [delegate applyPositionLock];
+    positionLockPass = positionLockPass && (delegate.panel.styleMask & NSWindowStyleMaskResizable) != 0 && delegate.panel.movableByWindowBackground && !delegate.hudView.positionLocked;
+    delegate.historyEnabled = NO; delegate.currentPage = 1; delegate.refreshInterval = 5.0; delegate.sampler = [NativeSampler new]; [delegate configureSamplingAndTimers];
+    BOOL hiddenSamplingPass = delegate.systemTimer == nil && !delegate.sampler.collectTopApps && !delegate.sampler.collectSecondaryMetrics && !delegate.sampler.collectThermalMetrics;
+    delegate.currentPage = 2; [delegate configureSamplingAndTimers];
+    double timerTolerance = delegate.systemTimer.tolerance;
+    BOOL timerTolerancePass = delegate.systemTimer != nil && timerTolerance > 0 && timerTolerance <= 0.51;
+    delegate.currentPage = 1; delegate.compact = YES;
     delegate.compact = NO; delegate.homeShowUsage = NO; delegate.homeShowDiagnosis = NO; delegate.homeShowSystem = NO; delegate.homeShowAttribution = NO;
     CodexStatusProvider *provider = [CodexStatusProvider new]; delegate.codexProvider = provider;
     provider.snapshot.quotaAvailable = YES; provider.snapshot.weeklyAvailable = YES; provider.snapshot.weeklyRemainingPercent = 42;
@@ -971,9 +1249,13 @@ static int RunUIDiagnostic(void) {
     NSString *status = [delegate visibleCodexStatus:provider.snapshot fiveHour:NO weekly:YES plan:NO usage:NO model:NO];
     BOOL hiddenContentPass = [details containsString:@"每周"] && ![details containsString:@"5小时"] && ![details containsString:@"订阅"] && [status isEqualToString:@"Codex数据正常"];
     printf("settings_visibility_test=%s\n", settingsPass ? "pass" : "fail");
-    printf("window_scale_test=%s\n", scalePass ? "pass" : "fail");
+    printf("drag_resize_test=%s\n", scalePass ? "pass" : "fail");
+    printf("position_size_lock_test=%s\n", positionLockPass ? "pass" : "fail");
+    printf("hidden_sampling_test=%s\n", hiddenSamplingPass ? "pass" : "fail");
+    printf("timer_tolerance_test=%s\n", timerTolerancePass ? "pass" : "fail");
+    printf("timer_tolerance_seconds=%.2f\n", timerTolerance);
     printf("hidden_content_test=%s\n", cardVisibilityPass && hiddenContentPass ? "pass" : "fail");
-    return settingsPass && scalePass && cardVisibilityPass && hiddenContentPass ? 0 : 5;
+    return settingsPass && scalePass && positionLockPass && hiddenSamplingPass && timerTolerancePass && cardVisibilityPass && hiddenContentPass ? 0 : 5;
 }
 
 static int RunDiagnostic(void) {
@@ -981,9 +1263,10 @@ static int RunDiagnostic(void) {
     [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:5.1]];
     NativeSnapshot *s = [sampler sample];
     printf("system_cpu=%.2f\n", s.systemCPUPercent); printf("codex_cpu=%.2f\n", s.codexCPUPercent); printf("codex_cpu_cores=%.2f\n", s.codexCPUCores);
-    printf("codex_memory_gib=%.3f\n", s.codexMemoryGiB); printf("total_memory_gib=%.3f\n", s.totalMemoryGiB); printf("codex_memory_percent=%.2f\n", s.codexMemoryPercent);
+    printf("system_memory_used_gib=%.3f\n", s.systemMemoryUsedGiB); printf("system_memory_used_percent=%.2f\n", s.systemMemoryUsedPercent); printf("total_memory_gib=%.3f\n", s.totalMemoryGiB);
+    printf("codex_memory_gib=%.3f\n", s.codexMemoryGiB); printf("codex_memory_percent=%.2f\n", s.codexMemoryPercent);
     printf("codex_processes=%ld\n", (long)s.codexProcessCount); printf("memory_pressure=%ld\n", (long)s.memoryPressureLevel); printf("swap_gib=%.3f\n", s.swapUsedGiB); printf("thermal=%ld\n", (long)s.thermalLevel);
-    return s.codexProcessCount > 0 && s.totalMemoryGiB > 0 ? 0 : 2;
+    return s.codexProcessCount > 0 && s.totalMemoryGiB > 0 && s.systemMemoryUsedGiB > 0 && s.systemMemoryUsedGiB <= s.totalMemoryGiB ? 0 : 2;
 }
 
 static int RunCodexDiagnostic(void) {
@@ -1006,6 +1289,10 @@ static int RunCodexDiagnostic(void) {
         printf("today_usage_available=%s\n", s.todayUsageAvailable ? "true" : "false");
         printf("usage_through_date=%s\n", s.latestUsageDate.UTF8String ?: "none");
         printf("seven_day_tokens=%lld\n", s.sevenDayTokens);
+        printf("longest_turn_available=%s\n", s.longestRunningTurnAvailable ? "true" : "false");
+        if (s.longestRunningTurnAvailable) printf("longest_turn_seconds=%ld\n", (long)s.longestRunningTurnSec);
+        printf("longest_streak_available=%s\n", s.longestStreakAvailable ? "true" : "false");
+        if (s.longestStreakAvailable) printf("longest_streak_days=%ld\n", (long)s.longestStreakDays);
     }
     printf("model_quota_available=%s\n", s.modelQuotaAvailable ? "true" : "false");
     if (s.modelQuotaAvailable) printf("model_quota_name=%s\n", s.modelQuotaName.UTF8String ?: "unknown");
@@ -1013,8 +1300,37 @@ static int RunCodexDiagnostic(void) {
     return s.quotaAvailable ? 0 : 3;
 }
 
+static int RunUpdateDiagnostic(void) {
+    NSString *digest = @"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+    NSDictionary *releaseJSON = @{
+        @"tag_name": @"v1.2.3",
+        @"html_url": @"https://github.com/Ryuaaa/codex-monitor-hud/releases/tag/v1.2.3",
+        @"body": @"test",
+        @"assets": @[@{
+            @"name": @"Codex-Monitor-HUD.app.zip",
+            @"browser_download_url": @"https://github.com/Ryuaaa/codex-monitor-hud/releases/download/v1.2.3/Codex-Monitor-HUD.app.zip",
+            @"digest": [@"sha256:" stringByAppendingString:digest]
+        }]
+    };
+    NSError *parseError = nil;
+    HUDReleaseInfo *release = HUDReleaseInfoFromDictionary(releaseJSON, &parseError);
+    NSURL *file = [NSURL fileURLWithPath:[NSTemporaryDirectory() stringByAppendingPathComponent:[NSString stringWithFormat:@"hud-update-test-%@", NSUUID.UUID.UUIDString]]];
+    [@"abc" writeToURL:file atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    NSString *actualDigest = HUDSHA256ForFile(file);
+    [NSFileManager.defaultManager removeItemAtURL:file error:nil];
+    BOOL versionPass = HUDCompareVersions(@"1.10.0", @"1.9.9") == NSOrderedDescending && HUDCompareVersions(@"v1.2.3", @"1.2.3") == NSOrderedSame;
+    BOOL metadataPass = release && !parseError && [release.version isEqualToString:@"1.2.3"] && [release.assetDigest isEqualToString:digest];
+    BOOL checksumPass = [actualDigest isEqualToString:digest];
+    printf("update_version_test=%s\n", versionPass ? "pass" : "fail");
+    printf("update_metadata_test=%s\n", metadataPass ? "pass" : "fail");
+    printf("update_checksum_test=%s\n", checksumPass ? "pass" : "fail");
+    return versionPass && metadataPass && checksumPass ? 0 : 6;
+}
+
 static int RunLogicDiagnostic(void) {
     BOOL cpuTimebasePass = fabs(NativeRawCPUPercentFromAbsoluteTime(24000000, 1.0, 125, 3) - 100.0) < 0.001;
+    double expectedUsedGiB = 205.0 * 4096.0 / 1073741824.0;
+    BOOL memoryFormulaPass = fabs(NativeUsedMemoryGiBFromPageCounts(100, 50, 10, 40, 30, 5, 20, 4096) - expectedUsedGiB) < 0.0000001;
     NSCalendar *calendar = [NSCalendar calendarWithIdentifier:NSCalendarIdentifierGregorian];
     calendar.timeZone = NSTimeZone.localTimeZone;
     NSDate *now = [calendar startOfDayForDate:NSDate.date];
@@ -1037,9 +1353,10 @@ static int RunLogicDiagnostic(void) {
     BOOL delayedPass = ![delayed[@"todayAvailable"] boolValue] && [delayed[@"today"] longLongValue] == 0 && [delayed[@"recent"] longLongValue] == 75 && [delayed[@"previous"] longLongValue] == 40 && [delayed[@"latestDate"] isEqualToString:yesterdayKey];
     NSDictionary *empty = CodexCalendarUsage(@[], now);
     BOOL emptyPass = ![empty[@"todayAvailable"] boolValue] && [empty[@"recent"] longLongValue] == 0 && [empty[@"previous"] longLongValue] == 0 && [empty[@"latestDate"] length] == 0;
-    BOOL pass = currentPass && delayedPass && emptyPass && cpuTimebasePass;
+    BOOL pass = currentPass && delayedPass && emptyPass && cpuTimebasePass && memoryFormulaPass;
     printf("calendar_usage_test=%s\n", pass ? "pass" : "fail");
     printf("cpu_timebase_test=%s\n", cpuTimebasePass ? "pass" : "fail");
+    printf("memory_used_formula_test=%s\n", memoryFormulaPass ? "pass" : "fail");
     return pass ? 0 : 4;
 }
 
@@ -1049,6 +1366,7 @@ int main(int argc, const char *argv[]) {
         if (argc > 1 && strcmp(argv[1], "--codex-diagnostic") == 0) return RunCodexDiagnostic();
         if (argc > 1 && strcmp(argv[1], "--logic-diagnostic") == 0) return RunLogicDiagnostic();
         if (argc > 1 && strcmp(argv[1], "--ui-diagnostic") == 0) return RunUIDiagnostic();
+        if (argc > 1 && strcmp(argv[1], "--update-diagnostic") == 0) return RunUpdateDiagnostic();
         NSApplication *application = NSApplication.sharedApplication; AppDelegate *delegate = [AppDelegate new]; application.delegate = delegate; [application run];
     }
     return 0;

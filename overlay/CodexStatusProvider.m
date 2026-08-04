@@ -277,6 +277,12 @@ NSDictionary<NSString *, id> *CodexCalendarUsage(NSArray *buckets, NSDate *now) 
     self.snapshot.latestUsageTokens = [usage[@"latestTokens"] longLongValue];
     self.snapshot.lifetimeTokens = [summary[@"lifetimeTokens"] longLongValue];
     self.snapshot.currentStreakDays = [summary[@"currentStreakDays"] integerValue];
+    NSNumber *longestTurn = [summary[@"longestRunningTurnSec"] isKindOfClass:NSNumber.class] ? summary[@"longestRunningTurnSec"] : nil;
+    self.snapshot.longestRunningTurnAvailable = longestTurn != nil;
+    self.snapshot.longestRunningTurnSec = longestTurn.integerValue;
+    NSNumber *longestStreak = [summary[@"longestStreakDays"] isKindOfClass:NSNumber.class] ? summary[@"longestStreakDays"] : nil;
+    self.snapshot.longestStreakAvailable = longestStreak != nil;
+    self.snapshot.longestStreakDays = longestStreak.integerValue;
 }
 
 - (void)sendObject:(NSDictionary *)object {

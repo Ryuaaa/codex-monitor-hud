@@ -27,6 +27,10 @@ FOUNDATION_EXPORT NSDictionary<NSString *, id> *CodexCalendarUsage(NSArray *buck
 @property(nonatomic) long long latestUsageTokens;
 @property(nonatomic) long long lifetimeTokens;
 @property(nonatomic) NSInteger currentStreakDays;
+@property(nonatomic) BOOL longestRunningTurnAvailable;
+@property(nonatomic) NSInteger longestRunningTurnSec;
+@property(nonatomic) BOOL longestStreakAvailable;
+@property(nonatomic) NSInteger longestStreakDays;
 @property(nonatomic) BOOL modelQuotaAvailable;
 @property(nonatomic, copy) NSString *modelQuotaName;
 @property(nonatomic) double modelQuotaRemainingPercent;

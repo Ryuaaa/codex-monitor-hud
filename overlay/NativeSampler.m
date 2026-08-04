@@ -19,6 +19,11 @@
 @implementation NativeSnapshot
 @end
 
+typedef struct {
+    double usedGiB;
+    double compressedGiB;
+} NativeMemoryMetrics;
+
 @interface ProcessMeta : NSObject
 @property(nonatomic) pid_t pid;
 @property(nonatomic) pid_t ppid;
@@ -77,6 +82,12 @@ double NativeRawCPUPercentFromAbsoluteTime(uint64_t deltaCPUTime, NSTimeInterval
     return nanoseconds / (elapsed * 1e9) * 100.0;
 }
 
+double NativeUsedMemoryGiBFromPageCounts(uint64_t active, uint64_t inactive, uint64_t speculative, uint64_t wired, uint64_t compressed, uint64_t purgeable, uint64_t external, uint64_t pageSize) {
+    long double usedPages = (long double)active + inactive + speculative + wired + compressed - purgeable - external;
+    if (usedPages < 0) usedPages = 0;
+    return (double)(usedPages * pageSize / 1073741824.0L);
+}
+
 static double NativeRawCPUPercent(uint64_t deltaCPUTime, NSTimeInterval elapsed) {
     static mach_timebase_info_data_t timebase = {0};
     static dispatch_once_t onceToken;
@@ -99,6 +110,9 @@ static double NativeRawCPUPercent(uint64_t deltaCPUTime, NSTimeInterval elapsed)
     _cachedThermalText = @"正常";
     _memoryPressureText = @"正常";
     _memoryPressureLevel = 0;
+    _collectTopApps = YES;
+    _collectSecondaryMetrics = YES;
+    _collectThermalMetrics = YES;
 
     _memoryPressureSource = dispatch_source_create(
         DISPATCH_SOURCE_TYPE_MEMORYPRESSURE,
@@ -124,6 +138,34 @@ static double NativeRawCPUPercent(uint64_t deltaCPUTime, NSTimeInterval elapsed)
         dispatch_resume(_memoryPressureSource);
     }
     return self;
+}
+
+- (void)setCollectTopApps:(BOOL)collectTopApps {
+    if (_collectTopApps == collectTopApps) return;
+    _collectTopApps = collectTopApps;
+    self.lastAllAppsTime = 0;
+    if (!collectTopApps) { self.cachedTopCPUApps = @[]; self.cachedTopMemoryApps = @[]; }
+}
+
+- (void)setCollectSecondaryMetrics:(BOOL)collectSecondaryMetrics {
+    if (_collectSecondaryMetrics == collectSecondaryMetrics) return;
+    _collectSecondaryMetrics = collectSecondaryMetrics;
+    self.lastSecondaryTime = 0;
+    if (!collectSecondaryMetrics) {
+        self.cachedNetworkDownMBps = 0;
+        self.cachedNetworkUpMBps = 0;
+        self.cachedSwapUsedGiB = 0;
+        self.cachedSwapDelta10MinMiB = 0;
+        self.previousNetworkTime = 0;
+        [self.swapHistory removeAllObjects];
+    }
+}
+
+- (void)setCollectThermalMetrics:(BOOL)collectThermalMetrics {
+    if (_collectThermalMetrics == collectThermalMetrics) return;
+    _collectThermalMetrics = collectThermalMetrics;
+    self.lastThermalTime = 0;
+    if (!collectThermalMetrics) { self.cachedThermalLevel = 0; self.cachedThermalText = @"未采集"; }
 }
 
 - (void)dealloc {
@@ -278,13 +320,25 @@ static double NativeRawCPUPercent(uint64_t deltaCPUTime, NSTimeInterval elapsed)
     return MIN(100, MAX(0, percent));
 }
 
-- (double)readCompressedGiB {
+- (NativeMemoryMetrics)readMemoryMetrics {
+    NativeMemoryMetrics metrics = {0};
     vm_statistics64_data_t stats = {0};
     mach_msg_type_number_t count = HOST_VM_INFO64_COUNT;
-    if (host_statistics64(mach_host_self(), HOST_VM_INFO64, (host_info64_t)&stats, &count) != KERN_SUCCESS) return 0;
+    if (host_statistics64(mach_host_self(), HOST_VM_INFO64, (host_info64_t)&stats, &count) != KERN_SUCCESS) return metrics;
     vm_size_t pageSize = 0;
-    host_page_size(mach_host_self(), &pageSize);
-    return (double)stats.compressor_page_count * (double)pageSize / 1073741824.0;
+    if (host_page_size(mach_host_self(), &pageSize) != KERN_SUCCESS || pageSize == 0) return metrics;
+    metrics.usedGiB = NativeUsedMemoryGiBFromPageCounts(
+        stats.active_count,
+        stats.inactive_count,
+        stats.speculative_count,
+        stats.wire_count,
+        stats.compressor_page_count,
+        stats.purgeable_count,
+        stats.external_page_count,
+        pageSize
+    );
+    metrics.compressedGiB = (double)stats.compressor_page_count * (double)pageSize / 1073741824.0;
+    return metrics;
 }
 
 - (void)refreshSwapAtTime:(NSTimeInterval)now {
@@ -379,7 +433,7 @@ static double NativeRawCPUPercent(uint64_t deltaCPUTime, NSTimeInterval elapsed)
     NSTimeInterval now = NSDate.date.timeIntervalSince1970;
     BOOL refreshInventory = self.processInventory.count == 0 || now - self.lastInventoryTime >= 10.0;
     if (refreshInventory) [self refreshInventoryAtTime:now];
-    BOOL refreshAllApps = self.cachedTopCPUApps.count == 0 || now - self.lastAllAppsTime >= 20.0;
+    BOOL refreshAllApps = self.collectTopApps && (self.cachedTopCPUApps.count == 0 || now - self.lastAllAppsTime >= 20.0);
 
     NSInteger logicalCPUs = MAX(1, NSProcessInfo.processInfo.processorCount);
     uint64_t codexPhysicalBytes = 0;
@@ -434,17 +488,18 @@ static double NativeRawCPUPercent(uint64_t deltaCPUTime, NSTimeInterval elapsed)
         self.lastAllAppsTime = now;
     }
 
-    if (now - self.lastSecondaryTime >= 10.0) {
+    if (self.collectSecondaryMetrics && now - self.lastSecondaryTime >= 10.0) {
         [self refreshSwapAtTime:now];
         [self refreshNetworkAtTime:now];
         self.lastSecondaryTime = now;
     }
-    if (now - self.lastThermalTime >= 20.0) {
+    if (self.collectThermalMetrics && now - self.lastThermalTime >= 20.0) {
         [self refreshThermalState];
         self.lastThermalTime = now;
     }
 
     double totalMemoryGiB = (double)NSProcessInfo.processInfo.physicalMemory / 1073741824.0;
+    NativeMemoryMetrics memoryMetrics = [self readMemoryMetrics];
     NativeSnapshot *snapshot = [NativeSnapshot new];
     snapshot.timestamp = now;
     snapshot.systemCPUPercent = [self readSystemCPUPercent];
@@ -452,12 +507,14 @@ static double NativeRawCPUPercent(uint64_t deltaCPUTime, NSTimeInterval elapsed)
     snapshot.codexCPUPercent = codexCPURaw / logicalCPUs;
     snapshot.codexMemoryGiB = (double)codexPhysicalBytes / 1073741824.0;
     snapshot.totalMemoryGiB = totalMemoryGiB;
+    snapshot.systemMemoryUsedGiB = MIN(totalMemoryGiB, memoryMetrics.usedGiB);
+    snapshot.systemMemoryUsedPercent = totalMemoryGiB > 0 ? snapshot.systemMemoryUsedGiB / totalMemoryGiB * 100.0 : 0;
     snapshot.codexMemoryPercent = totalMemoryGiB > 0 ? snapshot.codexMemoryGiB / totalMemoryGiB * 100.0 : 0;
     snapshot.codexProcessCount = self.codexPIDs.count;
     snapshot.codexRendererCount = rendererCount;
     snapshot.codexHelperCount = helperCount;
     snapshot.codexLargestGiB = (double)codexLargestBytes / 1073741824.0;
-    snapshot.compressedGiB = [self readCompressedGiB];
+    snapshot.compressedGiB = memoryMetrics.compressedGiB;
     snapshot.swapUsedGiB = self.cachedSwapUsedGiB;
     snapshot.swapDelta10MinMiB = self.cachedSwapDelta10MinMiB;
     snapshot.memoryPressureLevel = self.memoryPressureLevel;
