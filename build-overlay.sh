@@ -13,6 +13,7 @@ macos_dir="$contents_dir/MacOS"
   -framework Cocoa \
   "$source_dir/overlay/CodexMonitorHUD.m" \
   "$source_dir/overlay/HUDView.m" \
+  "$source_dir/overlay/UpdateManager.m" \
   "$source_dir/overlay/CodexStatusProvider.m" \
   "$source_dir/overlay/NativeSampler.m" \
   -o "$macos_dir/CodexMonitorHUD"

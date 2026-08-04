@@ -214,20 +214,25 @@
     _pinButton = [NSButton buttonWithImage:[NSImage imageWithSystemSymbolName:@"pin.fill" accessibilityDescription:@"取消置顶"] target:self action:@selector(togglePin:)];
     _pinButton.bezelStyle = NSBezelStyleInline;
     _pinButton.bordered = NO;
+    _lockButton = [NSButton buttonWithImage:[NSImage imageWithSystemSymbolName:@"lock.open" accessibilityDescription:@"锁定位置和大小"] target:self action:@selector(togglePositionLock:)];
+    _lockButton.bezelStyle = NSBezelStyleInline;
+    _lockButton.bordered = NO;
     _settingsButton = [NSButton buttonWithImage:[NSImage imageWithSystemSymbolName:@"gearshape" accessibilityDescription:@"设置"] target:self action:@selector(showSettings:)];
     _settingsButton.bezelStyle = NSBezelStyleInline;
     _settingsButton.bordered = NO;
     _settingsButton.contentTintColor = [NSColor colorWithWhite:1 alpha:0.76];
     _settingsButton.toolTip = @"悬浮窗设置";
-    NSStackView *header = [NSStackView stackViewWithViews:@[_tabs, _minimizeButton, _pinButton, _settingsButton]];
+    NSStackView *header = [NSStackView stackViewWithViews:@[_tabs, _minimizeButton, _pinButton, _lockButton, _settingsButton]];
     header.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     header.alignment = NSLayoutAttributeCenterY;
     header.distribution = NSStackViewDistributionFill;
     [_tabs setContentHuggingPriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
     [_minimizeButton setContentHuggingPriority:NSLayoutPriorityRequired forOrientation:NSLayoutConstraintOrientationHorizontal];
     [_pinButton setContentHuggingPriority:NSLayoutPriorityRequired forOrientation:NSLayoutConstraintOrientationHorizontal];
+    [_lockButton setContentHuggingPriority:NSLayoutPriorityRequired forOrientation:NSLayoutConstraintOrientationHorizontal];
     [_settingsButton setContentHuggingPriority:NSLayoutPriorityRequired forOrientation:NSLayoutConstraintOrientationHorizontal];
     [self setAlwaysOnTop:YES];
+    [self setPositionLocked:NO];
     NSBox *headerSeparator = [[NSBox alloc] initWithFrame:NSZeroRect];
     headerSeparator.boxType = NSBoxCustom;
     headerSeparator.titlePosition = NSNoTitle;
@@ -245,8 +250,12 @@
     _modelQuotaCard = [[HUDMetricCard alloc] initWithTitle:@"模型专属额度" value:@"当前未返回" subtitle:@"高级显示"];
     _codexInsightsRow = [NSStackView stackViewWithViews:@[_planCard, _usageCard, _modelQuotaCard]];
     _codexInsightsRow.orientation = NSUserInterfaceLayoutOrientationHorizontal; _codexInsightsRow.distribution = NSStackViewDistributionFillEqually; _codexInsightsRow.spacing = 7;
+    _longestTurnCard = [[HUDMetricCard alloc] initWithTitle:@"最长单次任务" value:@"当前未返回" subtitle:@"账户历史记录"];
+    _longestStreakCard = [[HUDMetricCard alloc] initWithTitle:@"最长连续使用" value:@"当前未返回" subtitle:@"账户历史记录"];
+    _usageHistoryRow = [NSStackView stackViewWithViews:@[_longestTurnCard, _longestStreakCard]];
+    _usageHistoryRow.orientation = NSUserInterfaceLayoutOrientationHorizontal; _usageHistoryRow.distribution = NSStackViewDistributionFillEqually; _usageHistoryRow.spacing = 7;
     _codexFreshnessLabel = [self label:@"来源  Codex本机接口" size:10.5 color:NSColor.tertiaryLabelColor];
-    _codexStack = [NSStackView stackViewWithViews:@[_codexStatusLabel, _quotaRow, _codexInsightsRow, _codexFreshnessLabel]];
+    _codexStack = [NSStackView stackViewWithViews:@[_codexStatusLabel, _quotaRow, _codexInsightsRow, _usageHistoryRow, _codexFreshnessLabel]];
     _codexStack.orientation = NSUserInterfaceLayoutOrientationVertical;
     _codexStack.alignment = NSLayoutAttributeLeading;
     _codexStack.spacing = 7;
@@ -262,13 +271,17 @@
     _homeModelQuotaCard = [[HUDMetricCard alloc] initWithTitle:@"模型专属额度" value:@"当前未返回" subtitle:@"高级显示"];
     _homeInsightsRow = [NSStackView stackViewWithViews:@[_homePlanCard, _homeUsageCard, _homeModelQuotaCard]];
     _homeInsightsRow.orientation = NSUserInterfaceLayoutOrientationHorizontal; _homeInsightsRow.distribution = NSStackViewDistributionFillEqually; _homeInsightsRow.spacing = 7;
+    _homeLongestTurnCard = [[HUDMetricCard alloc] initWithTitle:@"最长单次任务" value:@"当前未返回" subtitle:@"账户历史记录"];
+    _homeLongestStreakCard = [[HUDMetricCard alloc] initWithTitle:@"最长连续使用" value:@"当前未返回" subtitle:@"账户历史记录"];
+    _homeUsageHistoryRow = [NSStackView stackViewWithViews:@[_homeLongestTurnCard, _homeLongestStreakCard]];
+    _homeUsageHistoryRow.orientation = NSUserInterfaceLayoutOrientationHorizontal; _homeUsageHistoryRow.distribution = NSStackViewDistributionFillEqually; _homeUsageHistoryRow.spacing = 7;
     _homeComputerStatusLabel = [self label:@"● 正在读取电脑状态" size:13 color:NSColor.systemGreenColor];
     _homeComputerStatusLabel.font = [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold];
     _homeBottleneckCard = [[HUDMetricCard alloc] initWithTitle:@"当前瓶颈" value:@"无" subtitle:@"Codex影响 --"];
-    _homeSystemCard = [[HUDMetricCard alloc] initWithTitle:@"电脑状态" value:@"CPU --" subtitle:@"内存压力 --"];
+    _homeSystemCard = [[HUDMetricCard alloc] initWithTitle:@"电脑状态" value:@"CPU -- · 内存 --" subtitle:@"已用 -- / --G · 压力 --"];
     _homeComputerCardsRow = [NSStackView stackViewWithViews:@[_homeBottleneckCard, _homeSystemCard]];
     _homeComputerCardsRow.orientation = NSUserInterfaceLayoutOrientationHorizontal; _homeComputerCardsRow.distribution = NSStackViewDistributionFillEqually; _homeComputerCardsRow.spacing = 7;
-    _homeAttributionLabel = [self label:@"Codex CPU -- · 内存 -- / -- (--%)" size:12 color:NSColor.labelColor];
+    _homeAttributionLabel = [self label:@"Codex：CPU --（整机） · 内存 --G（占总内存 --%）" size:12 color:NSColor.labelColor];
     _homeMemoryAppsCard = [HUDMemoryListCard new];
     _homeSparkline = [HUDSparklineView new];
     _homeTrendTitleLabel = [self label:@"CPU趋势" size:10.5 color:NSColor.secondaryLabelColor];
@@ -276,7 +289,7 @@
     _homeTrendRow = [NSStackView stackViewWithViews:@[_homeTrendTitleLabel, _homeSparkline, _homeTrendLabel]];
     _homeTrendRow.orientation = NSUserInterfaceLayoutOrientationHorizontal; _homeTrendRow.alignment = NSLayoutAttributeCenterY; _homeTrendRow.spacing = 8;
     _homeFreshnessLabel = [self label:@"电脑每5秒 · Codex每60秒" size:10.5 color:NSColor.tertiaryLabelColor];
-    _homeStack = [NSStackView stackViewWithViews:@[_homeCodexStatusLabel, _homeQuotaRow, _homeInsightsRow, _homeComputerStatusLabel, _homeComputerCardsRow, _homeAttributionLabel, _homeMemoryAppsCard, _homeTrendRow, _homeFreshnessLabel]];
+    _homeStack = [NSStackView stackViewWithViews:@[_homeCodexStatusLabel, _homeQuotaRow, _homeInsightsRow, _homeUsageHistoryRow, _homeComputerStatusLabel, _homeComputerCardsRow, _homeAttributionLabel, _homeMemoryAppsCard, _homeTrendRow, _homeFreshnessLabel]];
     _homeStack.orientation = NSUserInterfaceLayoutOrientationVertical; _homeStack.alignment = NSLayoutAttributeLeading; _homeStack.spacing = 7;
 
     _computerStatusLabel = [self label:@"● 正在读取电脑状态" size:13 color:NSColor.systemGreenColor];
@@ -286,12 +299,12 @@
     _diagnosisRow = [NSStackView stackViewWithViews:@[_bottleneckCard, _impactCard]];
     _diagnosisRow.orientation = NSUserInterfaceLayoutOrientationHorizontal; _diagnosisRow.distribution = NSStackViewDistributionFillEqually; _diagnosisRow.spacing = 7;
     _cpuCard = [[HUDMetricCard alloc] initWithTitle:@"整机CPU" value:@"--" subtitle:@""];
-    _memoryPressureCard = [[HUDMetricCard alloc] initWithTitle:@"内存压力" value:@"--" subtitle:@""];
+    _memoryPressureCard = [[HUDMetricCard alloc] initWithTitle:@"整机内存" value:@"-- / --G" subtitle:@"已用 --% · 压力 --"];
     _cpuCard.valueLabel.font = [NSFont monospacedDigitSystemFontOfSize:18 weight:NSFontWeightBold];
     _memoryPressureCard.valueLabel.font = [NSFont systemFontOfSize:18 weight:NSFontWeightBold];
     _healthCardsRow = [NSStackView stackViewWithViews:@[_cpuCard, _memoryPressureCard]];
     _healthCardsRow.orientation = NSUserInterfaceLayoutOrientationHorizontal; _healthCardsRow.distribution = NSStackViewDistributionFillEqually; _healthCardsRow.spacing = 8;
-    _attributionLabel = [self label:@"Codex CPU --  ·  内存 -- / -- (--%)" size:13 color:NSColor.labelColor];
+    _attributionLabel = [self label:@"Codex：CPU --（整机） · 内存 --G（占总内存 --%）" size:13 color:NSColor.labelColor];
     _healthLabel = [self label:@"系统  Swap --  ·  热状态 --" size:12 color:NSColor.secondaryLabelColor];
     _memoryAppsCard = [HUDMemoryListCard new];
     _sparkline = [HUDSparklineView new];
@@ -334,8 +347,10 @@
         [_detailStack.widthAnchor constraintEqualToAnchor:root.widthAnchor],
         [_quotaRow.widthAnchor constraintEqualToAnchor:_codexStack.widthAnchor],
         [_codexInsightsRow.widthAnchor constraintEqualToAnchor:_codexStack.widthAnchor],
+        [_usageHistoryRow.widthAnchor constraintEqualToAnchor:_codexStack.widthAnchor],
         [_homeQuotaRow.widthAnchor constraintEqualToAnchor:_homeStack.widthAnchor],
         [_homeInsightsRow.widthAnchor constraintEqualToAnchor:_homeStack.widthAnchor],
+        [_homeUsageHistoryRow.widthAnchor constraintEqualToAnchor:_homeStack.widthAnchor],
         [_homeComputerCardsRow.widthAnchor constraintEqualToAnchor:_homeStack.widthAnchor],
         [_homeMemoryAppsCard.widthAnchor constraintEqualToAnchor:_homeStack.widthAnchor],
         [_diagnosisRow.widthAnchor constraintEqualToAnchor:_computerStack.widthAnchor],
@@ -363,6 +378,11 @@
     if (self.topmostChanged) self.topmostChanged(self.alwaysOnTop);
 }
 
+- (void)togglePositionLock:(NSButton *)sender {
+    [self setPositionLocked:!self.positionLocked];
+    if (self.positionLockChanged) self.positionLockChanged(self.positionLocked);
+}
+
 - (void)toggleMinimize:(NSButton *)sender {
     if (self.minimizeRequested) self.minimizeRequested();
 }
@@ -382,6 +402,15 @@
     self.pinButton.contentTintColor = enabled ? self.accentColor : [NSColor colorWithWhite:1 alpha:0.52];
 }
 
+- (void)setPositionLocked:(BOOL)enabled {
+    _positionLocked = enabled;
+    NSString *symbol = enabled ? @"lock.fill" : @"lock.open";
+    NSString *description = enabled ? @"解锁位置和大小" : @"锁定位置和大小";
+    self.lockButton.image = [NSImage imageWithSystemSymbolName:symbol accessibilityDescription:description];
+    self.lockButton.toolTip = enabled ? @"位置和大小已锁定，点击解锁" : @"锁定位置和大小，防止误拖动";
+    self.lockButton.contentTintColor = enabled ? self.accentColor : [NSColor colorWithWhite:1 alpha:0.52];
+}
+
 - (void)setPage:(NSInteger)page {
     NSInteger safePage = MAX(0, MIN(2, page));
     self.tabs.selectedSegment = safePage;
@@ -393,25 +422,31 @@
 - (void)setCompact:(BOOL)compact { self.compactMode = compact; self.detailStack.hidden = compact || self.collapsed; }
 - (void)refreshQuotaRowVisibility { self.quotaRow.hidden = self.fiveHourCard.hidden && self.weeklyCard.hidden; }
 - (void)refreshCodexInsightsRow { self.codexInsightsRow.hidden = self.planCard.hidden && self.usageCard.hidden && self.modelQuotaCard.hidden; }
+- (void)refreshUsageHistoryRow { self.usageHistoryRow.hidden = self.longestTurnCard.hidden && self.longestStreakCard.hidden; }
 - (void)setFiveHourQuotaVisible:(BOOL)visible { self.fiveHourCard.hidden = !visible; [self refreshQuotaRowVisibility]; }
 - (void)setWeeklyQuotaVisible:(BOOL)visible { self.weeklyCard.hidden = !visible; [self refreshQuotaRowVisibility]; }
 - (void)setPlanVisible:(BOOL)visible { self.planCard.hidden = !visible; [self refreshCodexInsightsRow]; }
 - (void)setUsageVisible:(BOOL)visible { self.usageCard.hidden = !visible; [self refreshCodexInsightsRow]; }
 - (void)setModelQuotaVisible:(BOOL)visible { self.modelQuotaCard.hidden = !visible; [self refreshCodexInsightsRow]; }
+- (void)setLongestTurnVisible:(BOOL)visible { self.longestTurnCard.hidden = !visible; [self refreshUsageHistoryRow]; }
+- (void)setLongestStreakVisible:(BOOL)visible { self.longestStreakCard.hidden = !visible; [self refreshUsageHistoryRow]; }
 - (void)setSystemVisible:(BOOL)visible { self.healthCardsRow.hidden = !visible; self.healthLabel.hidden = !visible; }
 - (void)setAttributionVisible:(BOOL)visible { self.attributionLabel.hidden = !visible; }
 - (void)setTrendVisible:(BOOL)visible { self.trendRow.hidden = !visible; }
 - (void)setMemoryAppsVisible:(BOOL)visible { self.memoryAppsCard.hidden = !visible; }
-- (void)refreshHomeCodexSection { self.homeCodexStatusLabel.hidden = self.homeQuotaRow.hidden && self.homeInsightsRow.hidden; }
+- (void)refreshHomeCodexSection { self.homeCodexStatusLabel.hidden = self.homeQuotaRow.hidden && self.homeInsightsRow.hidden && self.homeUsageHistoryRow.hidden; }
 - (void)refreshHomeComputerSection { self.homeComputerStatusLabel.hidden = self.homeComputerCardsRow.hidden && self.homeAttributionLabel.hidden && self.homeMemoryAppsCard.hidden && self.homeTrendRow.hidden; }
 - (void)refreshHomeQuotaRow { self.homeQuotaRow.hidden = self.homeFiveHourCard.hidden && self.homeWeeklyCard.hidden; [self refreshHomeCodexSection]; }
 - (void)refreshHomeInsightsRow { self.homeInsightsRow.hidden = self.homePlanCard.hidden && self.homeUsageCard.hidden && self.homeModelQuotaCard.hidden; [self refreshHomeCodexSection]; }
+- (void)refreshHomeUsageHistoryRow { self.homeUsageHistoryRow.hidden = self.homeLongestTurnCard.hidden && self.homeLongestStreakCard.hidden; [self refreshHomeCodexSection]; }
 - (void)refreshHomeComputerCardsRow { self.homeComputerCardsRow.hidden = self.homeBottleneckCard.hidden && self.homeSystemCard.hidden; [self refreshHomeComputerSection]; }
 - (void)setHomeFiveHourVisible:(BOOL)visible { self.homeFiveHourCard.hidden = !visible; [self refreshHomeQuotaRow]; }
 - (void)setHomeWeeklyVisible:(BOOL)visible { self.homeWeeklyCard.hidden = !visible; [self refreshHomeQuotaRow]; }
 - (void)setHomePlanVisible:(BOOL)visible { self.homePlanCard.hidden = !visible; [self refreshHomeInsightsRow]; }
 - (void)setHomeUsageVisible:(BOOL)visible { self.homeUsageCard.hidden = !visible; [self refreshHomeInsightsRow]; }
 - (void)setHomeModelQuotaVisible:(BOOL)visible { self.homeModelQuotaCard.hidden = !visible; [self refreshHomeInsightsRow]; }
+- (void)setHomeLongestTurnVisible:(BOOL)visible { self.homeLongestTurnCard.hidden = !visible; [self refreshHomeUsageHistoryRow]; }
+- (void)setHomeLongestStreakVisible:(BOOL)visible { self.homeLongestStreakCard.hidden = !visible; [self refreshHomeUsageHistoryRow]; }
 - (void)setHomeDiagnosisVisible:(BOOL)visible { self.homeBottleneckCard.hidden = !visible; [self refreshHomeComputerCardsRow]; }
 - (void)setHomeSystemVisible:(BOOL)visible { self.homeSystemCard.hidden = !visible; [self refreshHomeComputerCardsRow]; }
 - (void)setHomeAttributionVisible:(BOOL)visible { self.homeAttributionLabel.hidden = !visible; [self refreshHomeComputerSection]; }
@@ -428,13 +463,14 @@
     self.sparkline.accentColor = _accentColor;
     self.homeSystemCard.valueLabel.textColor = _accentColor; self.homeBottleneckCard.valueLabel.textColor = _accentColor; self.homeSparkline.accentColor = _accentColor;
     [self setAlwaysOnTop:self.alwaysOnTop];
+    [self setPositionLocked:self.positionLocked];
 }
 - (void)setBackgroundOpacity:(CGFloat)opacity {
     CGFloat clamped = MAX(0.55, MIN(1.0, opacity));
     self.tintView.opacity = clamped;
     self.layer.backgroundColor = NSColor.clearColor.CGColor;
 }
-- (BOOL)mouseDownCanMoveWindow { return YES; }
+- (BOOL)mouseDownCanMoveWindow { return !self.positionLocked; }
 - (void)rightMouseDown:(NSEvent *)event {
     NSMenu *menu = self.menuProvider ? self.menuProvider() : nil;
     if (menu) [NSMenu popUpContextMenu:menu withEvent:event forView:self];

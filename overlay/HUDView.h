@@ -36,6 +36,7 @@
 @property(nonatomic, strong) NSSegmentedControl *tabs;
 @property(nonatomic, strong) NSButton *minimizeButton;
 @property(nonatomic, strong) NSButton *pinButton;
+@property(nonatomic, strong) NSButton *lockButton;
 @property(nonatomic, strong) NSButton *settingsButton;
 @property(nonatomic, strong) NSStackView *homeStack;
 @property(nonatomic, strong) NSTextField *homeCodexStatusLabel;
@@ -46,6 +47,9 @@
 @property(nonatomic, strong) HUDMetricCard *homePlanCard;
 @property(nonatomic, strong) HUDMetricCard *homeUsageCard;
 @property(nonatomic, strong) HUDMetricCard *homeModelQuotaCard;
+@property(nonatomic, strong) NSStackView *homeUsageHistoryRow;
+@property(nonatomic, strong) HUDMetricCard *homeLongestTurnCard;
+@property(nonatomic, strong) HUDMetricCard *homeLongestStreakCard;
 @property(nonatomic, strong) NSTextField *homeComputerStatusLabel;
 @property(nonatomic, strong) NSStackView *homeComputerCardsRow;
 @property(nonatomic, strong) HUDMetricCard *homeBottleneckCard;
@@ -68,6 +72,9 @@
 @property(nonatomic, strong) HUDMetricCard *planCard;
 @property(nonatomic, strong) HUDMetricCard *usageCard;
 @property(nonatomic, strong) HUDMetricCard *modelQuotaCard;
+@property(nonatomic, strong) NSStackView *usageHistoryRow;
+@property(nonatomic, strong) HUDMetricCard *longestTurnCard;
+@property(nonatomic, strong) HUDMetricCard *longestStreakCard;
 @property(nonatomic, strong) NSTextField *codexFreshnessLabel;
 @property(nonatomic, strong) NSTextField *computerStatusLabel;
 @property(nonatomic, strong) HUDMetricCard *bottleneckCard;
@@ -87,9 +94,11 @@
 @property(nonatomic, copy) void (^settingsRequested)(void);
 @property(nonatomic, copy) void (^pageChanged)(NSInteger page);
 @property(nonatomic, copy) void (^topmostChanged)(BOOL enabled);
+@property(nonatomic, copy) void (^positionLockChanged)(BOOL enabled);
 @property(nonatomic, copy) void (^minimizeRequested)(void);
 @property(nonatomic, strong) NSColor *accentColor;
 @property(nonatomic) BOOL alwaysOnTop;
+@property(nonatomic) BOOL positionLocked;
 @property(nonatomic) BOOL collapsed;
 - (void)setPage:(NSInteger)page;
 - (void)setCompact:(BOOL)compact;
@@ -98,6 +107,8 @@
 - (void)setPlanVisible:(BOOL)visible;
 - (void)setUsageVisible:(BOOL)visible;
 - (void)setModelQuotaVisible:(BOOL)visible;
+- (void)setLongestTurnVisible:(BOOL)visible;
+- (void)setLongestStreakVisible:(BOOL)visible;
 - (void)setSystemVisible:(BOOL)visible;
 - (void)setAttributionVisible:(BOOL)visible;
 - (void)setTrendVisible:(BOOL)visible;
@@ -107,6 +118,8 @@
 - (void)setHomePlanVisible:(BOOL)visible;
 - (void)setHomeUsageVisible:(BOOL)visible;
 - (void)setHomeModelQuotaVisible:(BOOL)visible;
+- (void)setHomeLongestTurnVisible:(BOOL)visible;
+- (void)setHomeLongestStreakVisible:(BOOL)visible;
 - (void)setHomeDiagnosisVisible:(BOOL)visible;
 - (void)setHomeSystemVisible:(BOOL)visible;
 - (void)setHomeAttributionVisible:(BOOL)visible;
@@ -114,5 +127,6 @@
 - (void)setHomeMemoryAppsVisible:(BOOL)visible;
 - (void)setBackgroundOpacity:(CGFloat)opacity;
 - (void)setAlwaysOnTop:(BOOL)enabled;
+- (void)setPositionLocked:(BOOL)enabled;
 - (void)setCollapsed:(BOOL)collapsed;
 @end
