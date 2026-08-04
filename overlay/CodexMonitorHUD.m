@@ -4,6 +4,8 @@
 #import "HUDView.h"
 #import "UpdateManager.h"
 
+static NSTimeInterval const HUDAutomaticUpdateCheckInterval = 24.0 * 60.0 * 60.0;
+
 static NSString *FormatRate(double value) {
     if (value >= 1.0) return [NSString stringWithFormat:@"%.1f MB/s", value];
     return [NSString stringWithFormat:@"%.0f KB/s", value * 1024.0];
@@ -233,8 +235,8 @@ static NSString *FormatModuleState(NSTimeInterval timestamp, NSString *error) {
     [self configureSamplingAndTimers];
     [self startCodexProviderIfNeeded];
     [self performSelector:@selector(checkForUpdatesAutomatically) withObject:nil afterDelay:4.0];
-    self.updateTimer = [NSTimer scheduledTimerWithTimeInterval:12.0 * 60.0 * 60.0 target:self selector:@selector(checkForUpdatesAutomatically) userInfo:nil repeats:YES];
-    self.updateTimer.tolerance = 60.0 * 60.0;
+    self.updateTimer = [NSTimer scheduledTimerWithTimeInterval:HUDAutomaticUpdateCheckInterval target:self selector:@selector(checkForUpdatesAutomatically) userInfo:nil repeats:YES];
+    self.updateTimer.tolerance = 2.0 * 60.0 * 60.0;
     [[NSRunLoop mainRunLoop] addTimer:self.updateTimer forMode:NSRunLoopCommonModes];
     [[[NSWorkspace sharedWorkspace] notificationCenter] addObserver:self selector:@selector(workspaceDidWake:) name:NSWorkspaceDidWakeNotification object:nil];
 }
@@ -910,7 +912,14 @@ static NSString *FormatModuleState(NSTimeInterval timestamp, NSString *error) {
     [plist writeToFile:path atomically:YES];
 }
 
-- (void)checkForUpdatesAutomatically { [self performUpdateCheckManual:NO]; }
+- (void)checkForUpdatesAutomatically {
+    NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+    NSTimeInterval now = NSDate.date.timeIntervalSince1970;
+    NSTimeInterval lastCheck = [defaults doubleForKey:@"lastAutomaticUpdateCheckAt"];
+    if (lastCheck > 0 && now - lastCheck < HUDAutomaticUpdateCheckInterval) return;
+    [defaults setDouble:now forKey:@"lastAutomaticUpdateCheckAt"];
+    [self performUpdateCheckManual:NO];
+}
 - (void)checkForUpdatesManually:(id)sender { [self performUpdateCheckManual:YES]; }
 
 - (void)performUpdateCheckManual:(BOOL)manual {
@@ -1070,7 +1079,7 @@ static NSString *FormatModuleState(NSTimeInterval timestamp, NSString *error) {
     NSBox *behaviorBox = [self settingsGroup:@"常驻与显示" controls:behaviorControls];
     NSBox *sizeBox = [self settingsGroup:@"外观" controls:@[sizeStack]];
     NSString *version = self.updateManager.currentVersion ?: ([NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleShortVersionString"] ?: @"--");
-    self.updateStatusLabel = [NSTextField wrappingLabelWithString:[NSString stringWithFormat:@"当前版本 %@ · 每12小时自动检查", version]];
+    self.updateStatusLabel = [NSTextField wrappingLabelWithString:[NSString stringWithFormat:@"当前版本 %@ · 每天自动检查一次", version]];
     self.updateStatusLabel.font = [NSFont systemFontOfSize:12.5 weight:NSFontWeightRegular];
     self.updateButton = [NSButton buttonWithTitle:@"检查更新" target:self action:@selector(checkForUpdatesManually:)];
     self.updateButton.bezelStyle = NSBezelStyleRounded;
@@ -1321,10 +1330,12 @@ static int RunUpdateDiagnostic(void) {
     BOOL versionPass = HUDCompareVersions(@"1.10.0", @"1.9.9") == NSOrderedDescending && HUDCompareVersions(@"v1.2.3", @"1.2.3") == NSOrderedSame;
     BOOL metadataPass = release && !parseError && [release.version isEqualToString:@"1.2.3"] && [release.assetDigest isEqualToString:digest];
     BOOL checksumPass = [actualDigest isEqualToString:digest];
+    BOOL frequencyPass = fabs(HUDAutomaticUpdateCheckInterval - 86400.0) < 0.1;
     printf("update_version_test=%s\n", versionPass ? "pass" : "fail");
     printf("update_metadata_test=%s\n", metadataPass ? "pass" : "fail");
     printf("update_checksum_test=%s\n", checksumPass ? "pass" : "fail");
-    return versionPass && metadataPass && checksumPass ? 0 : 6;
+    printf("update_daily_frequency_test=%s\n", frequencyPass ? "pass" : "fail");
+    return versionPass && metadataPass && checksumPass && frequencyPass ? 0 : 6;
 }
 
 static int RunLogicDiagnostic(void) {
