@@ -63,6 +63,8 @@
 
 ## 安装或更新
 
+不想自行构建时，可从[GitHub发布页下载0.8.0应用压缩包](https://github.com/Ryuaaa/codex-monitor-hud/releases/tag/v0.8.0)。
+
 ```zsh
 ./install-overlay.sh
 ```
