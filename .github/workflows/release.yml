@@ -39,5 +39,5 @@ jobs:
             Codex-Monitor-HUD.app.zip \
             Codex-Monitor-HUD.app.zip.sha256 \
             --verify-tag \
-            --generate-notes \
+            --notes-file RELEASE_NOTES.md \
             --title "Codex Monitor HUD $GITHUB_REF_NAME"

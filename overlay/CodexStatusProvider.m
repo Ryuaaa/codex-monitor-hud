@@ -68,7 +68,11 @@ NSDictionary<NSString *, id> *CodexCalendarUsage(NSArray *buckets, NSDate *now) 
     NSArray<NSString *> *paths = @[
         @"/Applications/ChatGPT.app/Contents/Resources/codex",
         [NSHomeDirectory() stringByAppendingPathComponent:@"Applications/ChatGPT.app/Contents/Resources/codex"],
-        @"/Applications/Codex.app/Contents/Resources/codex"
+        @"/Applications/Codex.app/Contents/Resources/codex",
+        [NSHomeDirectory() stringByAppendingPathComponent:@"Applications/Codex.app/Contents/Resources/codex"],
+        @"/opt/homebrew/bin/codex",
+        @"/usr/local/bin/codex",
+        [NSHomeDirectory() stringByAppendingPathComponent:@".local/bin/codex"]
     ];
     for (NSString *path in paths) if ([[NSFileManager defaultManager] isExecutableFileAtPath:path]) return path;
     return nil;
@@ -128,10 +132,11 @@ NSDictionary<NSString *, id> *CodexCalendarUsage(NSArray *buckets, NSDate *now) 
         [self notifyUpdate];
         return;
     }
+    NSString *clientVersion = [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleShortVersionString"] ?: @"unknown";
     [self sendObject:@{
         @"id": @1,
         @"method": @"initialize",
-        @"params": @{ @"clientInfo": @{ @"name": @"codex-monitor-hud", @"version": @"0.7.0" } }
+        @"params": @{ @"clientInfo": @{ @"name": @"codex-monitor-hud", @"title": @"Codex Monitor HUD", @"version": clientVersion } }
     }];
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(8 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         if (weakSelf.task.running) {

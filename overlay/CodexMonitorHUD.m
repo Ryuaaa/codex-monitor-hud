@@ -1287,13 +1287,16 @@ static int RunCodexDiagnostic(void) {
     }
     CodexStatusSnapshot *s = provider.snapshot;
     printf("quota_available=%s\n", s.quotaAvailable ? "true" : "false");
+    if (s.quotaErrorText.length > 0) printf("quota_error=%s\n", s.quotaErrorText.UTF8String);
     printf("five_hour_available=%s\n", s.fiveHourAvailable ? "true" : "false");
     if (s.fiveHourAvailable) printf("five_hour_remaining=%.0f\n", s.fiveHourRemainingPercent);
     printf("weekly_available=%s\n", s.weeklyAvailable ? "true" : "false");
     if (s.weeklyAvailable) printf("weekly_remaining=%.0f\n", s.weeklyRemainingPercent);
     printf("account_available=%s\n", s.accountAvailable ? "true" : "false");
+    if (s.accountErrorText.length > 0) printf("account_error=%s\n", s.accountErrorText.UTF8String);
     if (s.accountAvailable) printf("plan_type=%s\n", s.planType.UTF8String ?: "unknown");
     printf("usage_available=%s\n", s.usageAvailable ? "true" : "false");
+    if (s.usageErrorText.length > 0) printf("usage_error=%s\n", s.usageErrorText.UTF8String);
     if (s.usageAvailable) {
         printf("today_usage_available=%s\n", s.todayUsageAvailable ? "true" : "false");
         printf("usage_through_date=%s\n", s.latestUsageDate.UTF8String ?: "none");
