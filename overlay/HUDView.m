@@ -192,14 +192,17 @@
     self.layer.masksToBounds = YES;
     self.layer.borderWidth = 1.0;
     self.layer.borderColor = [NSColor colorWithWhite:1 alpha:0.15].CGColor;
+    _layoutCanvas = [[NSView alloc] initWithFrame:self.bounds];
+    _layoutCanvas.autoresizingMask = NSViewNotSizable;
+    [self addSubview:_layoutCanvas];
     _tintView = [HUDTintView new];
     _tintView.translatesAutoresizingMaskIntoConstraints = NO;
-    [self addSubview:_tintView];
+    [_layoutCanvas addSubview:_tintView];
     [NSLayoutConstraint activateConstraints:@[
-        [_tintView.leadingAnchor constraintEqualToAnchor:self.leadingAnchor],
-        [_tintView.trailingAnchor constraintEqualToAnchor:self.trailingAnchor],
-        [_tintView.topAnchor constraintEqualToAnchor:self.topAnchor],
-        [_tintView.bottomAnchor constraintEqualToAnchor:self.bottomAnchor]
+        [_tintView.leadingAnchor constraintEqualToAnchor:_layoutCanvas.leadingAnchor],
+        [_tintView.trailingAnchor constraintEqualToAnchor:_layoutCanvas.trailingAnchor],
+        [_tintView.topAnchor constraintEqualToAnchor:_layoutCanvas.topAnchor],
+        [_tintView.bottomAnchor constraintEqualToAnchor:_layoutCanvas.bottomAnchor]
     ]];
     self.accentColor = NSColor.systemGreenColor;
 
@@ -332,12 +335,13 @@
     root.alignment = NSLayoutAttributeLeading;
     root.spacing = 8;
     root.translatesAutoresizingMaskIntoConstraints = NO;
-    [self addSubview:root];
+    _rootStack = root;
+    [_layoutCanvas addSubview:root];
     [NSLayoutConstraint activateConstraints:@[
-        [root.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:14],
-        [root.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-14],
-        [root.topAnchor constraintEqualToAnchor:self.topAnchor constant:10],
-        [root.bottomAnchor constraintLessThanOrEqualToAnchor:self.bottomAnchor constant:-10],
+        [root.leadingAnchor constraintEqualToAnchor:_layoutCanvas.leadingAnchor constant:14],
+        [root.trailingAnchor constraintEqualToAnchor:_layoutCanvas.trailingAnchor constant:-14],
+        [root.topAnchor constraintEqualToAnchor:_layoutCanvas.topAnchor constant:10],
+        [root.bottomAnchor constraintLessThanOrEqualToAnchor:_layoutCanvas.bottomAnchor constant:-10],
         [header.widthAnchor constraintEqualToAnchor:root.widthAnchor],
         [headerSeparator.widthAnchor constraintEqualToAnchor:root.widthAnchor],
         [headerSeparator.heightAnchor constraintEqualToConstant:1],

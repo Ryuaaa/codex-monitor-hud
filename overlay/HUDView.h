@@ -33,6 +33,8 @@
 @end
 
 @interface HUDView : NSVisualEffectView
+@property(nonatomic, strong) NSView *layoutCanvas;
+@property(nonatomic, strong) NSStackView *rootStack;
 @property(nonatomic, strong) NSSegmentedControl *tabs;
 @property(nonatomic, strong) NSButton *minimizeButton;
 @property(nonatomic, strong) NSButton *pinButton;
