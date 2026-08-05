@@ -1373,11 +1373,63 @@ static int RunUpdateDiagnostic(void) {
     BOOL metadataPass = release && !parseError && [release.version isEqualToString:@"1.2.3"] && [release.assetDigest isEqualToString:digest];
     BOOL checksumPass = [actualDigest isEqualToString:digest];
     BOOL frequencyPass = fabs(HUDAutomaticUpdateCheckInterval - 86400.0) < 0.1;
+    NSString *helperScript = HUDInstallHelperScript();
+    BOOL launchAgentHandoffPass = [helperScript containsString:@"launchctl kickstart"] && [helperScript containsString:@"launchctl bootstrap"] && [helperScript containsString:@"/usr/bin/open"];
     printf("update_version_test=%s\n", versionPass ? "pass" : "fail");
     printf("update_metadata_test=%s\n", metadataPass ? "pass" : "fail");
     printf("update_checksum_test=%s\n", checksumPass ? "pass" : "fail");
     printf("update_daily_frequency_test=%s\n", frequencyPass ? "pass" : "fail");
-    return versionPass && metadataPass && checksumPass && frequencyPass ? 0 : 6;
+    printf("update_launch_agent_handoff_test=%s\n", launchAgentHandoffPass ? "pass" : "fail");
+    return versionPass && metadataPass && checksumPass && frequencyPass && launchAgentHandoffPass ? 0 : 6;
+}
+
+static int RunUpdateHandoffDiagnostic(void) {
+    NSString *label = @"com.codexmonitorhud.app";
+    NSString *launchAgent = [NSHomeDirectory() stringByAppendingPathComponent:[NSString stringWithFormat:@"Library/LaunchAgents/%@.plist", label]];
+    if (![NSFileManager.defaultManager fileExistsAtPath:launchAgent]) {
+        printf("update_launch_agent_integration_test=fail\n");
+        printf("update_launch_agent_reason=launch_agent_missing\n");
+        return 7;
+    }
+    NSURL *workURL = [NSURL fileURLWithPath:[NSTemporaryDirectory() stringByAppendingPathComponent:[@"hud-handoff-test-" stringByAppendingString:NSUUID.UUID.UUIDString]] isDirectory:YES];
+    NSURL *sourceURL = [workURL URLByAppendingPathComponent:@"source/Codex Monitor HUD.app" isDirectory:YES];
+    NSURL *targetURL = [workURL URLByAppendingPathComponent:@"target/Codex Monitor HUD.app" isDirectory:YES];
+    NSURL *helperURL = [workURL URLByAppendingPathComponent:@"install-update.zsh"];
+    NSError *error = nil;
+    [NSFileManager.defaultManager createDirectoryAtURL:sourceURL.URLByDeletingLastPathComponent withIntermediateDirectories:YES attributes:nil error:&error];
+    [NSFileManager.defaultManager createDirectoryAtURL:targetURL.URLByDeletingLastPathComponent withIntermediateDirectories:YES attributes:nil error:&error];
+    BOOL prepared = !error && [NSFileManager.defaultManager copyItemAtURL:NSBundle.mainBundle.bundleURL toURL:sourceURL error:&error] && [NSFileManager.defaultManager copyItemAtURL:NSBundle.mainBundle.bundleURL toURL:targetURL error:&error];
+    prepared = prepared && [HUDInstallHelperScript() writeToURL:helperURL atomically:YES encoding:NSUTF8StringEncoding error:&error];
+    prepared = prepared && [NSFileManager.defaultManager setAttributes:@{NSFilePosixPermissions: @0700} ofItemAtPath:helperURL.path error:&error];
+    if (!prepared) {
+        [NSFileManager.defaultManager removeItemAtURL:workURL error:nil];
+        printf("update_launch_agent_integration_test=fail\n");
+        printf("update_launch_agent_reason=prepare_failed\n");
+        return 7;
+    }
+    NSTask *helper = [NSTask new];
+    helper.executableURL = helperURL;
+    helper.arguments = @[@"2147483647", sourceURL.path, targetURL.path, workURL.path];
+    NSError *launchError = nil;
+    if (![helper launchAndReturnError:&launchError]) {
+        [NSFileManager.defaultManager removeItemAtURL:workURL error:nil];
+        printf("update_launch_agent_integration_test=fail\n");
+        printf("update_launch_agent_reason=helper_failed\n");
+        return 7;
+    }
+    [helper waitUntilExit];
+    NSTask *status = [NSTask new];
+    status.executableURL = [NSURL fileURLWithPath:@"/bin/launchctl"];
+    status.arguments = @[@"print", [NSString stringWithFormat:@"gui/%u/%@", getuid(), label]];
+    NSPipe *output = [NSPipe pipe]; status.standardOutput = output; status.standardError = [NSPipe pipe];
+    BOOL statusStarted = [status launchAndReturnError:nil];
+    if (statusStarted) [status waitUntilExit];
+    NSData *data = statusStarted ? [output.fileHandleForReading readDataToEndOfFile] : nil;
+    NSString *description = data ? [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] : @"";
+    BOOL pass = helper.terminationStatus == 0 && statusStarted && status.terminationStatus == 0 && [description containsString:@"state = running"];
+    [NSFileManager.defaultManager removeItemAtURL:workURL error:nil];
+    printf("update_launch_agent_integration_test=%s\n", pass ? "pass" : "fail");
+    return pass ? 0 : 7;
 }
 
 static int RunLogicDiagnostic(void) {
@@ -1420,6 +1472,7 @@ int main(int argc, const char *argv[]) {
         if (argc > 1 && strcmp(argv[1], "--logic-diagnostic") == 0) return RunLogicDiagnostic();
         if (argc > 1 && strcmp(argv[1], "--ui-diagnostic") == 0) return RunUIDiagnostic();
         if (argc > 1 && strcmp(argv[1], "--update-diagnostic") == 0) return RunUpdateDiagnostic();
+        if (argc > 1 && strcmp(argv[1], "--update-handoff-diagnostic") == 0) return RunUpdateHandoffDiagnostic();
         NSApplication *application = NSApplication.sharedApplication; AppDelegate *delegate = [AppDelegate new]; application.delegate = delegate; [application run];
     }
     return 0;

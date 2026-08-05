@@ -39,6 +39,39 @@ NSString *HUDSHA256ForFile(NSURL *fileURL) {
     return result;
 }
 
+NSString *HUDInstallHelperScript(void) {
+    return @"#!/bin/zsh\n"
+            "set -eu\n"
+            "pid=\"$1\"\n"
+            "source_app=\"$2\"\n"
+            "target_app=\"$3\"\n"
+            "work_dir=\"$4\"\n"
+            "restart_app() {\n"
+            "  label=\"com.codexmonitorhud.app\"\n"
+            "  uid_value=\"$(/usr/bin/id -u)\"\n"
+            "  launch_agent=\"$HOME/Library/LaunchAgents/$label.plist\"\n"
+            "  if [[ -f \"$launch_agent\" ]]; then\n"
+            "    if /bin/launchctl kickstart \"gui/$uid_value/$label\" 2>/dev/null; then return 0; fi\n"
+            "    if /bin/launchctl bootstrap \"gui/$uid_value\" \"$launch_agent\" 2>/dev/null; then return 0; fi\n"
+            "  fi\n"
+            "  /usr/bin/open \"$target_app\"\n"
+            "}\n"
+            "while /bin/kill -0 \"$pid\" 2>/dev/null; do /bin/sleep 0.2; done\n"
+            "backup_app=\"${target_app}.update-backup\"\n"
+            "/bin/rm -rf \"$backup_app\"\n"
+            "/bin/mv \"$target_app\" \"$backup_app\"\n"
+            "if /usr/bin/ditto \"$source_app\" \"$target_app\" && /usr/bin/codesign --verify --deep --strict \"$target_app\"; then\n"
+            "  /bin/rm -rf \"$backup_app\"\n"
+            "  restart_app\n"
+            "  /bin/rm -rf \"$work_dir\"\n"
+            "else\n"
+            "  /bin/rm -rf \"$target_app\"\n"
+            "  /bin/mv \"$backup_app\" \"$target_app\"\n"
+            "  restart_app\n"
+            "  exit 1\n"
+            "fi\n";
+}
+
 HUDReleaseInfo *HUDReleaseInfoFromDictionary(NSDictionary *dictionary, NSError **error) {
     NSString *tag = [dictionary[@"tag_name"] isKindOfClass:NSString.class] ? dictionary[@"tag_name"] : @"";
     NSString *page = [dictionary[@"html_url"] isKindOfClass:NSString.class] ? dictionary[@"html_url"] : @"";
@@ -202,7 +235,7 @@ static BOOL HUDRunTask(NSString *path, NSArray<NSString *> *arguments, NSString 
             return;
         }
         NSURL *helperURL = [workURL URLByAppendingPathComponent:@"install-update.zsh"];
-        NSString *script = @"#!/bin/zsh\nset -eu\npid=\"$1\"\nsource_app=\"$2\"\ntarget_app=\"$3\"\nwork_dir=\"$4\"\nwhile /bin/kill -0 \"$pid\" 2>/dev/null; do /bin/sleep 0.2; done\nbackup_app=\"${target_app}.update-backup\"\n/bin/rm -rf \"$backup_app\"\n/bin/mv \"$target_app\" \"$backup_app\"\nif /usr/bin/ditto \"$source_app\" \"$target_app\" && /usr/bin/codesign --verify --deep --strict \"$target_app\"; then\n  /bin/rm -rf \"$backup_app\"\n  /usr/bin/open \"$target_app\"\n  /bin/rm -rf \"$work_dir\"\nelse\n  /bin/rm -rf \"$target_app\"\n  /bin/mv \"$backup_app\" \"$target_app\"\n  /usr/bin/open \"$target_app\"\n  exit 1\nfi\n";
+        NSString *script = HUDInstallHelperScript();
         if (![script writeToURL:helperURL atomically:YES encoding:NSUTF8StringEncoding error:&fileError] || chmod(helperURL.fileSystemRepresentation, 0700) != 0) {
             [NSFileManager.defaultManager removeItemAtURL:workURL error:nil];
             [weakSelf finishInstall:completion success:NO message:fileError.localizedDescription ?: @"无法准备更新安装程序"];

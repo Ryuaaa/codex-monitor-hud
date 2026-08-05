@@ -17,6 +17,7 @@ typedef NS_ENUM(NSInteger, HUDUpdateCheckResult) {
 
 NSComparisonResult HUDCompareVersions(NSString *left, NSString *right);
 NSString *HUDSHA256ForFile(NSURL *fileURL);
+NSString *HUDInstallHelperScript(void);
 HUDReleaseInfo *HUDReleaseInfoFromDictionary(NSDictionary *dictionary, NSError **error);
 
 @interface HUDUpdateManager : NSObject
