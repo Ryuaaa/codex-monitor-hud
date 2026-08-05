@@ -71,9 +71,20 @@ static CGFloat HUDScaleForContentSize(NSSize contentSize, NSSize baseSize) {
     return MAX(0.75, MIN(1.5, contentSize.width / baseSize.width));
 }
 
-static NSSize HUDLogicalSizeForUniformScale(NSSize contentSize, CGFloat scale) {
-    CGFloat safeScale = MAX(0.01, scale);
-    return NSMakeSize(contentSize.width / safeScale, contentSize.height / safeScale);
+static CGFloat HUDUniformScaleForProposedContentSize(NSSize proposedSize, NSSize baseSize, CGFloat currentScale) {
+    if (proposedSize.width <= 0 || proposedSize.height <= 0 || baseSize.width <= 0 || baseSize.height <= 0) {
+        return MAX(0.75, MIN(1.5, currentScale > 0 ? currentScale : 1.0));
+    }
+    CGFloat widthScale = proposedSize.width / baseSize.width;
+    CGFloat heightScale = proposedSize.height / baseSize.height;
+    CGFloat referenceScale = currentScale > 0 ? currentScale : 1.0;
+    CGFloat scale = fabs(widthScale - referenceScale) >= fabs(heightScale - referenceScale) ? widthScale : heightScale;
+    return MAX(0.75, MIN(1.5, scale));
+}
+
+static NSSize HUDContentSizeForUniformScale(NSSize baseSize, CGFloat scale) {
+    CGFloat safeScale = MAX(0.75, MIN(1.5, scale));
+    return NSMakeSize(baseSize.width * safeScale, baseSize.height * safeScale);
 }
 
 static NSString *FormatModuleState(NSTimeInterval timestamp, NSString *error) {
@@ -296,7 +307,7 @@ static NSString *FormatModuleState(NSTimeInterval timestamp, NSString *error) {
 
 - (NSSize)panelSize {
     NSSize base = [self basePanelSize];
-    return NSMakeSize(round(base.width * self.windowScale), round(base.height * self.windowScale));
+    return HUDContentSizeForUniformScale(base, self.windowScale);
 }
 
 - (NSSize)frameSizeForContentSize:(NSSize)contentSize {
@@ -312,16 +323,17 @@ static NSString *FormatModuleState(NSTimeInterval timestamp, NSString *error) {
         self.panel.contentMaxSize = contentSize;
         return;
     }
-    self.panel.contentMinSize = NSMakeSize(round(baseSize.width * 0.75), round(baseSize.height * 0.75));
-    self.panel.contentMaxSize = NSMakeSize(round(baseSize.width * 1.5), round(baseSize.height * 1.5));
+    self.panel.contentMinSize = HUDContentSizeForUniformScale(baseSize, 0.75);
+    self.panel.contentMaxSize = HUDContentSizeForUniformScale(baseSize, 1.5);
 }
 
 - (void)updateHUDGeometryForContentSize:(NSSize)contentSize baseSize:(NSSize)baseSize {
     if (!self.hudView || contentSize.width <= 0 || contentSize.height <= 0) return;
-    CGFloat scale = HUDScaleForContentSize(contentSize, baseSize);
-    NSSize logicalSize = HUDLogicalSizeForUniformScale(contentSize, scale);
-    self.windowScale = scale;
-    self.hudView.bounds = NSMakeRect(0, 0, logicalSize.width, logicalSize.height);
+    self.windowScale = HUDScaleForContentSize(contentSize, baseSize);
+    self.hudView.bounds = NSMakeRect(0, 0, baseSize.width, baseSize.height);
+    self.hudView.layoutCanvas.frame = NSMakeRect(0, 0, baseSize.width, baseSize.height);
+    [self.hudView.layoutCanvas setNeedsLayout:YES];
+    [self.hudView.layoutCanvas layoutSubtreeIfNeeded];
 }
 
 - (NSWindowStyleMask)panelStyleMask {
@@ -352,8 +364,7 @@ static NSString *FormatModuleState(NSTimeInterval timestamp, NSString *error) {
     self.panel.alphaValue = 1.0;
     [self configureResizeLimitsForBaseSize:baseSize contentSize:size];
 
-    self.hudView = [[HUDView alloc] initWithFrame:NSMakeRect(0, 0, size.width, size.height)];
-    [self updateHUDGeometryForContentSize:size baseSize:baseSize];
+    self.hudView = [[HUDView alloc] initWithFrame:NSMakeRect(0, 0, baseSize.width, baseSize.height)];
     self.hudView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     self.hudView.accentColor = [self accentColor];
     self.hudView.codexStatusLabel.textColor = self.hudView.accentColor;
@@ -410,6 +421,7 @@ static NSString *FormatModuleState(NSTimeInterval timestamp, NSString *error) {
         [weakSelf.panel miniaturize:nil];
     };
     self.panel.contentView = self.hudView;
+    [self updateHUDGeometryForContentSize:self.hudView.frame.size baseSize:baseSize];
     if (![self restorePosition]) [self moveToCorner:@"bottomLeft"];
     [self applyPositionLock];
     [self.panel orderFrontRegardless];
@@ -494,6 +506,16 @@ static NSString *FormatModuleState(NSTimeInterval timestamp, NSString *error) {
 }
 
 - (void)windowDidMove:(NSNotification *)notification { [self savePosition]; }
+
+- (NSSize)windowWillResize:(NSWindow *)sender toSize:(NSSize)frameSize {
+    if (sender != self.panel) return frameSize;
+    if (self.collapsed || self.positionLocked) return self.panel.frame.size;
+    NSRect proposedFrame = NSMakeRect(0, 0, frameSize.width, frameSize.height);
+    NSSize proposedContent = [sender contentRectForFrameRect:proposedFrame].size;
+    NSSize baseSize = [self basePanelSize];
+    CGFloat scale = HUDUniformScaleForProposedContentSize(proposedContent, baseSize, self.windowScale);
+    return [self frameSizeForContentSize:HUDContentSizeForUniformScale(baseSize, scale)];
+}
 
 - (void)windowDidResize:(NSNotification *)notification {
     if (notification.object != self.panel) return;
@@ -1211,18 +1233,19 @@ static int RunUIDiagnostic(void) {
     NSInteger checkboxCount = 0, hiddenFiveHourCount = 0, hiddenPlanCount = 0, optionalHistoryOffCount = 0, resetButtonCount = 0;
     CountSettingsControls(settings, &checkboxCount, &hiddenFiveHourCount, &hiddenPlanCount, &optionalHistoryOffCount, &resetButtonCount);
     BOOL settingsPass = checkboxCount == 28 && hiddenFiveHourCount == 2 && hiddenPlanCount == 2 && optionalHistoryOffCount == 4 && resetButtonCount == 1;
-    BOOL scalePass = fabs([delegate panelSize].width - 486.0) < 0.1 && ([delegate panelStyleMask] & NSWindowStyleMaskResizable) != 0;
-    delegate.windowScale = 0.75; scalePass = scalePass && fabs([delegate panelSize].width - 323.0) < 0.1;
+    BOOL scalePass = fabs([delegate panelSize].width - 485.9) < 0.01 && ([delegate panelStyleMask] & NSWindowStyleMaskResizable) != 0;
+    delegate.windowScale = 0.75; scalePass = scalePass && fabs([delegate panelSize].width - 322.5) < 0.01;
     delegate.windowScale = 1.0; scalePass = scalePass && fabs([delegate panelSize].width - 430.0) < 0.1;
     delegate.windowScale = 1.5; scalePass = scalePass && fabs([delegate panelSize].width - 645.0) < 0.1;
-    NSSize transientContent = NSMakeSize(501, 317), transientBase = NSMakeSize(430, 260);
-    CGFloat transientScale = HUDScaleForContentSize(transientContent, transientBase);
-    NSSize logicalSize = HUDLogicalSizeForUniformScale(transientContent, transientScale);
-    CGFloat horizontalScale = transientContent.width / logicalSize.width;
-    CGFloat verticalScale = transientContent.height / logicalSize.height;
-    BOOL oldFixedBoundsWouldDistort = fabs(transientContent.width / transientBase.width - transientContent.height / transientBase.height) > 0.01;
-    scalePass = scalePass && oldFixedBoundsWouldDistort && fabs(horizontalScale - verticalScale) < 0.0001;
-    delegate.hudView = [[HUDView alloc] initWithFrame:NSMakeRect(0, 0, 430, 600)];
+    NSSize transientBase = NSMakeSize(430, 260);
+    NSSize wideResize = HUDContentSizeForUniformScale(transientBase, HUDUniformScaleForProposedContentSize(NSMakeSize(501, 260), transientBase, 1.0));
+    NSSize tallResize = HUDContentSizeForUniformScale(transientBase, HUDUniformScaleForProposedContentSize(NSMakeSize(430, 317), transientBase, 1.0));
+    NSSize maximumResize = HUDContentSizeForUniformScale(transientBase, HUDUniformScaleForProposedContentSize(NSMakeSize(1000, 260), transientBase, 1.0));
+    scalePass = scalePass && fabs(wideResize.width / transientBase.width - wideResize.height / transientBase.height) < 0.0001;
+    scalePass = scalePass && fabs(tallResize.width / transientBase.width - tallResize.height / transientBase.height) < 0.0001;
+    scalePass = scalePass && fabs(wideResize.width - 501.0) < 0.01 && fabs(tallResize.height - 317.0) < 0.01;
+    scalePass = scalePass && fabs(maximumResize.width - 645.0) < 0.01 && fabs(maximumResize.height - 390.0) < 0.01;
+    delegate.hudView = [[HUDView alloc] initWithFrame:NSMakeRect(0, 0, 430, 260)];
     [delegate.hudView setHomeFiveHourVisible:NO]; [delegate.hudView setFiveHourQuotaVisible:NO];
     [delegate.hudView setHomePlanVisible:NO]; [delegate.hudView setPlanVisible:NO];
     [delegate.hudView setHomeWeeklyVisible:YES]; [delegate.hudView setWeeklyQuotaVisible:YES];
@@ -1230,13 +1253,29 @@ static int RunUIDiagnostic(void) {
     [delegate.hudView setHomeLongestStreakVisible:NO]; [delegate.hudView setLongestStreakVisible:NO];
     BOOL cardVisibilityPass = delegate.hudView.homeFiveHourCard.hidden && delegate.hudView.fiveHourCard.hidden && delegate.hudView.homePlanCard.hidden && delegate.hudView.planCard.hidden && !delegate.hudView.homeWeeklyCard.hidden && !delegate.hudView.weeklyCard.hidden && delegate.hudView.homeUsageHistoryRow.hidden && delegate.hudView.usageHistoryRow.hidden;
     delegate.currentPage = 1; delegate.compact = YES; delegate.collapsed = NO; delegate.windowScale = 1.0;
-    delegate.panel = [[NSPanel alloc] initWithContentRect:NSMakeRect(0, 0, transientContent.width, transientContent.height) styleMask:[delegate panelStyleMask] backing:NSBackingStoreBuffered defer:NO];
+    [delegate.hudView setPage:1]; [delegate.hudView setCompact:YES];
+    delegate.panel = [[NSPanel alloc] initWithContentRect:NSMakeRect(0, 0, transientBase.width, transientBase.height) styleMask:[delegate panelStyleMask] backing:NSBackingStoreBuffered defer:NO];
     delegate.panel.contentView = delegate.hudView;
+    NSSize proposedFrame = [delegate frameSizeForContentSize:NSMakeSize(501, transientBase.height)];
+    NSSize constrainedFrame = [delegate windowWillResize:delegate.panel toSize:proposedFrame];
+    NSSize constrainedContent = [delegate.panel contentRectForFrameRect:NSMakeRect(0, 0, constrainedFrame.width, constrainedFrame.height)].size;
+    scalePass = scalePass && fabs(constrainedContent.width / transientBase.width - constrainedContent.height / transientBase.height) < 0.0001;
+    [delegate.panel setContentSize:constrainedContent];
     [delegate windowDidResize:[NSNotification notificationWithName:NSWindowDidResizeNotification object:delegate.panel]];
     NSSize actualFrame = delegate.hudView.frame.size, actualBounds = delegate.hudView.bounds.size;
-    CGFloat actualHorizontalScale = actualFrame.width / actualBounds.width;
-    CGFloat actualVerticalScale = actualFrame.height / actualBounds.height;
-    scalePass = scalePass && fabs(actualHorizontalScale - actualVerticalScale) < 0.0001;
+    scalePass = scalePass && fabs(actualBounds.width - transientBase.width) < 0.0001 && fabs(actualBounds.height - transientBase.height) < 0.0001;
+    CGFloat expectedFrameHeight = actualFrame.width * transientBase.height / transientBase.width;
+    scalePass = scalePass && fabs(actualFrame.height - expectedFrameHeight) <= 1.0;
+    NSStackView *rootStack = delegate.hudView.rootStack;
+    NSRect hudBounds = delegate.hudView.layoutCanvas.bounds;
+    BOOL layoutInsideBounds = rootStack != nil && NSMinY(rootStack.frame) >= NSMinY(hudBounds) - 1.0 && NSMaxY(rootStack.frame) <= NSMaxY(hudBounds) + 1.0;
+    scalePass = scalePass && layoutInsideBounds;
+    if (!scalePass) {
+        printf("drag_resize_details=wide:%.3fx%.3f tall:%.3fx%.3f constrained:%.3fx%.3f frame:%.3fx%.3f bounds:%.3fx%.3f root:%.3f,%.3f %.3fx%.3f\n",
+               wideResize.width, wideResize.height, tallResize.width, tallResize.height,
+               constrainedContent.width, constrainedContent.height, actualFrame.width, actualFrame.height,
+               actualBounds.width, actualBounds.height, rootStack.frame.origin.x, rootStack.frame.origin.y, rootStack.frame.size.width, rootStack.frame.size.height);
+    }
     delegate.positionLocked = YES; [delegate applyPositionLock];
     BOOL positionLockPass = (delegate.panel.styleMask & NSWindowStyleMaskResizable) == 0 && !delegate.panel.movableByWindowBackground && delegate.hudView.positionLocked;
     delegate.positionLocked = NO; [delegate applyPositionLock];
