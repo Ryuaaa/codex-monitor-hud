@@ -17,5 +17,7 @@ jobs:
         run: '"/private/tmp/codex-monitor-hud-build/Codex Monitor HUD.app/Contents/MacOS/CodexMonitorHUD" --ui-diagnostic'
       - name: Run updater security test
         run: '"/private/tmp/codex-monitor-hud-build/Codex Monitor HUD.app/Contents/MacOS/CodexMonitorHUD" --update-diagnostic'
+      - name: Run single-instance lock test
+        run: '"/private/tmp/codex-monitor-hud-build/Codex Monitor HUD.app/Contents/MacOS/CodexMonitorHUD" --singleton-diagnostic'
       - name: Run lifecycle report test
         run: './report.py --self-test'

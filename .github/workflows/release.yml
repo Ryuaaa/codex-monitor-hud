@@ -24,13 +24,31 @@ jobs:
           "$app" --logic-diagnostic
           "$app" --ui-diagnostic
           "$app" --update-diagnostic
+          "$app" --singleton-diagnostic
           ./report.py --self-test
-      - name: Package signed app
+      - name: Import Developer ID certificate
+        env:
+          MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
         run: |
-          cd /private/tmp/codex-monitor-hud-build
-          /usr/bin/ditto -c -k --norsrc --noextattr --noqtn --noacl --keepParent "Codex Monitor HUD.app" "$GITHUB_WORKSPACE/Codex-Monitor-HUD.app.zip"
-          cd "$GITHUB_WORKSPACE"
-          /usr/bin/shasum -a 256 Codex-Monitor-HUD.app.zip > Codex-Monitor-HUD.app.zip.sha256
+          test -n "$MACOS_CERTIFICATE_P12_BASE64"
+          test -n "$MACOS_CERTIFICATE_PASSWORD"
+          TEMP_KEYCHAIN_PASSWORD="$(/usr/bin/openssl rand -base64 32)"
+          certificate="$RUNNER_TEMP/developer-id.p12"
+          keychain="$RUNNER_TEMP/codex-monitor.keychain-db"
+          echo "$MACOS_CERTIFICATE_P12_BASE64" | /usr/bin/base64 -D > "$certificate"
+          /usr/bin/security create-keychain -p "$TEMP_KEYCHAIN_PASSWORD" "$keychain"
+          /usr/bin/security set-keychain-settings -lut 21600 "$keychain"
+          /usr/bin/security unlock-keychain -p "$TEMP_KEYCHAIN_PASSWORD" "$keychain"
+          /usr/bin/security import "$certificate" -P "$MACOS_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$keychain"
+          /usr/bin/security set-key-partition-list -S apple-tool:,apple: -s -k "$TEMP_KEYCHAIN_PASSWORD" "$keychain"
+          /usr/bin/security list-keychains -d user -s "$keychain"
+      - name: Sign and notarize release
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: ./release-macos.sh
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}

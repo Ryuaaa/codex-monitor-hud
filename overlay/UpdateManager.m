@@ -234,6 +234,11 @@ static BOOL HUDRunTask(NSString *path, NSArray<NSString *> *arguments, NSString 
             [weakSelf finishInstall:completion success:NO message:[NSString stringWithFormat:@"更新包签名校验失败：%@", taskError ?: @"未知错误"]];
             return;
         }
+        if (!HUDRunTask(@"/usr/sbin/spctl", @[@"--assess", @"--type", @"execute", newBundle.path], &taskError)) {
+            [NSFileManager.defaultManager removeItemAtURL:workURL error:nil];
+            [weakSelf finishInstall:completion success:NO message:[NSString stringWithFormat:@"更新包未通过Apple安全验证：%@", taskError ?: @"未知错误"]];
+            return;
+        }
         NSURL *helperURL = [workURL URLByAppendingPathComponent:@"install-update.zsh"];
         NSString *script = HUDInstallHelperScript();
         if (![script writeToURL:helperURL atomically:YES encoding:NSUTF8StringEncoding error:&fileError] || chmod(helperURL.fileSystemRepresentation, 0700) != 0) {

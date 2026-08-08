@@ -8,5 +8,9 @@
 
 - 工具不需要管理员权限、完整磁盘权限或浏览器Cookie。
 - Codex账户数据只通过本机Codex App Server读取。
+- 最近任务只显示官方任务元数据中的可选标题；不会用任务预览代替缺失标题。
+- 官方返回的当前工作目录只保留在内存中，不在界面、性能历史或诊断输出中公开完整路径。
+- 任务活动推测最多读取最近会话文件末尾1MB，只解析记录类型、角色、阶段和时间戳，不保存或上传正文。
 - 性能历史不保存额度、订阅、Token用量或对话内容。
 - 安装脚本只写入用户的 `~/Applications`、`~/Library/LaunchAgents` 和 `~/Library/Application Support/CodexSystemMonitor`。
+- 1.0及后续正式更新包必须同时通过SHA-256、应用身份、版本、代码签名和macOS安全评估；未经过Developer ID签名与Apple公证的包不会被应用内更新器安装。

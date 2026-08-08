@@ -27,6 +27,10 @@
 - (void)updateApps:(NSArray<NativeTopApp *> *)apps totalMemoryGiB:(double)totalMemoryGiB;
 @end
 
+@interface HUDRecentTasksCard : NSBox
+- (void)updateRows:(NSArray<NSString *> *)rows footer:(NSString *)footer;
+@end
+
 @interface HUDSparklineView : NSView
 @property(nonatomic, copy) NSArray<NSNumber *> *values;
 @property(nonatomic, strong) NSColor *accentColor;
@@ -42,6 +46,8 @@
 @property(nonatomic, strong) NSButton *settingsButton;
 @property(nonatomic, strong) NSStackView *homeStack;
 @property(nonatomic, strong) NSTextField *homeCodexStatusLabel;
+@property(nonatomic, strong) HUDMetricCard *homeTaskActivityCard;
+@property(nonatomic, strong) HUDRecentTasksCard *homeRecentTasksCard;
 @property(nonatomic, strong) NSStackView *homeQuotaRow;
 @property(nonatomic, strong) HUDQuotaCard *homeFiveHourCard;
 @property(nonatomic, strong) HUDQuotaCard *homeWeeklyCard;
@@ -49,6 +55,8 @@
 @property(nonatomic, strong) HUDMetricCard *homePlanCard;
 @property(nonatomic, strong) HUDMetricCard *homeUsageCard;
 @property(nonatomic, strong) HUDMetricCard *homeModelQuotaCard;
+@property(nonatomic, strong) HUDMetricCard *homeLocalCostCard;
+@property(nonatomic, strong) HUDMetricCard *homeQuotaForecastCard;
 @property(nonatomic, strong) NSStackView *homeUsageHistoryRow;
 @property(nonatomic, strong) HUDMetricCard *homeLongestTurnCard;
 @property(nonatomic, strong) HUDMetricCard *homeLongestStreakCard;
@@ -67,6 +75,8 @@
 @property(nonatomic, strong) NSStackView *computerStack;
 @property(nonatomic, strong) NSStackView *detailStack;
 @property(nonatomic, strong) NSTextField *codexStatusLabel;
+@property(nonatomic, strong) HUDMetricCard *taskActivityCard;
+@property(nonatomic, strong) HUDRecentTasksCard *recentTasksCard;
 @property(nonatomic, strong) NSStackView *quotaRow;
 @property(nonatomic, strong) HUDQuotaCard *fiveHourCard;
 @property(nonatomic, strong) HUDQuotaCard *weeklyCard;
@@ -74,6 +84,8 @@
 @property(nonatomic, strong) HUDMetricCard *planCard;
 @property(nonatomic, strong) HUDMetricCard *usageCard;
 @property(nonatomic, strong) HUDMetricCard *modelQuotaCard;
+@property(nonatomic, strong) HUDMetricCard *localCostCard;
+@property(nonatomic, strong) HUDMetricCard *quotaForecastCard;
 @property(nonatomic, strong) NSStackView *usageHistoryRow;
 @property(nonatomic, strong) HUDMetricCard *longestTurnCard;
 @property(nonatomic, strong) HUDMetricCard *longestStreakCard;
@@ -109,6 +121,10 @@
 - (void)setPlanVisible:(BOOL)visible;
 - (void)setUsageVisible:(BOOL)visible;
 - (void)setModelQuotaVisible:(BOOL)visible;
+- (void)setLocalCostVisible:(BOOL)visible;
+- (void)setQuotaForecastVisible:(BOOL)visible;
+- (void)setTaskActivityVisible:(BOOL)visible;
+- (void)setRecentTasksVisible:(BOOL)visible;
 - (void)setLongestTurnVisible:(BOOL)visible;
 - (void)setLongestStreakVisible:(BOOL)visible;
 - (void)setSystemVisible:(BOOL)visible;
@@ -120,6 +136,10 @@
 - (void)setHomePlanVisible:(BOOL)visible;
 - (void)setHomeUsageVisible:(BOOL)visible;
 - (void)setHomeModelQuotaVisible:(BOOL)visible;
+- (void)setHomeLocalCostVisible:(BOOL)visible;
+- (void)setHomeQuotaForecastVisible:(BOOL)visible;
+- (void)setHomeTaskActivityVisible:(BOOL)visible;
+- (void)setHomeRecentTasksVisible:(BOOL)visible;
 - (void)setHomeLongestTurnVisible:(BOOL)visible;
 - (void)setHomeLongestStreakVisible:(BOOL)visible;
 - (void)setHomeDiagnosisVisible:(BOOL)visible;
@@ -131,4 +151,5 @@
 - (void)setAlwaysOnTop:(BOOL)enabled;
 - (void)setPositionLocked:(BOOL)enabled;
 - (void)setCollapsed:(BOOL)collapsed;
+- (void)applyHomeCodexOrder:(NSArray<NSString *> *)codexOrder computerOrder:(NSArray<NSString *> *)computerOrder;
 @end

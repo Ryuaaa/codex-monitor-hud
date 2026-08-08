@@ -13,6 +13,20 @@ uid=$(/usr/bin/id -u)
 
 "$source_dir/build-overlay.sh"
 /bin/mkdir -p "$HOME/Applications" "$HOME/Library/LaunchAgents" "$log_dir"
+/bin/launchctl bootout "gui/$uid/$label" 2>/dev/null || true
+if /usr/bin/pgrep -x CodexMonitorHUD >/dev/null 2>&1; then
+  /usr/bin/osascript -e 'tell application id "com.codexmonitorhud.app" to quit' >/dev/null 2>&1 || /usr/bin/pkill -TERM -x CodexMonitorHUD
+  for attempt in {1..30}; do
+    if ! /usr/bin/pgrep -x CodexMonitorHUD >/dev/null 2>&1; then
+      break
+    fi
+    /bin/sleep 0.1
+  done
+  if /usr/bin/pgrep -x CodexMonitorHUD >/dev/null 2>&1; then
+    /usr/bin/printf '旧版悬浮窗未能正常退出，已停止安装以避免重复实例。\n' >&2
+    exit 1
+  fi
+fi
 /usr/bin/ditto "$source_app" "$install_app"
 /bin/cp "$source_dir/report.py" "$HOME/Library/Application Support/CodexSystemMonitor/report.py"
 /bin/chmod 755 "$HOME/Library/Application Support/CodexSystemMonitor/report.py"
@@ -48,7 +62,6 @@ uid=$(/usr/bin/id -u)
 </plist>" > "$launch_agent"
 
 /usr/bin/plutil -lint "$launch_agent"
-/bin/launchctl bootout "gui/$uid/$label" 2>/dev/null || true
 loaded=false
 for attempt in 1 2 3; do
   if /bin/launchctl bootstrap "gui/$uid" "$launch_agent" 2>/dev/null; then

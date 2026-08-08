@@ -1,6 +1,10 @@
 #import <Foundation/Foundation.h>
 
 FOUNDATION_EXPORT NSDictionary<NSString *, id> *CodexCalendarUsage(NSArray *buckets, NSDate *now);
+FOUNDATION_EXPORT NSDictionary<NSString *, id> *CodexActivityStateFromJSONLLines(NSArray<NSString *> *lines, NSDate *modifiedAt, NSDate *now);
+FOUNDATION_EXPORT NSDictionary<NSString *, id> *CodexActivityStateFromJSONLLinesWithFallback(NSArray<NSString *> *lines, NSDate *modifiedAt, NSDate *now, NSDate *fallbackStart);
+FOUNDATION_EXPORT NSDictionary<NSString *, id> *CodexNormalizedThreadMetadata(NSDictionary *thread);
+FOUNDATION_EXPORT NSDictionary<NSString *, id> *CodexScanRecentActivityAtRoot(NSDictionary<NSString *, NSDictionary *> *metadataByID, NSDate *now, NSURL *root);
 
 @interface CodexStatusSnapshot : NSObject
 @property(nonatomic) BOOL quotaAvailable;
@@ -23,6 +27,9 @@ FOUNDATION_EXPORT NSDictionary<NSString *, id> *CodexCalendarUsage(NSArray *buck
 @property(nonatomic) BOOL todayUsageAvailable;
 @property(nonatomic) long long sevenDayTokens;
 @property(nonatomic) long long previousSevenDayTokens;
+@property(nonatomic) long long thirtyDayTokens;
+@property(nonatomic) long long monthToDateTokens;
+@property(nonatomic) long long monthForecastTokens;
 @property(nonatomic, copy) NSString *latestUsageDate;
 @property(nonatomic) long long latestUsageTokens;
 @property(nonatomic) long long lifetimeTokens;
@@ -36,6 +43,43 @@ FOUNDATION_EXPORT NSDictionary<NSString *, id> *CodexCalendarUsage(NSArray *buck
 @property(nonatomic) double modelQuotaRemainingPercent;
 @property(nonatomic) NSTimeInterval modelQuotaResetAt;
 @property(nonatomic, copy) NSString *modelQuotaWindowLabel;
+@property(nonatomic) BOOL activityAvailable;
+@property(nonatomic) NSTimeInterval activityUpdatedAt;
+@property(nonatomic, copy) NSString *activityErrorText;
+@property(nonatomic) BOOL activityPartial;
+@property(nonatomic, copy) NSString *activityNoteText;
+@property(nonatomic) NSInteger unresolvedRecentTaskCount;
+@property(nonatomic) NSInteger activeTaskCount;
+@property(nonatomic) NSInteger longestActiveTaskSec;
+@property(nonatomic, copy) NSArray<NSString *> *activeTaskNames;
+@property(nonatomic) BOOL recentTasksAvailable;
+@property(nonatomic) NSTimeInterval recentTasksUpdatedAt;
+@property(nonatomic, copy) NSString *recentTasksErrorText;
+@property(nonatomic) NSInteger recentTaskCount;
+@property(nonatomic) NSInteger recentTaskProjectCount;
+@property(nonatomic, copy) NSArray<NSDictionary<NSString *, id> *> *recentTasks;
+@property(nonatomic) BOOL livePerTaskUsageAvailable;
+@property(nonatomic) BOOL localCostAvailable;
+@property(nonatomic) NSTimeInterval localCostUpdatedAt;
+@property(nonatomic, copy) NSString *localCostErrorText;
+@property(nonatomic) BOOL localCostScanIncomplete;
+@property(nonatomic) long long localTodayTokens;
+@property(nonatomic) long long localSevenDayTokens;
+@property(nonatomic) long long localThirtyDayTokens;
+@property(nonatomic) double localTodayCostUSD;
+@property(nonatomic) double localSevenDayCostUSD;
+@property(nonatomic) double localThirtyDayCostUSD;
+@property(nonatomic) double localMonthCostUSD;
+@property(nonatomic) double localMonthForecastCostUSD;
+@property(nonatomic) double localPricedTokenPercent;
+@property(nonatomic, copy) NSString *localTopModel;
+@property(nonatomic, copy) NSArray<NSNumber *> *localDailyTokenTrend;
+@property(nonatomic) BOOL fiveHourForecastAvailable;
+@property(nonatomic, copy) NSString *fiveHourForecastHeadline;
+@property(nonatomic, copy) NSString *fiveHourForecastDetail;
+@property(nonatomic) BOOL weeklyForecastAvailable;
+@property(nonatomic, copy) NSString *weeklyForecastHeadline;
+@property(nonatomic, copy) NSString *weeklyForecastDetail;
 @property(nonatomic) NSTimeInterval updatedAt;
 @property(nonatomic, copy) NSString *statusText;
 @end
@@ -43,7 +87,12 @@ FOUNDATION_EXPORT NSDictionary<NSString *, id> *CodexCalendarUsage(NSArray *buck
 @interface CodexStatusProvider : NSObject
 @property(nonatomic, readonly) CodexStatusSnapshot *snapshot;
 @property(nonatomic, copy) void (^updateHandler)(void);
+@property(nonatomic) BOOL costHistoryEnabled;
+@property(nonatomic) BOOL quotaForecastEnabled;
+@property(nonatomic) BOOL accountDataEnabled;
 - (void)start;
 - (void)refreshQuota;
+- (void)refreshActivity;
+- (void)refreshCostHistory;
 - (void)stop;
 @end
