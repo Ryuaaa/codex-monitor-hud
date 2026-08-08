@@ -2,6 +2,7 @@
 #import "NativeSampler.h"
 #import "CodexStatusProvider.h"
 #import "CodexCostHistory.h"
+#import "OpenAIServiceStatus.h"
 #import "HUDView.h"
 #import "UpdateManager.h"
 #import <errno.h>
@@ -158,7 +159,7 @@ static NSString *FormatModuleState(NSTimeInterval timestamp, NSString *error, NS
     return FormatAge(timestamp);
 }
 
-static NSArray<NSString *> *HUDDefaultHomeCodexOrder(void) { return @[@"activity", @"recent", @"quota", @"insights", @"cost", @"forecast", @"history"]; }
+static NSArray<NSString *> *HUDDefaultHomeCodexOrder(void) { return @[@"activity", @"recent", @"quota", @"insights", @"cost", @"forecast", @"service", @"history"]; }
 static NSArray<NSString *> *HUDDefaultHomeComputerOrder(void) { return @[@"summary", @"attribution", @"memory", @"trend"]; }
 static NSTimeInterval HUDCodexActivityRefreshInterval(NSInteger activeTaskCount) { return activeTaskCount > 0 ? 5.0 : 20.0; }
 
@@ -244,9 +245,11 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
 @property(nonatomic, strong) HUDView *hudView;
 @property(nonatomic, strong) NSTimer *systemTimer;
 @property(nonatomic, strong) NSTimer *codexTimer;
+@property(nonatomic, strong) NSTimer *serviceStatusTimer;
 @property(nonatomic, strong) NSTimer *updateTimer;
 @property(nonatomic, strong) NativeSampler *sampler;
 @property(nonatomic, strong) CodexStatusProvider *codexProvider;
+@property(nonatomic, strong) HUDOpenAIServiceStatusProvider *serviceStatusProvider;
 @property(nonatomic, strong) HUDUpdateManager *updateManager;
 @property(nonatomic, strong) NativeSnapshot *lastSnapshot;
 @property(nonatomic, strong) NSMutableArray<NativeSnapshot *> *minuteSamples;
@@ -265,6 +268,7 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
 @property(nonatomic) BOOL showModelQuota;
 @property(nonatomic) BOOL showLocalCost;
 @property(nonatomic) BOOL showQuotaForecast;
+@property(nonatomic) BOOL showServiceStatus;
 @property(nonatomic) BOOL showTaskActivity;
 @property(nonatomic) BOOL showRecentTasks;
 @property(nonatomic) BOOL showLongestTurn;
@@ -280,6 +284,7 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
 @property(nonatomic) BOOL homeShowModelQuota;
 @property(nonatomic) BOOL homeShowLocalCost;
 @property(nonatomic) BOOL homeShowQuotaForecast;
+@property(nonatomic) BOOL homeShowServiceStatus;
 @property(nonatomic) BOOL homeShowTaskActivity;
 @property(nonatomic) BOOL homeShowRecentTasks;
 @property(nonatomic) BOOL homeShowLongestTurn;
@@ -302,6 +307,7 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
 @property(nonatomic) NSTimeInterval lastCodexAccountFetchAt;
 @property(nonatomic) NSTimeInterval lastActivityRefreshRequestAt;
 @property(nonatomic) NSTimeInterval lastCostHistoryFetchAt;
+@property(nonatomic) NSTimeInterval lastServiceStatusFetchAt;
 @property(nonatomic, strong) NSTextField *updateStatusLabel;
 @property(nonatomic, strong) NSButton *updateButton;
 @property(nonatomic) BOOL updateCheckInProgress;
@@ -314,6 +320,8 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
 - (void)updateHUDGeometryForContentSize:(NSSize)contentSize baseSize:(NSSize)baseSize;
 - (void)configureSamplingAndTimers;
 - (void)scheduleCodexRefreshTimer;
+- (void)startServiceStatusIfNeeded;
+- (void)updateServiceStatusDisplay;
 - (void)applyPositionLock;
 - (BOOL)systemDataNeeded;
 - (void)performUpdateCheckManual:(BOOL)manual;
@@ -368,6 +376,7 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
     self.showModelQuota = [d objectForKey:@"showModelQuota"] ? [d boolForKey:@"showModelQuota"] : NO;
     self.showLocalCost = [d objectForKey:@"showLocalCost"] ? [d boolForKey:@"showLocalCost"] : YES;
     self.showQuotaForecast = [d objectForKey:@"showQuotaForecast"] ? [d boolForKey:@"showQuotaForecast"] : YES;
+    self.showServiceStatus = [d objectForKey:@"showServiceStatus"] ? [d boolForKey:@"showServiceStatus"] : YES;
     self.showTaskActivity = [d objectForKey:@"showTaskActivity"] ? [d boolForKey:@"showTaskActivity"] : YES;
     self.showRecentTasks = [d objectForKey:@"showRecentTasks"] ? [d boolForKey:@"showRecentTasks"] : YES;
     self.showLongestTurn = [d objectForKey:@"showLongestTurn"] ? [d boolForKey:@"showLongestTurn"] : NO;
@@ -383,6 +392,7 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
     self.homeShowModelQuota = [d objectForKey:@"homeShowModelQuota"] ? [d boolForKey:@"homeShowModelQuota"] : NO;
     self.homeShowLocalCost = [d objectForKey:@"homeShowLocalCost"] ? [d boolForKey:@"homeShowLocalCost"] : NO;
     self.homeShowQuotaForecast = [d objectForKey:@"homeShowQuotaForecast"] ? [d boolForKey:@"homeShowQuotaForecast"] : NO;
+    self.homeShowServiceStatus = [d objectForKey:@"homeShowServiceStatus"] ? [d boolForKey:@"homeShowServiceStatus"] : NO;
     self.homeShowTaskActivity = [d objectForKey:@"homeShowTaskActivity"] ? [d boolForKey:@"homeShowTaskActivity"] : YES;
     self.homeShowRecentTasks = [d objectForKey:@"homeShowRecentTasks"] ? [d boolForKey:@"homeShowRecentTasks"] : NO;
     self.homeShowLongestTurn = [d objectForKey:@"homeShowLongestTurn"] ? [d boolForKey:@"homeShowLongestTurn"] : NO;
@@ -429,6 +439,7 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
     [self createPanel];
     [self configureSamplingAndTimers];
     [self startCodexProviderIfNeeded];
+    [self startServiceStatusIfNeeded];
     [self performSelector:@selector(checkForUpdatesAutomatically) withObject:nil afterDelay:4.0];
     self.updateTimer = [NSTimer scheduledTimerWithTimeInterval:HUDAutomaticUpdateCheckInterval target:self selector:@selector(checkForUpdatesAutomatically) userInfo:nil repeats:YES];
     self.updateTimer.tolerance = 2.0 * 60.0 * 60.0;
@@ -441,8 +452,10 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
     [self savePosition];
     [self.systemTimer invalidate];
     [self.codexTimer invalidate];
+    [self.serviceStatusTimer invalidate];
     [self.updateTimer invalidate];
     [self.codexProvider stop];
+    [self.serviceStatusProvider stop];
     [[[NSWorkspace sharedWorkspace] notificationCenter] removeObserver:self];
 }
 
@@ -466,7 +479,7 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
 
 - (CGFloat)homePanelHeight {
     CGFloat height = 52;
-    BOOL hasCodex = self.homeShowTaskActivity || self.homeShowRecentTasks || self.homeShowFiveHour || self.homeShowWeekly || self.homeShowPlan || self.homeShowUsage || self.homeShowModelQuota || self.homeShowLocalCost || self.homeShowQuotaForecast || self.homeShowLongestTurn || self.homeShowLongestStreak;
+    BOOL hasCodex = self.homeShowTaskActivity || self.homeShowRecentTasks || self.homeShowFiveHour || self.homeShowWeekly || self.homeShowPlan || self.homeShowUsage || self.homeShowModelQuota || self.homeShowLocalCost || self.homeShowQuotaForecast || self.homeShowServiceStatus || self.homeShowLongestTurn || self.homeShowLongestStreak;
     BOOL hasComputer = self.homeShowDiagnosis || self.homeShowSystem || self.homeShowAttribution || self.homeShowMemoryApps || self.homeShowTrend;
     if (hasCodex) height += 26;
     if (self.homeShowTaskActivity) height += 66;
@@ -475,6 +488,7 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
     if (self.homeShowPlan || self.homeShowUsage || self.homeShowModelQuota) height += 66;
     if (self.homeShowLocalCost) height += 66;
     if (self.homeShowQuotaForecast) height += 66;
+    if (self.homeShowServiceStatus) height += 66;
     if (self.homeShowLongestTurn || self.homeShowLongestStreak) height += 66;
     if (hasComputer) height += 26;
     if (self.homeShowDiagnosis || self.homeShowSystem) height += 66;
@@ -494,6 +508,7 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
     if (!hasInsights) codexHeight -= 66;
     if (self.showLocalCost) codexHeight += 66;
     if (self.showQuotaForecast) codexHeight += 66;
+    if (self.showServiceStatus) codexHeight += 66;
     codexHeight = MAX(170, codexHeight);
     CGFloat height = self.currentPage == 0 ? [self homePanelHeight] : (self.currentPage == 1 ? codexHeight : (self.showMemoryApps ? 421 : 303));
     if (!self.compact && self.currentPage != 0) height += 110;
@@ -584,6 +599,7 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
     [self.hudView setModelQuotaVisible:NO];
     [self.hudView setLocalCostVisible:self.showLocalCost];
     [self.hudView setQuotaForecastVisible:self.showQuotaForecast];
+    [self.hudView setServiceStatusVisible:self.showServiceStatus];
     [self.hudView setTaskActivityVisible:self.showTaskActivity];
     [self.hudView setRecentTasksVisible:self.showRecentTasks];
     [self.hudView setLongestTurnVisible:self.showLongestTurn];
@@ -599,6 +615,7 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
     [self.hudView setHomeModelQuotaVisible:NO];
     [self.hudView setHomeLocalCostVisible:self.homeShowLocalCost];
     [self.hudView setHomeQuotaForecastVisible:self.homeShowQuotaForecast];
+    [self.hudView setHomeServiceStatusVisible:self.homeShowServiceStatus];
     [self.hudView setHomeTaskActivityVisible:self.homeShowTaskActivity];
     [self.hudView setHomeRecentTasksVisible:self.homeShowRecentTasks];
     [self.hudView setHomeLongestTurnVisible:self.homeShowLongestTurn];
@@ -749,6 +766,65 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
     [self scheduleCodexRefreshTimer];
 }
 
+- (NSTimeInterval)serviceStatusRefreshInterval {
+    HUDOpenAIServiceStatusSnapshot *snapshot = self.serviceStatusProvider.snapshot;
+    BOOL degraded = snapshot.errorText.length > 0 || (snapshot.overallIndicator.length > 0 && ![snapshot.overallIndicator isEqualToString:@"none"]) || (snapshot.codexComponentStatus.length > 0 && ![snapshot.codexComponentStatus isEqualToString:@"operational"]);
+    return degraded ? 120.0 : 600.0;
+}
+
+- (void)scheduleServiceStatusTimer {
+    [self.serviceStatusTimer invalidate];
+    self.serviceStatusTimer = nil;
+    if (!self.serviceStatusProvider) return;
+    NSTimeInterval now = NSDate.date.timeIntervalSince1970;
+    NSTimeInterval delay = MAX(1.0, self.lastServiceStatusFetchAt + [self serviceStatusRefreshInterval] - now);
+    self.serviceStatusTimer = [NSTimer scheduledTimerWithTimeInterval:delay target:self selector:@selector(refreshServiceStatus) userInfo:nil repeats:NO];
+    self.serviceStatusTimer.tolerance = MIN(30.0, delay * 0.1);
+    [[NSRunLoop mainRunLoop] addTimer:self.serviceStatusTimer forMode:NSRunLoopCommonModes];
+}
+
+- (void)refreshServiceStatus {
+    if (!self.serviceStatusProvider) return;
+    self.lastServiceStatusFetchAt = NSDate.date.timeIntervalSince1970;
+    [self.serviceStatusProvider refresh];
+    [self scheduleServiceStatusTimer];
+}
+
+- (void)startServiceStatusIfNeeded {
+    BOOL needed = self.showServiceStatus || self.homeShowServiceStatus;
+    if (!needed) {
+        [self.serviceStatusTimer invalidate]; self.serviceStatusTimer = nil;
+        [self.serviceStatusProvider stop]; self.serviceStatusProvider = nil;
+        self.lastServiceStatusFetchAt = 0;
+        return;
+    }
+    if (!self.serviceStatusProvider) {
+        self.serviceStatusProvider = [HUDOpenAIServiceStatusProvider new];
+        __weak typeof(self) weakSelf = self;
+        self.serviceStatusProvider.updateHandler = ^{ [weakSelf updateServiceStatusDisplay]; [weakSelf scheduleServiceStatusTimer]; };
+        self.lastServiceStatusFetchAt = 0;
+    }
+    if (self.lastServiceStatusFetchAt <= 0) [self refreshServiceStatus];
+    else [self scheduleServiceStatusTimer];
+}
+
+- (void)updateServiceStatusDisplay {
+    HUDOpenAIServiceStatusSnapshot *snapshot = self.serviceStatusProvider.snapshot;
+    if (!snapshot || !self.hudView) return;
+    NSString *value = snapshot.available ? snapshot.headline : (snapshot.errorText ?: @"正在检查官方状态");
+    NSString *detail = snapshot.available ? [NSString stringWithFormat:@"%@ · %@", snapshot.detail ?: @"OpenAI整体状态未知", FormatModuleState(snapshot.updatedAt, snapshot.errorText, 900)] : @"未读取账号信息 · 稍后重试";
+    BOOL severe = [snapshot.overallIndicator isEqualToString:@"major"] || [snapshot.overallIndicator isEqualToString:@"critical"] || [snapshot.codexComponentStatus isEqualToString:@"major_outage"];
+    BOOL degraded = snapshot.errorText.length > 0 || ![snapshot.overallIndicator isEqualToString:@"none"] || (snapshot.codexComponentStatus.length > 0 && ![snapshot.codexComponentStatus isEqualToString:@"operational"]);
+    NSColor *color = severe ? NSColor.systemRedColor : (degraded ? NSColor.systemOrangeColor : [self accentColor]);
+    self.hudView.serviceStatusCard.valueLabel.stringValue = value;
+    self.hudView.serviceStatusCard.subtitleLabel.stringValue = detail;
+    self.hudView.serviceStatusCard.valueLabel.textColor = color;
+    self.hudView.homeServiceStatusCard.valueLabel.stringValue = value;
+    self.hudView.homeServiceStatusCard.subtitleLabel.stringValue = detail;
+    self.hudView.homeServiceStatusCard.valueLabel.textColor = color;
+    [self updateDetailLabels];
+}
+
 - (BOOL)restorePosition {
     NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
     if ([defaults objectForKey:@"originX"] == nil || [defaults objectForKey:@"originY"] == nil) return NO;
@@ -808,7 +884,9 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
     self.lastCodexAccountFetchAt = 0;
     self.lastActivityRefreshRequestAt = 0;
     self.lastCostHistoryFetchAt = 0;
+    self.lastServiceStatusFetchAt = 0;
     [self startCodexProviderIfNeeded];
+    [self startServiceStatusIfNeeded];
 }
 
 - (void)appendLifecycleEvent:(NSString *)event {
@@ -983,6 +1061,9 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
 }
 
 - (void)updateCodexDisplay {
+    [self.hudView setServiceStatusVisible:self.showServiceStatus];
+    [self.hudView setHomeServiceStatusVisible:self.homeShowServiceStatus];
+    if (self.serviceStatusProvider) [self updateServiceStatusDisplay];
     CodexStatusSnapshot *s = self.codexProvider.snapshot;
     if (!s) { [self updateDetailLabels]; return; }
     NSString *plan = s.accountAvailable ? FormatPlan(s.planType) : nil;
@@ -1158,6 +1239,7 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
         CodexStatusSnapshot *s = self.codexProvider.snapshot;
         if (self.homeShowTaskActivity && row < 5) { self.hudView.detailLabels[row].stringValue = s.activityAvailable ? [NSString stringWithFormat:@"任务活动   %ld个%@ · 最长%@ · 本机推测", (long)s.activeTaskCount, s.activityPartial ? @"可确认活跃" : @"活跃", FormatDuration(s.longestActiveTaskSec)] : @"任务活动   当前无法可靠判断"; self.hudView.detailLabels[row++].hidden = NO; }
         if (self.homeShowRecentTasks && row < 5) { self.hudView.detailLabels[row].stringValue = s.recentTasksAvailable ? [NSString stringWithFormat:@"最近任务   已读取%ld项 · 历史列表", (long)s.recentTaskCount] : @"最近任务   当前未返回"; self.hudView.detailLabels[row++].hidden = NO; }
+        if (self.homeShowServiceStatus && row < 5) { HUDOpenAIServiceStatusSnapshot *service = self.serviceStatusProvider.snapshot; self.hudView.detailLabels[row].stringValue = service.available ? [NSString stringWithFormat:@"官方状态   %@ · %@", service.headline, FormatAge(service.updatedAt)] : @"官方状态   正在读取"; self.hudView.detailLabels[row++].hidden = NO; }
         NSMutableArray<NSString *> *quotaParts = [NSMutableArray array];
         if (self.homeShowFiveHour) [quotaParts addObject:s.fiveHourAvailable ? [NSString stringWithFormat:@"5小时 %.0f%%", s.fiveHourRemainingPercent] : @"5小时未返回"];
         if (self.homeShowWeekly) [quotaParts addObject:s.weeklyAvailable ? [NSString stringWithFormat:@"每周 %.0f%%", s.weeklyRemainingPercent] : @"每周未返回"];
@@ -1178,6 +1260,7 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
         CodexStatusSnapshot *s = self.codexProvider.snapshot;
         if (self.showTaskActivity && row < 5) { self.hudView.detailLabels[row].stringValue = s.activityAvailable ? [NSString stringWithFormat:@"任务活动   %ld个%@ · 最长%@ · 本机推测", (long)s.activeTaskCount, s.activityPartial ? @"可确认活跃" : @"活跃", FormatDuration(s.longestActiveTaskSec)] : @"任务活动   当前无法可靠判断"; self.hudView.detailLabels[row++].hidden = NO; }
         if (self.showRecentTasks && row < 5) { self.hudView.detailLabels[row].stringValue = s.recentTasksAvailable ? [NSString stringWithFormat:@"最近任务   已读取%ld项 · 历史列表", (long)s.recentTaskCount] : @"最近任务   当前未返回"; self.hudView.detailLabels[row++].hidden = NO; }
+        if (self.showServiceStatus && row < 5) { HUDOpenAIServiceStatusSnapshot *service = self.serviceStatusProvider.snapshot; self.hudView.detailLabels[row].stringValue = service.available ? [NSString stringWithFormat:@"官方状态   %@ · %@", service.headline, FormatAge(service.updatedAt)] : @"官方状态   正在读取"; self.hudView.detailLabels[row++].hidden = NO; }
         if (self.showFiveHourQuota && row < 5) { self.hudView.detailLabels[row].stringValue = s.fiveHourAvailable ? [NSString stringWithFormat:@"5小时额度  剩余 %.0f%% · %@", s.fiveHourRemainingPercent, FormatReset(s.fiveHourResetAt)] : @"5小时额度  当前接口未返回"; self.hudView.detailLabels[row++].hidden = NO; }
         if (self.showWeeklyQuota && row < 5) { self.hudView.detailLabels[row].stringValue = s.weeklyAvailable ? [NSString stringWithFormat:@"每周额度   剩余 %.0f%% · %@", s.weeklyRemainingPercent, FormatReset(s.weeklyResetAt)] : @"每周额度   当前接口未返回"; self.hudView.detailLabels[row++].hidden = NO; }
         if (self.showPlan && row < 5) { self.hudView.detailLabels[row].stringValue = [NSString stringWithFormat:@"订阅类型   %@", s.accountAvailable ? FormatPlan(s.planType) : @"当前未返回"]; self.hudView.detailLabels[row++].hidden = NO; }
@@ -1247,6 +1330,7 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
 - (void)toggleUsage:(id)sender { self.showUsage = !self.showUsage; [NSUserDefaults.standardUserDefaults setBool:self.showUsage forKey:@"showUsage"]; [self.hudView setUsageVisible:self.showUsage]; [self startCodexProviderIfNeeded]; [self updateCodexDisplay]; [self resizePanel]; }
 - (void)toggleLocalCost:(id)sender { self.showLocalCost = !self.showLocalCost; [NSUserDefaults.standardUserDefaults setBool:self.showLocalCost forKey:@"showLocalCost"]; [self.hudView setLocalCostVisible:self.showLocalCost]; if (self.showLocalCost) self.lastCostHistoryFetchAt = 0; [self startCodexProviderIfNeeded]; [self updateCodexDisplay]; [self resizePanel]; }
 - (void)toggleQuotaForecast:(id)sender { self.showQuotaForecast = !self.showQuotaForecast; [NSUserDefaults.standardUserDefaults setBool:self.showQuotaForecast forKey:@"showQuotaForecast"]; [self.hudView setQuotaForecastVisible:self.showQuotaForecast]; [self startCodexProviderIfNeeded]; [self updateCodexDisplay]; [self resizePanel]; }
+- (void)toggleServiceStatus:(id)sender { self.showServiceStatus = !self.showServiceStatus; [NSUserDefaults.standardUserDefaults setBool:self.showServiceStatus forKey:@"showServiceStatus"]; [self.hudView setServiceStatusVisible:self.showServiceStatus]; [self startServiceStatusIfNeeded]; [self updateServiceStatusDisplay]; [self resizePanel]; }
 - (void)toggleModelQuota:(id)sender { self.showModelQuota = !self.showModelQuota; [NSUserDefaults.standardUserDefaults setBool:self.showModelQuota forKey:@"showModelQuota"]; [self.hudView setModelQuotaVisible:self.showModelQuota && self.codexProvider.snapshot.modelQuotaAvailable]; [self startCodexProviderIfNeeded]; [self updateCodexDisplay]; [self resizePanel]; }
 - (void)toggleTaskActivity:(id)sender { self.showTaskActivity = !self.showTaskActivity; [NSUserDefaults.standardUserDefaults setBool:self.showTaskActivity forKey:@"showTaskActivity"]; [self.hudView setTaskActivityVisible:self.showTaskActivity]; [self startCodexProviderIfNeeded]; [self updateCodexDisplay]; [self resizePanel]; }
 - (void)toggleRecentTasks:(id)sender { self.showRecentTasks = !self.showRecentTasks; [NSUserDefaults.standardUserDefaults setBool:self.showRecentTasks forKey:@"showRecentTasks"]; [self.hudView setRecentTasksVisible:self.showRecentTasks]; [self startCodexProviderIfNeeded]; [self updateCodexDisplay]; [self resizePanel]; }
@@ -1262,6 +1346,7 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
 - (void)toggleHomeUsage:(id)sender { self.homeShowUsage = !self.homeShowUsage; [NSUserDefaults.standardUserDefaults setBool:self.homeShowUsage forKey:@"homeShowUsage"]; [self.hudView setHomeUsageVisible:self.homeShowUsage]; [self startCodexProviderIfNeeded]; [self updateCodexDisplay]; [self resizePanel]; }
 - (void)toggleHomeLocalCost:(id)sender { self.homeShowLocalCost = !self.homeShowLocalCost; [NSUserDefaults.standardUserDefaults setBool:self.homeShowLocalCost forKey:@"homeShowLocalCost"]; [self.hudView setHomeLocalCostVisible:self.homeShowLocalCost]; if (self.homeShowLocalCost) self.lastCostHistoryFetchAt = 0; [self startCodexProviderIfNeeded]; [self updateCodexDisplay]; [self resizePanel]; }
 - (void)toggleHomeQuotaForecast:(id)sender { self.homeShowQuotaForecast = !self.homeShowQuotaForecast; [NSUserDefaults.standardUserDefaults setBool:self.homeShowQuotaForecast forKey:@"homeShowQuotaForecast"]; [self.hudView setHomeQuotaForecastVisible:self.homeShowQuotaForecast]; [self startCodexProviderIfNeeded]; [self updateCodexDisplay]; [self resizePanel]; }
+- (void)toggleHomeServiceStatus:(id)sender { self.homeShowServiceStatus = !self.homeShowServiceStatus; [NSUserDefaults.standardUserDefaults setBool:self.homeShowServiceStatus forKey:@"homeShowServiceStatus"]; [self.hudView setHomeServiceStatusVisible:self.homeShowServiceStatus]; [self startServiceStatusIfNeeded]; [self updateServiceStatusDisplay]; [self resizePanel]; }
 - (void)toggleHomeModelQuota:(id)sender { self.homeShowModelQuota = !self.homeShowModelQuota; [NSUserDefaults.standardUserDefaults setBool:self.homeShowModelQuota forKey:@"homeShowModelQuota"]; [self.hudView setHomeModelQuotaVisible:self.homeShowModelQuota && self.codexProvider.snapshot.modelQuotaAvailable]; [self startCodexProviderIfNeeded]; [self updateCodexDisplay]; [self resizePanel]; }
 - (void)toggleHomeTaskActivity:(id)sender { self.homeShowTaskActivity = !self.homeShowTaskActivity; [NSUserDefaults.standardUserDefaults setBool:self.homeShowTaskActivity forKey:@"homeShowTaskActivity"]; [self.hudView setHomeTaskActivityVisible:self.homeShowTaskActivity]; [self startCodexProviderIfNeeded]; [self updateCodexDisplay]; [self resizePanel]; }
 - (void)toggleHomeRecentTasks:(id)sender { self.homeShowRecentTasks = !self.homeShowRecentTasks; [NSUserDefaults.standardUserDefaults setBool:self.homeShowRecentTasks forKey:@"homeShowRecentTasks"]; [self.hudView setHomeRecentTasksVisible:self.homeShowRecentTasks]; [self startCodexProviderIfNeeded]; [self updateCodexDisplay]; [self resizePanel]; }
@@ -1447,6 +1532,7 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
         [self settingsCheckbox:@"账户Token统计" action:@selector(toggleHomeUsage:) state:self.homeShowUsage],
         [self settingsCheckbox:@"Token用量与费用" action:@selector(toggleHomeLocalCost:) state:self.homeShowLocalCost],
         [self settingsCheckbox:@"额度趋势预测" action:@selector(toggleHomeQuotaForecast:) state:self.homeShowQuotaForecast],
+        [self settingsCheckbox:@"OpenAI服务状态" action:@selector(toggleHomeServiceStatus:) state:self.homeShowServiceStatus],
         [self settingsCheckbox:@"模型专属额度" action:@selector(toggleHomeModelQuota:) state:self.homeShowModelQuota],
         [self settingsCheckbox:@"最长单次任务时长" action:@selector(toggleHomeLongestTurn:) state:self.homeShowLongestTurn],
         [self settingsCheckbox:@"历史最长连续天数" action:@selector(toggleHomeLongestStreak:) state:self.homeShowLongestStreak],
@@ -1465,6 +1551,7 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
         [self settingsCheckbox:@"账户Token统计" action:@selector(toggleUsage:) state:self.showUsage],
         [self settingsCheckbox:@"Token用量与费用" action:@selector(toggleLocalCost:) state:self.showLocalCost],
         [self settingsCheckbox:@"额度趋势预测" action:@selector(toggleQuotaForecast:) state:self.showQuotaForecast],
+        [self settingsCheckbox:@"OpenAI服务状态" action:@selector(toggleServiceStatus:) state:self.showServiceStatus],
         [self settingsCheckbox:@"模型专属额度" action:@selector(toggleModelQuota:) state:self.showModelQuota],
         [self settingsCheckbox:@"最长单次任务时长" action:@selector(toggleLongestTurn:) state:self.showLongestTurn],
         [self settingsCheckbox:@"历史最长连续天数" action:@selector(toggleLongestStreak:) state:self.showLongestStreak]
@@ -1488,7 +1575,7 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
     HUDModuleOrderController *codexOrderController = [[HUDModuleOrderController alloc] initWithOrderKey:@"codex" items:HUDOrderItems(self.homeCodexModuleOrder, @{
         @"activity": @"任务活动", @"recent": @"最近任务", @"quota": @"5小时与每周额度",
         @"insights": @"订阅与账户Token统计", @"cost": @"Token用量与费用",
-        @"forecast": @"额度趋势预测", @"history": @"最长任务与连续天数"
+        @"forecast": @"额度趋势预测", @"service": @"OpenAI服务状态", @"history": @"最长任务与连续天数"
     }) changed:^(NSArray<NSString *> *order) {
         weakSelf.homeCodexModuleOrder = order; [NSUserDefaults.standardUserDefaults setObject:order forKey:@"homeCodexModuleOrder"];
         [weakSelf.hudView applyHomeCodexOrder:weakSelf.homeCodexModuleOrder computerOrder:weakSelf.homeComputerModuleOrder];
@@ -1538,7 +1625,7 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
     NSStackView *bottom = [NSStackView stackViewWithViews:@[behaviorBox, sizeBox, updateBox]];
     bottom.orientation = NSUserInterfaceLayoutOrientationHorizontal; bottom.distribution = NSStackViewDistributionFillEqually; bottom.spacing = 12;
 
-    NSTextField *sourceText = [NSTextField wrappingLabelWithString:@"电脑性能：macOS系统接口。  Codex额度、订阅、账户Token与任务历史：本机Codex官方接口。  Token费用：只读取本机会话记录中的时间、模型和Token计数。  任务活动：只读检查近期写入记录。  更新：仅访问本项目GitHub Release。"];
+    NSTextField *sourceText = [NSTextField wrappingLabelWithString:@"电脑性能：macOS系统接口。  Codex额度、订阅、账户Token与任务历史：本机Codex官方接口。  OpenAI服务状态：官方公开状态页，不带账号信息。  Token费用：只读取本机会话记录中的时间、模型和Token计数。  任务活动：只读检查近期写入记录。  更新：仅访问本项目GitHub Release。"];
     sourceText.font = [NSFont systemFontOfSize:11.5]; sourceText.textColor = NSColor.labelColor;
     NSTextField *permissionText = [NSTextField wrappingLabelWithString:@"默认不需要屏幕录制、辅助功能、完全磁盘访问、浏览器Cookie或API密钥；费用缓存不保存提示词、回复或工具内容；单任务实时Token速度因无法连接桌面版同一接口实例，当前不会显示。"];
     permissionText.font = [NSFont systemFontOfSize:11.5]; permissionText.textColor = NSColor.secondaryLabelColor;
@@ -1594,6 +1681,7 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
     [homeModules addItem:[self item:@"账户Token统计" action:@selector(toggleHomeUsage:) state:self.homeShowUsage]];
     [homeModules addItem:[self item:@"Token用量与费用" action:@selector(toggleHomeLocalCost:) state:self.homeShowLocalCost]];
     [homeModules addItem:[self item:@"额度趋势预测" action:@selector(toggleHomeQuotaForecast:) state:self.homeShowQuotaForecast]];
+    [homeModules addItem:[self item:@"OpenAI服务状态" action:@selector(toggleHomeServiceStatus:) state:self.homeShowServiceStatus]];
     [homeModules addItem:[self item:@"模型专属额度" action:@selector(toggleHomeModelQuota:) state:self.homeShowModelQuota]];
     [homeModules addItem:[self item:@"最长单次任务时长" action:@selector(toggleHomeLongestTurn:) state:self.homeShowLongestTurn]];
     [homeModules addItem:[self item:@"历史最长连续天数" action:@selector(toggleHomeLongestStreak:) state:self.homeShowLongestStreak]];
@@ -1613,6 +1701,7 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
     [modules addItem:[self item:@"账户Token统计" action:@selector(toggleUsage:) state:self.showUsage]];
     [modules addItem:[self item:@"Token用量与费用" action:@selector(toggleLocalCost:) state:self.showLocalCost]];
     [modules addItem:[self item:@"额度趋势预测" action:@selector(toggleQuotaForecast:) state:self.showQuotaForecast]];
+    [modules addItem:[self item:@"OpenAI服务状态" action:@selector(toggleServiceStatus:) state:self.showServiceStatus]];
     [modules addItem:[self item:@"最长单次任务时长" action:@selector(toggleLongestTurn:) state:self.showLongestTurn]];
     [modules addItem:[self item:@"历史最长连续天数" action:@selector(toggleLongestStreak:) state:self.showLongestStreak]];
     [modules addItem:[self item:@"电脑核心状态" action:@selector(toggleSystem:) state:self.showSystem]];
@@ -1682,7 +1771,7 @@ static int RunUIDiagnostic(void) {
     NSView *settings = [delegate settingsContentView];
     NSInteger checkboxCount = 0, hiddenFiveHourCount = 0, hiddenPlanCount = 0, optionalHistoryOffCount = 0, resetButtonCount = 0;
     CountSettingsControls(settings, &checkboxCount, &hiddenFiveHourCount, &hiddenPlanCount, &optionalHistoryOffCount, &resetButtonCount);
-    BOOL settingsPass = checkboxCount == 36 && hiddenFiveHourCount == 2 && hiddenPlanCount == 2 && optionalHistoryOffCount == 4 && resetButtonCount == 1 && delegate.settingsOrderControllers.count == 2 && delegate.settingsOrderControllers[0].items.count == 7 && delegate.settingsOrderControllers[1].items.count == 4;
+    BOOL settingsPass = checkboxCount == 38 && hiddenFiveHourCount == 2 && hiddenPlanCount == 2 && optionalHistoryOffCount == 4 && resetButtonCount == 1 && delegate.settingsOrderControllers.count == 2 && delegate.settingsOrderControllers[0].items.count == 8 && delegate.settingsOrderControllers[1].items.count == 4;
     BOOL scalePass = fabs([delegate panelSize].width - 485.9) < 0.01 && ([delegate panelStyleMask] & NSWindowStyleMaskResizable) != 0;
     delegate.windowScale = 0.75; scalePass = scalePass && fabs([delegate panelSize].width - 322.5) < 0.01;
     delegate.windowScale = 1.0; scalePass = scalePass && fabs([delegate panelSize].width - 430.0) < 0.1;
@@ -1708,15 +1797,17 @@ static int RunUIDiagnostic(void) {
     [delegate.hudView setHomeRecentTasksVisible:NO]; [delegate.hudView setRecentTasksVisible:NO];
     [delegate.hudView setHomeLocalCostVisible:NO]; [delegate.hudView setLocalCostVisible:YES];
     [delegate.hudView setHomeQuotaForecastVisible:NO]; [delegate.hudView setQuotaForecastVisible:YES];
-    [delegate.hudView applyHomeCodexOrder:@[@"recent", @"activity", @"quota", @"insights", @"cost", @"forecast", @"history"] computerOrder:@[@"trend", @"summary", @"attribution", @"memory"]];
+    [delegate.hudView setHomeServiceStatusVisible:NO]; [delegate.hudView setServiceStatusVisible:YES];
+    [delegate.hudView applyHomeCodexOrder:@[@"recent", @"activity", @"quota", @"insights", @"cost", @"forecast", @"service", @"history"] computerOrder:@[@"trend", @"summary", @"attribution", @"memory"]];
     NSArray<NSView *> *homeArranged = delegate.hudView.homeStack.arrangedSubviews;
-    BOOL orderPass = homeArranged.count == 14 && homeArranged[1] == delegate.hudView.homeRecentTasksCard && homeArranged[2] == delegate.hudView.homeTaskActivityCard && homeArranged[5] == delegate.hudView.homeLocalCostCard && homeArranged[6] == delegate.hudView.homeQuotaForecastCard && homeArranged[9] == delegate.hudView.homeTrendRow;
-    BOOL cardVisibilityPass = delegate.hudView.homeTaskActivityCard.hidden && delegate.hudView.taskActivityCard.hidden && delegate.hudView.homeRecentTasksCard.hidden && delegate.hudView.recentTasksCard.hidden && delegate.hudView.homeFiveHourCard.hidden && delegate.hudView.fiveHourCard.hidden && delegate.hudView.homePlanCard.hidden && delegate.hudView.planCard.hidden && !delegate.hudView.homeWeeklyCard.hidden && !delegate.hudView.weeklyCard.hidden && delegate.hudView.homeUsageHistoryRow.hidden && delegate.hudView.usageHistoryRow.hidden && delegate.hudView.homeLocalCostCard.hidden && !delegate.hudView.localCostCard.hidden && delegate.hudView.homeQuotaForecastCard.hidden && !delegate.hudView.quotaForecastCard.hidden;
+    BOOL orderPass = homeArranged.count == 15 && homeArranged[1] == delegate.hudView.homeRecentTasksCard && homeArranged[2] == delegate.hudView.homeTaskActivityCard && homeArranged[5] == delegate.hudView.homeLocalCostCard && homeArranged[6] == delegate.hudView.homeQuotaForecastCard && homeArranged[7] == delegate.hudView.homeServiceStatusCard && homeArranged[10] == delegate.hudView.homeTrendRow;
+    BOOL cardVisibilityPass = delegate.hudView.homeTaskActivityCard.hidden && delegate.hudView.taskActivityCard.hidden && delegate.hudView.homeRecentTasksCard.hidden && delegate.hudView.recentTasksCard.hidden && delegate.hudView.homeFiveHourCard.hidden && delegate.hudView.fiveHourCard.hidden && delegate.hudView.homePlanCard.hidden && delegate.hudView.planCard.hidden && !delegate.hudView.homeWeeklyCard.hidden && !delegate.hudView.weeklyCard.hidden && delegate.hudView.homeUsageHistoryRow.hidden && delegate.hudView.usageHistoryRow.hidden && delegate.hudView.homeLocalCostCard.hidden && !delegate.hudView.localCostCard.hidden && delegate.hudView.homeQuotaForecastCard.hidden && !delegate.hudView.quotaForecastCard.hidden && delegate.hudView.homeServiceStatusCard.hidden && !delegate.hudView.serviceStatusCard.hidden;
     HUDView *longTextHUD = [[HUDView alloc] initWithFrame:NSMakeRect(0, 0, 430, 220)];
     [longTextHUD setPage:1]; [longTextHUD setCompact:YES];
     [longTextHUD setTaskActivityVisible:NO]; [longTextHUD setRecentTasksVisible:NO];
     [longTextHUD setFiveHourQuotaVisible:NO]; [longTextHUD setWeeklyQuotaVisible:NO]; [longTextHUD setModelQuotaVisible:NO];
     [longTextHUD setLocalCostVisible:NO]; [longTextHUD setQuotaForecastVisible:NO];
+    [longTextHUD setServiceStatusVisible:NO];
     [longTextHUD setLongestTurnVisible:NO]; [longTextHUD setLongestStreakVisible:NO];
     longTextHUD.usageCard.subtitleLabel.stringValue = @"今日数据未返回 · 7天 7900953979 · 上升125% · 不等于额度";
     [longTextHUD layoutSubtreeIfNeeded];
@@ -1727,6 +1818,7 @@ static int RunUIDiagnostic(void) {
     homeDelegate.homeShowFiveHour = YES; homeDelegate.homeShowWeekly = YES;
     homeDelegate.homeShowPlan = YES; homeDelegate.homeShowUsage = YES; homeDelegate.homeShowModelQuota = YES;
     homeDelegate.homeShowLocalCost = YES; homeDelegate.homeShowQuotaForecast = YES;
+    homeDelegate.homeShowServiceStatus = YES;
     homeDelegate.homeShowLongestTurn = YES; homeDelegate.homeShowLongestStreak = YES;
     homeDelegate.homeShowDiagnosis = YES; homeDelegate.homeShowSystem = YES; homeDelegate.homeShowAttribution = YES;
     homeDelegate.homeShowMemoryApps = YES; homeDelegate.homeShowTrend = YES;
@@ -1735,6 +1827,7 @@ static int RunUIDiagnostic(void) {
     [fullHomeHUD setPage:0]; [fullHomeHUD setCompact:NO];
     [fullHomeHUD setHomeModelQuotaVisible:YES]; [fullHomeHUD setHomeRecentTasksVisible:YES];
     [fullHomeHUD setHomeLocalCostVisible:YES]; [fullHomeHUD setHomeQuotaForecastVisible:YES];
+    [fullHomeHUD setHomeServiceStatusVisible:YES];
     [fullHomeHUD setHomeLongestTurnVisible:YES]; [fullHomeHUD setHomeLongestStreakVisible:YES];
     [fullHomeHUD setHomeMemoryAppsVisible:YES];
     [fullHomeHUD applyHomeCodexOrder:HUDDefaultHomeCodexOrder() computerOrder:HUDDefaultHomeComputerOrder()];
@@ -1742,7 +1835,7 @@ static int RunUIDiagnostic(void) {
     NSRect fullHomeBounds = fullHomeHUD.layoutCanvas.bounds;
     NSRect fullHomeRoot = fullHomeHUD.rootStack.frame;
     CGFloat homeWidth = fullHomeHUD.homeStack.frame.size.width;
-    BOOL homeWidthPass = fabs(fullHomeHUD.homeTaskActivityCard.frame.size.width - homeWidth) <= 1.0 && fabs(fullHomeHUD.homeRecentTasksCard.frame.size.width - homeWidth) <= 1.0 && fabs(fullHomeHUD.homeQuotaRow.frame.size.width - homeWidth) <= 1.0 && fabs(fullHomeHUD.homeInsightsRow.frame.size.width - homeWidth) <= 1.0 && fabs(fullHomeHUD.homeLocalCostCard.frame.size.width - homeWidth) <= 1.0 && fabs(fullHomeHUD.homeQuotaForecastCard.frame.size.width - homeWidth) <= 1.0 && fabs(fullHomeHUD.homeMemoryAppsCard.frame.size.width - homeWidth) <= 1.0;
+    BOOL homeWidthPass = fabs(fullHomeHUD.homeTaskActivityCard.frame.size.width - homeWidth) <= 1.0 && fabs(fullHomeHUD.homeRecentTasksCard.frame.size.width - homeWidth) <= 1.0 && fabs(fullHomeHUD.homeQuotaRow.frame.size.width - homeWidth) <= 1.0 && fabs(fullHomeHUD.homeInsightsRow.frame.size.width - homeWidth) <= 1.0 && fabs(fullHomeHUD.homeLocalCostCard.frame.size.width - homeWidth) <= 1.0 && fabs(fullHomeHUD.homeQuotaForecastCard.frame.size.width - homeWidth) <= 1.0 && fabs(fullHomeHUD.homeServiceStatusCard.frame.size.width - homeWidth) <= 1.0 && fabs(fullHomeHUD.homeMemoryAppsCard.frame.size.width - homeWidth) <= 1.0;
     BOOL homeLayoutPass = fullHomeHeight > 650.0 && homeWidthPass && NSMinY(fullHomeRoot) >= NSMinY(fullHomeBounds) - 1.0 && NSMaxY(fullHomeRoot) <= NSMaxY(fullHomeBounds) + 1.0;
     delegate.currentPage = 1; delegate.compact = YES; delegate.collapsed = NO; delegate.windowScale = 1.0;
     [delegate.hudView setPage:1]; [delegate.hudView setCompact:YES];
@@ -1806,6 +1899,10 @@ static int RunUIDiagnostic(void) {
     NSString *details = [visibleDetails componentsJoinedByString:@" | "];
     NSString *status = [delegate visibleCodexStatus:provider.snapshot fiveHour:NO weekly:YES plan:NO usage:NO model:NO activity:NO recent:NO];
     BOOL hiddenContentPass = [details containsString:@"每周"] && ![details containsString:@"5小时"] && ![details containsString:@"订阅"] && [status isEqualToString:@"Codex数据正常"];
+    delegate.showServiceStatus = NO; delegate.homeShowServiceStatus = NO;
+    delegate.serviceStatusProvider = [HUDOpenAIServiceStatusProvider new];
+    [delegate startServiceStatusIfNeeded];
+    BOOL hiddenServiceStatusPass = delegate.serviceStatusProvider == nil && delegate.serviceStatusTimer == nil && delegate.lastServiceStatusFetchAt == 0;
     printf("settings_visibility_test=%s\n", settingsPass ? "pass" : "fail");
     printf("home_module_order_test=%s\n", orderPass ? "pass" : "fail");
     printf("home_full_layout_test=%s\n", homeLayoutPass ? "pass" : "fail");
@@ -1816,10 +1913,11 @@ static int RunUIDiagnostic(void) {
     printf("drag_resize_test=%s\n", scalePass ? "pass" : "fail");
     printf("position_size_lock_test=%s\n", positionLockPass ? "pass" : "fail");
     printf("hidden_sampling_test=%s\n", hiddenSamplingPass ? "pass" : "fail");
+    printf("hidden_service_status_test=%s\n", hiddenServiceStatusPass ? "pass" : "fail");
     printf("timer_tolerance_test=%s\n", timerTolerancePass ? "pass" : "fail");
     printf("timer_tolerance_seconds=%.2f\n", timerTolerance);
     printf("hidden_content_test=%s\n", cardVisibilityPass && hiddenContentPass ? "pass" : "fail");
-    return settingsPass && orderPass && homeLayoutPass && longTextLayoutPass && refreshPolicyPass && stateFallbackPass && migrationPresentationPass && scalePass && positionLockPass && hiddenSamplingPass && timerTolerancePass && cardVisibilityPass && hiddenContentPass ? 0 : 5;
+    return settingsPass && orderPass && homeLayoutPass && longTextLayoutPass && refreshPolicyPass && stateFallbackPass && migrationPresentationPass && scalePass && positionLockPass && hiddenSamplingPass && hiddenServiceStatusPass && timerTolerancePass && cardVisibilityPass && hiddenContentPass ? 0 : 5;
 }
 
 static int RunDiagnostic(void) {
@@ -2064,6 +2162,11 @@ static int RunLogicDiagnostic(void) {
     ];
     NSDictionary *quotaForecast = CodexQuotaForecastFromSamples(quotaSamples, @"f", @"fr", 40, quotaReset, [NSDate dateWithTimeIntervalSince1970:quotaNowValue]);
     BOOL quotaForecastPass = [quotaForecast[@"available"] boolValue] && [quotaForecast[@"headline"] isEqualToString:@"可能提前用完"];
+    NSData *serviceNormalData = [@"{\"status\":{\"indicator\":\"none\"},\"components\":[{\"name\":\"Codex in ChatGPT Desktop\",\"status\":\"operational\"}]}" dataUsingEncoding:NSUTF8StringEncoding];
+    NSData *serviceDegradedData = [@"{\"status\":{\"indicator\":\"minor\"},\"components\":[{\"name\":\"Codex in ChatGPT Desktop\",\"status\":\"degraded_performance\"}]}" dataUsingEncoding:NSUTF8StringEncoding];
+    NSDictionary *serviceNormal = HUDOpenAIServiceStatusFromJSONData(serviceNormalData);
+    NSDictionary *serviceDegraded = HUDOpenAIServiceStatusFromJSONData(serviceDegradedData);
+    BOOL serviceStatusPass = [serviceNormal[@"headline"] isEqualToString:@"Codex服务正常"] && [serviceNormal[@"overallIndicator"] isEqualToString:@"none"] && [serviceDegraded[@"headline"] isEqualToString:@"Codex服务性能下降"] && [serviceDegraded[@"overallIndicator"] isEqualToString:@"minor"] && HUDOpenAIServiceStatusFromJSONData([@"{}" dataUsingEncoding:NSUTF8StringEncoding]).count == 0;
     NSURL *scanRoot = [NSURL fileURLWithPath:[NSTemporaryDirectory() stringByAppendingPathComponent:[@"codex-cost-scan-" stringByAppendingString:NSUUID.UUID.UUIDString]] isDirectory:YES];
     NSURL *scanDay = [scanRoot URLByAppendingPathComponent:@"sessions/2026/02/02" isDirectory:YES];
     NSURL *scanFile = [scanDay URLByAppendingPathComponent:@"rollout-01900000-0000-7000-8000-000000000002.jsonl"];
@@ -2088,7 +2191,7 @@ static int RunLogicDiagnostic(void) {
     BOOL incrementalScanPass = [firstScan[@"thirtyDayTokens"] longLongValue] == 110000 && [firstScan[@"topModel"] isEqualToString:@"gpt-5.6-terra"] && [secondScan[@"thirtyDayTokens"] longLongValue] == 220000 && [secondScan[@"eventCount"] integerValue] == 2 && ![partialLineScan[@"scanIncomplete"] boolValue] && [partialLineScan[@"thirtyDayTokens"] longLongValue] == 220000;
     [NSFileManager.defaultManager removeItemAtURL:scanRoot error:nil];
     BOOL calendarPass = currentPass && delayedPass && emptyPass;
-    BOOL pass = calendarPass && cpuTimebasePass && memoryFormulaPass && activityPass && persistedCwdPass && migrationFallbackPass && costParserPass && costPricingPass && costDedupPass && costWatermarkPass && quotaForecastPass && incrementalScanPass;
+    BOOL pass = calendarPass && cpuTimebasePass && memoryFormulaPass && activityPass && persistedCwdPass && migrationFallbackPass && costParserPass && costPricingPass && costDedupPass && costWatermarkPass && quotaForecastPass && serviceStatusPass && incrementalScanPass;
     printf("calendar_usage_test=%s\n", calendarPass ? "pass" : "fail");
     printf("cpu_timebase_test=%s\n", cpuTimebasePass ? "pass" : "fail");
     printf("memory_used_formula_test=%s\n", memoryFormulaPass ? "pass" : "fail");
@@ -2100,6 +2203,7 @@ static int RunLogicDiagnostic(void) {
     printf("codex_cost_dedup_test=%s\n", costDedupPass ? "pass" : "fail");
     printf("codex_cost_watermark_test=%s\n", costWatermarkPass ? "pass" : "fail");
     printf("codex_quota_forecast_test=%s\n", quotaForecastPass ? "pass" : "fail");
+    printf("openai_service_status_parser_test=%s\n", serviceStatusPass ? "pass" : "fail");
     printf("codex_cost_incremental_scan_test=%s\n", incrementalScanPass ? "pass" : "fail");
     return pass ? 0 : 4;
 }
@@ -2109,7 +2213,7 @@ static int RunUISnapshot(void) {
     AppDelegate *delegate = [AppDelegate new];
     delegate.homeShowFiveHour = YES; delegate.homeShowWeekly = YES; delegate.homeShowUsage = YES; delegate.homeShowTaskActivity = YES;
     delegate.showFiveHourQuota = YES; delegate.showWeeklyQuota = YES; delegate.showUsage = YES; delegate.showTaskActivity = YES; delegate.showRecentTasks = YES;
-    delegate.homeShowLocalCost = NO; delegate.homeShowQuotaForecast = NO; delegate.showLocalCost = YES; delegate.showQuotaForecast = YES;
+    delegate.homeShowLocalCost = NO; delegate.homeShowQuotaForecast = NO; delegate.homeShowServiceStatus = NO; delegate.showLocalCost = YES; delegate.showQuotaForecast = YES; delegate.showServiceStatus = YES;
     delegate.homeCodexModuleOrder = HUDDefaultHomeCodexOrder(); delegate.homeComputerModuleOrder = HUDDefaultHomeComputerOrder();
     NSView *view = [delegate settingsContentView]; view.frame = NSMakeRect(0, 0, 840, 720); [view layoutSubtreeIfNeeded];
     NSBitmapImageRep *bitmap = [view bitmapImageRepForCachingDisplayInRect:view.bounds];
@@ -2118,8 +2222,8 @@ static int RunUISnapshot(void) {
     NSData *png = [bitmap representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
     NSString *path = @"/private/tmp/codex-monitor-hud-settings.png";
     BOOL written = [png writeToFile:path atomically:YES];
-    HUDView *hud = [[HUDView alloc] initWithFrame:NSMakeRect(0, 0, 430, 552)]; hud.appearance = [NSAppearance appearanceNamed:NSAppearanceNameVibrantDark];
-    [hud setPage:1]; [hud setCompact:YES]; [hud setTaskActivityVisible:YES]; [hud setRecentTasksVisible:YES]; [hud setLongestTurnVisible:NO]; [hud setLongestStreakVisible:NO]; [hud setModelQuotaVisible:NO]; [hud setLocalCostVisible:YES]; [hud setQuotaForecastVisible:YES];
+    HUDView *hud = [[HUDView alloc] initWithFrame:NSMakeRect(0, 0, 430, 618)]; hud.appearance = [NSAppearance appearanceNamed:NSAppearanceNameVibrantDark];
+    [hud setPage:1]; [hud setCompact:YES]; [hud setTaskActivityVisible:YES]; [hud setRecentTasksVisible:YES]; [hud setLongestTurnVisible:NO]; [hud setLongestStreakVisible:NO]; [hud setModelQuotaVisible:NO]; [hud setLocalCostVisible:YES]; [hud setQuotaForecastVisible:YES]; [hud setServiceStatusVisible:YES];
     hud.codexStatusLabel.stringValue = @"● Pro · Codex数据正常";
     hud.taskActivityCard.valueLabel.stringValue = @"2个活跃 · 最长8分钟"; hud.taskActivityCard.subtitleLabel.stringValue = @"任务活动为本机趋势推测";
     [hud.recentTasksCard updateRows:@[@"1  电脑监控工具 · 刚刚", @"2  GitHub发布准备 · 12分钟前", @"3  Mac选购研究 · 1小时前"] footer:@"官方任务历史 · 不代表正在运行"];
@@ -2129,6 +2233,7 @@ static int RunUISnapshot(void) {
     hud.usageCard.valueLabel.stringValue = @"8/5 4.8B"; hud.usageCard.subtitleLabel.stringValue = @"今日数据未返回 · 7天7.6B";
     hud.localCostCard.valueLabel.stringValue = @"30天 4.56B · $3,374.59"; hud.localCostCard.subtitleLabel.stringValue = @"今日 2.90B · 7天 3.86B · 本月预计 $11,480.57（估算）";
     hud.quotaForecastCard.valueLabel.stringValue = @"每周 可撑到重置"; hud.quotaForecastCard.subtitleLabel.stringValue = @"预计重置时剩余12% · 中可信";
+    hud.serviceStatusCard.valueLabel.stringValue = @"Codex服务正常"; hud.serviceStatusCard.subtitleLabel.stringValue = @"OpenAI整体正常 · 刚刚";
     hud.codexFreshnessLabel.stringValue = @"额度 刚刚 · 用量 刚刚 · 本机Token 刚刚";
     [hud layoutSubtreeIfNeeded];
     NSBitmapImageRep *hudBitmap = [hud bitmapImageRepForCachingDisplayInRect:hud.bounds]; [hud cacheDisplayInRect:hud.bounds toBitmapImageRep:hudBitmap];
@@ -2172,6 +2277,24 @@ static int RunSingletonDiagnostic(void) {
     return pass ? 0 : 9;
 }
 
+static int RunServiceStatusDiagnostic(void) {
+    HUDOpenAIServiceStatusProvider *provider = [HUDOpenAIServiceStatusProvider new];
+    __block BOOL done = NO;
+    provider.updateHandler = ^{ done = YES; };
+    [provider refresh];
+    NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:10.0];
+    while (!done && deadline.timeIntervalSinceNow > 0) {
+        [NSRunLoop.currentRunLoop runMode:NSDefaultRunLoopMode beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.1]];
+    }
+    HUDOpenAIServiceStatusSnapshot *snapshot = provider.snapshot;
+    [provider stop];
+    printf("openai_service_status_available=%s\n", snapshot.available ? "true" : "false");
+    if (snapshot.headline.length > 0) printf("openai_service_status=%s\n", snapshot.headline.UTF8String);
+    if (snapshot.detail.length > 0) printf("openai_service_detail=%s\n", snapshot.detail.UTF8String);
+    if (snapshot.errorText.length > 0) printf("openai_service_error=%s\n", snapshot.errorText.UTF8String);
+    return snapshot.available ? 0 : 13;
+}
+
 int main(int argc, const char *argv[]) {
     @autoreleasepool {
         if (argc > 2 && strcmp(argv[1], "--singleton-lock-probe") == 0) return RunSingletonLockProbe([NSString stringWithUTF8String:argv[2]]);
@@ -2180,10 +2303,17 @@ int main(int argc, const char *argv[]) {
         if (argc > 1 && strcmp(argv[1], "--codex-diagnostic") == 0) return RunCodexDiagnostic();
         if (argc > 1 && strcmp(argv[1], "--cost-diagnostic") == 0) return RunCostDiagnostic();
         if (argc > 1 && strcmp(argv[1], "--logic-diagnostic") == 0) return RunLogicDiagnostic();
-        if (argc > 1 && strcmp(argv[1], "--ui-diagnostic") == 0) return RunUIDiagnostic();
+        if (argc > 1 && strcmp(argv[1], "--ui-diagnostic") == 0) {
+            @try { return RunUIDiagnostic(); }
+            @catch (NSException *exception) { fprintf(stderr, "ui_diagnostic_exception=%s\n", exception.reason.UTF8String ?: "unknown"); return 14; }
+        }
         if (argc > 1 && strcmp(argv[1], "--update-diagnostic") == 0) return RunUpdateDiagnostic();
         if (argc > 1 && strcmp(argv[1], "--update-handoff-diagnostic") == 0) return RunUpdateHandoffDiagnostic();
-        if (argc > 1 && strcmp(argv[1], "--ui-snapshot") == 0) return RunUISnapshot();
+        if (argc > 1 && strcmp(argv[1], "--service-status-diagnostic") == 0) return RunServiceStatusDiagnostic();
+        if (argc > 1 && strcmp(argv[1], "--ui-snapshot") == 0) {
+            @try { return RunUISnapshot(); }
+            @catch (NSException *exception) { fprintf(stderr, "ui_snapshot_exception=%s\n", exception.reason.UTF8String ?: "unknown"); return 14; }
+        }
         if (!HUDAcquireApplicationSingletonLock()) return 0;
         NSApplication *application = NSApplication.sharedApplication; AppDelegate *delegate = [AppDelegate new]; application.delegate = delegate; [application run];
     }

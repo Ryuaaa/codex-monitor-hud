@@ -57,6 +57,7 @@
 @property(nonatomic, strong) HUDMetricCard *homeModelQuotaCard;
 @property(nonatomic, strong) HUDMetricCard *homeLocalCostCard;
 @property(nonatomic, strong) HUDMetricCard *homeQuotaForecastCard;
+@property(nonatomic, strong) HUDMetricCard *homeServiceStatusCard;
 @property(nonatomic, strong) NSStackView *homeUsageHistoryRow;
 @property(nonatomic, strong) HUDMetricCard *homeLongestTurnCard;
 @property(nonatomic, strong) HUDMetricCard *homeLongestStreakCard;
@@ -86,6 +87,7 @@
 @property(nonatomic, strong) HUDMetricCard *modelQuotaCard;
 @property(nonatomic, strong) HUDMetricCard *localCostCard;
 @property(nonatomic, strong) HUDMetricCard *quotaForecastCard;
+@property(nonatomic, strong) HUDMetricCard *serviceStatusCard;
 @property(nonatomic, strong) NSStackView *usageHistoryRow;
 @property(nonatomic, strong) HUDMetricCard *longestTurnCard;
 @property(nonatomic, strong) HUDMetricCard *longestStreakCard;
@@ -123,6 +125,7 @@
 - (void)setModelQuotaVisible:(BOOL)visible;
 - (void)setLocalCostVisible:(BOOL)visible;
 - (void)setQuotaForecastVisible:(BOOL)visible;
+- (void)setServiceStatusVisible:(BOOL)visible;
 - (void)setTaskActivityVisible:(BOOL)visible;
 - (void)setRecentTasksVisible:(BOOL)visible;
 - (void)setLongestTurnVisible:(BOOL)visible;
@@ -138,6 +141,7 @@
 - (void)setHomeModelQuotaVisible:(BOOL)visible;
 - (void)setHomeLocalCostVisible:(BOOL)visible;
 - (void)setHomeQuotaForecastVisible:(BOOL)visible;
+- (void)setHomeServiceStatusVisible:(BOOL)visible;
 - (void)setHomeTaskActivityVisible:(BOOL)visible;
 - (void)setHomeRecentTasksVisible:(BOOL)visible;
 - (void)setHomeLongestTurnVisible:(BOOL)visible;

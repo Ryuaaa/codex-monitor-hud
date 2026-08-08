@@ -17,6 +17,7 @@
 - 接口暂时没有返回某个额度窗口时明确显示“当前未返回”，不会当成0%。
 - “Token用量与费用”优先采用官方每日汇总作为Token总量，再用本机会话记录中的模型和输入/输出结构估算30天API等价费用及本月费用；官方当天尚未结算时，今日值临时使用本机趋势。费用在卡片中只标一次“估算”。该模块默认显示，主页和Codex页可分别关闭。
 - “额度趋势预测”根据同一额度窗口内的剩余百分比变化判断按当前速度能否撑到重置，至少积累15分钟后显示；5小时与每周窗口分别计算。
+- “OpenAI服务状态”直接读取官方公开状态页中的“Codex in ChatGPT Desktop”和OpenAI整体状态，用来辅助区分官方故障、本机网络和账号问题。Codex页默认显示，主页默认关闭并可自行加入。
 - 官方“账户Token统计”保留为可选模块；接口尚未返回今天的数据时显示“最新日期 + 对应用量”，不会把缺失写成0。升级到本地统计的版本后，该模块默认关闭，仍可重新勾选。
 - 模型专属额度属于高级显示，默认关闭；只有接口确实返回独立额度时才出现。
 - 最长单次任务时长和历史最长连续天数可分别加入主页或Codex页，默认关闭。
@@ -45,6 +46,7 @@
 - 官方任务列表中的工作目录优先采用状态数据库保存的最新值；若会话记录已迁移、压缩或暂不可读，工具不会启动持续解压任务，也不会把缺失记录显示成“0个活跃任务”，而会明确标注无法可靠判断或仅显示可确认部分。
 - 本机模型与费用样本每5分钟在低优先级后台增量更新。首次补齐每轮最多读取64MB，普通正文流式跳过，单行最多保留512KB；补齐完成后只读取新增部分。关闭主页和Codex页的“Token用量与费用”后停止该扫描。
 - 额度预测只在官方额度刷新时保存剩余百分比、重置时间和采样时间，不增加新的高频定时器。
+- OpenAI官方服务状态正常时每10分钟检查一次，故障或读取失败时每2分钟重试；主页和Codex页都关闭该模块后停止请求。请求不带账号、Cookie或Token。
 - 已隐藏且当前不需要的排行榜、网络、交换空间和热状态停止采集；只查看Codex页且关闭历史记录时，电脑采样定时器会暂停。
 - 所有定时器允许macOS在小范围内合并唤醒；隐藏模块会停止对应采集，任务活动会在5秒与20秒之间自动切换。
 - 历史：每 60 秒写一条这一分钟的平均值与峰值，不保存每个 5 秒原始样本。
@@ -105,10 +107,11 @@ Token增量缓存和额度预测样本位于：
 "$HOME/Applications/Codex Monitor HUD.app/Contents/MacOS/CodexMonitorHUD" --ui-diagnostic
 "$HOME/Applications/Codex Monitor HUD.app/Contents/MacOS/CodexMonitorHUD" --update-diagnostic
 "$HOME/Applications/Codex Monitor HUD.app/Contents/MacOS/CodexMonitorHUD" --update-handoff-diagnostic
+"$HOME/Applications/Codex Monitor HUD.app/Contents/MacOS/CodexMonitorHUD" --service-status-diagnostic
 "$HOME/Applications/Codex Monitor HUD.app/Contents/MacOS/CodexMonitorHUD" --singleton-diagnostic
 ```
 
-第二条必须返回 `quota_available=true`、`account_available=true` 和 `usage_available=true`，并给出官方7天、30天和月度Token汇总。第三条验证本机模型样本、费用和计价覆盖率；首次运行可能显示 `local_cost_scan_incomplete=true`，界面会标为“模型样本更新中”，但Token总量仍优先采用官方汇总。第四条包含Token解析、累计高水位、价格、长上下文、重复记录去重、增量缓存和额度预测固定测试；第五条检查集中设置、位置和大小锁定、隐藏停采及等比缩放；其余命令分别检查更新、安全交接和单实例保护。
+第二条必须返回 `quota_available=true`、`account_available=true` 和 `usage_available=true`，并给出官方7天、30天和月度Token汇总。第三条验证本机模型样本、费用和计价覆盖率；首次运行可能显示 `local_cost_scan_incomplete=true`，界面会标为“模型样本更新中”，但Token总量仍优先采用官方汇总。第四条包含Token解析、累计高水位、价格、长上下文、重复记录去重、增量缓存、额度预测和服务状态解析固定测试；第五条检查集中设置、位置和大小锁定、隐藏停采及等比缩放；倒数第二条实际访问OpenAI官方状态页，其余命令分别检查更新、安全交接和单实例保护。
 
 ## 开源
 
