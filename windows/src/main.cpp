@@ -813,7 +813,7 @@ std::wstring BuildQuotaForecastCardText(const AppState& state) {
     AppendQuotaForecastLine(output, L"5小时", state.latestQuotaForecast->fiveHour);
     AppendQuotaForecastLine(output, L"每周", state.latestQuotaForecast->weekly);
     if (state.latestQuotaForecast->historySaveFailed) {
-        output << L"\r\n历史保存失败；当前结果未丢失";
+        output << L"\r\n历史保存失败；趋势可能无法继续积累";
     } else if (state.latestCodexData.rateLimits.lastFailure) {
         output << L"\r\n更新失败，显示上次预测";
     }

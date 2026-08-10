@@ -431,6 +431,10 @@ void TestQuotaForecastDemandGating(HWND window,
 
     Expect(worker.SetQuotaForecastEnabled(true),
            "explicitly enabling quota forecast must change worker demand");
+    Expect(!worker.IsBusy(),
+           "enabling forecast beside active Codex cards must not add a network read");
+    Expect(worker.RequestRefresh(),
+           "the focused test must explicitly request its enabled refresh");
     const auto enabled = WaitForRefresh(window, worker, 10s);
     Expect(enabled && enabled->succeeded && enabled->quotaForecastUpdate,
            "enabling quota forecast must publish a forecast update");

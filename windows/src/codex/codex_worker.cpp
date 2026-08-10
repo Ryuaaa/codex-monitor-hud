@@ -137,8 +137,7 @@ QuotaWindowForecastRefresh CalculateWindowForecast(
 QuotaForecastRefresh RefreshQuotaForecast(
     const RateLimitsData& limits,
     const std::filesystem::path& historyPath,
-    std::uint64_t expectedEpoch,
-    const std::atomic<std::uint64_t>& currentEpoch) {
+    QuotaHistoryAtomicReplace atomicReplace) {
     const auto nowDuration = std::chrono::duration_cast<std::chrono::seconds>(
         std::chrono::system_clock::now().time_since_epoch());
     const std::int64_t nowUnixSeconds = nowDuration.count();
@@ -150,21 +149,7 @@ QuotaForecastRefresh RefreshQuotaForecast(
         MakeHistoryWindow(weekly),
     };
 
-    const QuotaHistoryAtomicReplace replace =
-        [&currentEpoch, expectedEpoch](const std::filesystem::path& temporary,
-                                      const std::filesystem::path& destination) {
-            if (currentEpoch.load(std::memory_order_acquire) != expectedEpoch) {
-                return std::make_error_code(std::errc::operation_canceled);
-            }
-            if (MoveFileExW(temporary.c_str(), destination.c_str(),
-                            MOVEFILE_REPLACE_EXISTING |
-                                MOVEFILE_WRITE_THROUGH)) {
-                return std::error_code{};
-            }
-            return std::error_code(static_cast<int>(GetLastError()),
-                                   std::system_category());
-        };
-    QuotaHistoryStore store(historyPath, replace);
+    QuotaHistoryStore store(historyPath, std::move(atomicReplace));
     QuotaHistoryLoadResult loaded = store.Load(nowUnixSeconds);
     std::vector<QuotaHistorySample> history =
         loaded.ok() ? std::move(loaded.samples)
@@ -245,18 +230,16 @@ bool CodexWorker::Start(HWND completionWindow,
 }
 
 bool CodexWorker::SetQuotaForecastEnabled(bool enabled) {
-    bool wakeWorker = false;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (!started_ || quotaForecastEnabled_ == enabled) return false;
         quotaForecastEnabled_ = enabled;
         quotaForecastEpoch_.fetch_add(1, std::memory_order_acq_rel);
-        if (enabled && schedule_.IsActive()) {
-            wakeWorker = schedule_.Request();
-            if (wakeWorker) nextAutomaticRefresh_.reset();
-        }
     }
-    if (wakeWorker || !enabled) wake_.notify_one();
+    // Enabling while other Codex cards already keep the worker active reuses
+    // the next normal refresh instead of creating an extra app-server read.
+    // A paused worker is activated immediately by the shared demand gate.
+    wake_.notify_one();
     return true;
 }
 
@@ -429,9 +412,30 @@ void CodexWorker::Run() {
             refresh.data.rateLimits.lastValue &&
             cancellationEpoch_.load(std::memory_order_acquire) == refreshEpoch &&
             quotaForecastEpoch_.load(std::memory_order_acquire) == forecastEpoch) {
+            const QuotaHistoryAtomicReplace replace =
+                [this, forecastEpoch](const std::filesystem::path& temporary,
+                                      const std::filesystem::path& destination) {
+                    // Keep the visibility check and the atomic replacement in
+                    // one critical section. Once disabling returns, no pending
+                    // history commit can still land on disk.
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    if (!started_ || !quotaForecastEnabled_ ||
+                        quotaForecastEpoch_.load(std::memory_order_acquire) !=
+                            forecastEpoch) {
+                        return std::make_error_code(
+                            std::errc::operation_canceled);
+                    }
+                    if (MoveFileExW(temporary.c_str(), destination.c_str(),
+                                    MOVEFILE_REPLACE_EXISTING |
+                                        MOVEFILE_WRITE_THROUGH)) {
+                        return std::error_code{};
+                    }
+                    return std::error_code(
+                        static_cast<int>(GetLastError()),
+                        std::system_category());
+                };
             quotaForecastUpdate = RefreshQuotaForecast(
-                *refresh.data.rateLimits.lastValue, quotaHistoryPath,
-                forecastEpoch, quotaForecastEpoch_);
+                *refresh.data.rateLimits.lastValue, quotaHistoryPath, replace);
         }
 
         const bool succeeded = RefreshSucceeded(refresh.report, refresh.data);
