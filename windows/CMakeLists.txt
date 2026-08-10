@@ -148,7 +148,18 @@ if(WIN32)
             WINVER=0x0A00
             _WIN32_WINNT=0x0A00
         )
-        target_link_libraries(CodexMonitorCodexWorkerTests PRIVATE user32 windowsapp)
+        if(MSVC)
+            target_compile_options(CodexMonitorCodexWorkerTests PRIVATE
+                $<$<COMPILE_LANGUAGE:CXX>:/Zi>
+                $<$<COMPILE_LANGUAGE:CXX>:/Zo>)
+            target_link_options(CodexMonitorCodexWorkerTests PRIVATE
+                /DEBUG:FULL
+                /INCREMENTAL:NO
+                /OPT:REF
+                /OPT:ICF)
+        endif()
+        target_link_libraries(CodexMonitorCodexWorkerTests PRIVATE
+            user32 windowsapp dbghelp)
         add_test(NAME windows_codex_worker
             COMMAND CodexMonitorCodexWorkerTests
                     $<TARGET_FILE:CodexMonitorFakeCodexAppServer>)

@@ -3,11 +3,16 @@
 #endif
 
 #include <windows.h>
+#include <dbghelp.h>
 #include <tlhelp32.h>
 
 #include "codex/codex_worker.h"
 
+#include <array>
+#include <atomic>
 #include <chrono>
+#include <cstddef>
+#include <cstdio>
 #include <cwchar>
 #include <filesystem>
 #include <iostream>
@@ -23,6 +28,80 @@ using namespace std::chrono_literals;
 
 constexpr UINT kWorkerReadyMessage = WM_APP + 41;
 int failures = 0;
+std::atomic_flag crashLoggerActive = ATOMIC_FLAG_INIT;
+
+void PrintCrashFrame(HANDLE process, DWORD64 address, std::size_t index) {
+    alignas(SYMBOL_INFO)
+        std::array<std::byte, sizeof(SYMBOL_INFO) + MAX_SYM_NAME> storage{};
+    auto* symbol = reinterpret_cast<SYMBOL_INFO*>(storage.data());
+    symbol->SizeOfStruct = sizeof(SYMBOL_INFO);
+    symbol->MaxNameLen = MAX_SYM_NAME;
+    DWORD64 symbolDisplacement = 0;
+    const BOOL hasSymbol = SymFromAddr(process, address, &symbolDisplacement, symbol);
+
+    IMAGEHLP_LINE64 line{};
+    line.SizeOfStruct = sizeof(line);
+    DWORD lineDisplacement = 0;
+    const BOOL hasLine = SymGetLineFromAddr64(process, address, &lineDisplacement,
+                                              &line);
+    std::fprintf(stderr, "worker_crash_frame=%zu address=0x%llx", index,
+                 static_cast<unsigned long long>(address));
+    if (hasSymbol) {
+        std::fprintf(stderr, " symbol=%s+0x%llx", symbol->Name,
+                     static_cast<unsigned long long>(symbolDisplacement));
+    }
+    if (hasLine && line.FileName) {
+        std::fprintf(stderr, " source=%s:%lu", line.FileName,
+                     static_cast<unsigned long>(line.LineNumber));
+    }
+    std::fputc('\n', stderr);
+}
+
+LONG WINAPI LogUnhandledWorkerException(EXCEPTION_POINTERS* exception) {
+    if (!exception || !exception->ExceptionRecord || !exception->ContextRecord ||
+        crashLoggerActive.test_and_set()) {
+        return EXCEPTION_EXECUTE_HANDLER;
+    }
+
+    const DWORD code = exception->ExceptionRecord->ExceptionCode;
+    const void* address = exception->ExceptionRecord->ExceptionAddress;
+    std::fprintf(stderr, "worker_crash_code=0x%08lx address=%p thread=%lu\n",
+                 static_cast<unsigned long>(code), address,
+                 static_cast<unsigned long>(GetCurrentThreadId()));
+
+#if defined(_M_X64)
+    HANDLE process = GetCurrentProcess();
+    HANDLE thread = GetCurrentThread();
+    CONTEXT context = *exception->ContextRecord;
+    STACKFRAME64 frame{};
+    frame.AddrPC.Offset = context.Rip;
+    frame.AddrPC.Mode = AddrModeFlat;
+    frame.AddrStack.Offset = context.Rsp;
+    frame.AddrStack.Mode = AddrModeFlat;
+    frame.AddrFrame.Offset = context.Rbp;
+    frame.AddrFrame.Mode = AddrModeFlat;
+
+    PrintCrashFrame(process, frame.AddrPC.Offset, 0);
+    for (std::size_t index = 1; index < 32; ++index) {
+        if (!StackWalk64(IMAGE_FILE_MACHINE_AMD64, process, thread, &frame,
+                         &context, nullptr, SymFunctionTableAccess64,
+                         SymGetModuleBase64, nullptr) ||
+            frame.AddrPC.Offset == 0) {
+            break;
+        }
+        PrintCrashFrame(process, frame.AddrPC.Offset, index);
+    }
+#endif
+    std::fflush(stderr);
+    return EXCEPTION_EXECUTE_HANDLER;
+}
+
+void InstallCrashStackLogger() {
+    SymSetOptions(SYMOPT_UNDNAME | SYMOPT_LOAD_LINES |
+                  SYMOPT_FAIL_CRITICAL_ERRORS | SYMOPT_DEFERRED_LOADS);
+    SymInitialize(GetCurrentProcess(), nullptr, TRUE);
+    SetUnhandledExceptionFilter(LogUnhandledWorkerException);
+}
 
 void Stage(const char* value) {
     std::cerr << "worker_test_stage=" << value << '\n';
@@ -256,6 +335,7 @@ void TestFailureBackoffAndRecovery(HWND window) {
 }  // namespace
 
 int wmain(int argc, wchar_t** argv) {
+    InstallCrashStackLogger();
     Stage("main_begin");
     const std::filesystem::path fakeServer =
         argc >= 2 ? std::filesystem::path(argv[1]) : std::filesystem::path{};
