@@ -21,10 +21,12 @@ struct ProcessSnapshot {
     bool isTargetRoot = false;
     bool isTargetTree = false;
 
+    bool cpuTimeAttempted = false;
     bool cpuTimeAvailable = false;
     std::uint64_t creationTime100ns = 0;
     std::uint64_t cpuTime100ns = 0;
 
+    bool workingSetAttempted = false;
     bool workingSetAvailable = false;
     std::uint64_t workingSetBytes = 0;
 };
@@ -73,6 +75,7 @@ struct PerformanceSnapshot {
 
     std::uint32_t readableWorkingSetProcessCount = 0;
     std::uint32_t unreadableProcessMetricCount = 0;
+    bool topMemoryRankingAvailable = false;
     std::vector<RankedProcess> topMemoryProcesses;
 };
 

@@ -99,33 +99,45 @@ void CapturePageFiles(RawPerformanceSnapshot& destination) {
     destination.pageFilePeakBytes = totals.peakBytes;
 }
 
-void CaptureProcessMetrics(ProcessSnapshot& process) {
+void CaptureProcessMetrics(ProcessSnapshot& process, bool captureAllProcessMemory) {
     if (process.processId == 0) return;
+
+    const bool captureCpu = process.isTargetTree;
+    const bool captureMemory = process.isTargetTree || captureAllProcessMemory;
+    if (!captureCpu && !captureMemory) return;
+
+    process.cpuTimeAttempted = captureCpu;
+    process.workingSetAttempted = captureMemory;
 
     HANDLE handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, process.processId);
     if (!handle) return;
 
-    FILETIME creation{};
-    FILETIME exit{};
-    FILETIME kernel{};
-    FILETIME user{};
-    if (GetProcessTimes(handle, &creation, &exit, &kernel, &user)) {
-        process.cpuTimeAvailable = true;
-        process.creationTime100ns = FileTimeToUint64(creation);
-        process.cpuTime100ns = SaturatingAdd(FileTimeToUint64(kernel), FileTimeToUint64(user));
+    if (captureCpu) {
+        FILETIME creation{};
+        FILETIME exit{};
+        FILETIME kernel{};
+        FILETIME user{};
+        if (GetProcessTimes(handle, &creation, &exit, &kernel, &user)) {
+            process.cpuTimeAvailable = true;
+            process.creationTime100ns = FileTimeToUint64(creation);
+            process.cpuTime100ns =
+                SaturatingAdd(FileTimeToUint64(kernel), FileTimeToUint64(user));
+        }
     }
 
-    PROCESS_MEMORY_COUNTERS_EX memory{};
-    memory.cb = static_cast<DWORD>(sizeof(memory));
-    if (GetProcessMemoryInfo(handle, reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&memory),
-                             static_cast<DWORD>(sizeof(memory)))) {
-        process.workingSetAvailable = true;
-        process.workingSetBytes = static_cast<std::uint64_t>(memory.WorkingSetSize);
+    if (captureMemory) {
+        PROCESS_MEMORY_COUNTERS_EX memory{};
+        memory.cb = static_cast<DWORD>(sizeof(memory));
+        if (GetProcessMemoryInfo(handle, reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&memory),
+                                 static_cast<DWORD>(sizeof(memory)))) {
+            process.workingSetAvailable = true;
+            process.workingSetBytes = static_cast<std::uint64_t>(memory.WorkingSetSize);
+        }
     }
     CloseHandle(handle);
 }
 
-void CaptureProcesses(RawPerformanceSnapshot& destination) {
+void CaptureProcesses(RawPerformanceSnapshot& destination, bool captureAllProcessMemory) {
     HANDLE processList = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
     if (processList == INVALID_HANDLE_VALUE) return;
 
@@ -149,23 +161,87 @@ void CaptureProcesses(RawPerformanceSnapshot& destination) {
     for (ProcessSnapshot& process : destination.processes) {
         process.isTargetRoot = IsTargetRootExecutable(process.executableName);
         process.isTargetTree = targetIds.find(process.processId) != targetIds.end();
-        CaptureProcessMetrics(process);
+        CaptureProcessMetrics(process, captureAllProcessMemory);
     }
 }
 
 }  // namespace
 
-RawPerformanceSnapshot WindowsSampler::CaptureRawSnapshot() const {
+RawPerformanceSnapshot WindowsSampler::CaptureRawSnapshot(SampleMode mode) const {
     RawPerformanceSnapshot snapshot{};
     CaptureSystemCpu(snapshot.systemCpu);
     CapturePhysicalMemory(snapshot);
-    CaptureCommitMemory(snapshot);
-    CapturePageFiles(snapshot);
-    CaptureProcesses(snapshot);
+    if (mode == SampleMode::kFastAndSlow) {
+        CaptureCommitMemory(snapshot);
+        CapturePageFiles(snapshot);
+    }
+    CaptureProcesses(snapshot, mode == SampleMode::kFastAndSlow);
     return snapshot;
 }
 
-PerformanceSnapshot WindowsSampler::BuildPerformanceSnapshot(RawPerformanceSnapshot raw) {
+void WindowsSampler::UpdateAndApplySlowMetrics(RawPerformanceSnapshot& raw,
+                                               PerformanceSnapshot& snapshot,
+                                               SampleMode mode) {
+    if (mode == SampleMode::kFastAndSlow) {
+        if (raw.commitAvailable) {
+            slowMetricsCache_.commitAvailable = true;
+            slowMetricsCache_.commitTotalBytes = raw.commitTotalBytes;
+            slowMetricsCache_.commitLimitBytes = raw.commitLimitBytes;
+            slowMetricsCache_.commitPeakBytes = raw.commitPeakBytes;
+        }
+        if (raw.pageFileAvailable) {
+            slowMetricsCache_.pageFileAvailable = true;
+            slowMetricsCache_.pageFileTotalBytes = raw.pageFileTotalBytes;
+            slowMetricsCache_.pageFileUsedBytes = raw.pageFileUsedBytes;
+            slowMetricsCache_.pageFilePeakBytes = raw.pageFilePeakBytes;
+        }
+
+        if (raw.processListAvailable) {
+            std::uint32_t readableCount = 0;
+            std::uint32_t unreadableCount = 0;
+            for (const ProcessSnapshot& process : raw.processes) {
+                if (!process.workingSetAttempted) continue;
+                if (process.workingSetAvailable) {
+                    ++readableCount;
+                } else if (process.processId != 0) {
+                    ++unreadableCount;
+                }
+            }
+            if (readableCount > 0) {
+                slowMetricsCache_.rankingAvailable = true;
+                slowMetricsCache_.readableWorkingSetProcessCount = readableCount;
+                slowMetricsCache_.unreadableProcessMetricCount = unreadableCount;
+                slowMetricsCache_.topMemoryProcesses =
+                    SelectTopMemoryProcesses(raw.processes, 5);
+            } else if (!slowMetricsCache_.rankingAvailable) {
+                snapshot.unreadableProcessMetricCount = unreadableCount;
+            }
+        }
+    }
+
+    if (slowMetricsCache_.commitAvailable) {
+        raw.commitAvailable = true;
+        raw.commitTotalBytes = slowMetricsCache_.commitTotalBytes;
+        raw.commitLimitBytes = slowMetricsCache_.commitLimitBytes;
+        raw.commitPeakBytes = slowMetricsCache_.commitPeakBytes;
+    }
+    if (slowMetricsCache_.pageFileAvailable) {
+        raw.pageFileAvailable = true;
+        raw.pageFileTotalBytes = slowMetricsCache_.pageFileTotalBytes;
+        raw.pageFileUsedBytes = slowMetricsCache_.pageFileUsedBytes;
+        raw.pageFilePeakBytes = slowMetricsCache_.pageFilePeakBytes;
+    }
+    if (slowMetricsCache_.rankingAvailable) {
+        snapshot.topMemoryRankingAvailable = true;
+        snapshot.readableWorkingSetProcessCount =
+            slowMetricsCache_.readableWorkingSetProcessCount;
+        snapshot.unreadableProcessMetricCount = slowMetricsCache_.unreadableProcessMetricCount;
+        snapshot.topMemoryProcesses = slowMetricsCache_.topMemoryProcesses;
+    }
+}
+
+PerformanceSnapshot WindowsSampler::BuildPerformanceSnapshot(RawPerformanceSnapshot raw,
+                                                               SampleMode mode) {
     PerformanceSnapshot snapshot{};
     snapshot.systemCpuNeedsBaseline = raw.systemCpu.available && !previousSystemCpu_.has_value();
 
@@ -182,13 +258,6 @@ PerformanceSnapshot WindowsSampler::BuildPerformanceSnapshot(RawPerformanceSnaps
     std::uint32_t targetCpuMissingCount = 0;
 
     for (const ProcessSnapshot& process : raw.processes) {
-        if (process.workingSetAvailable) {
-            ++snapshot.readableWorkingSetProcessCount;
-        }
-        if (process.processId != 0 && !process.cpuTimeAvailable && !process.workingSetAvailable) {
-            ++snapshot.unreadableProcessMetricCount;
-        }
-
         if (process.isTargetRoot) ++snapshot.targetRootCount;
         if (process.isTargetTree) {
             ++snapshot.targetProcessCount;
@@ -229,7 +298,7 @@ PerformanceSnapshot WindowsSampler::BuildPerformanceSnapshot(RawPerformanceSnaps
         snapshot.targetCpuPartial = targetCpuMissingCount > 0;
     }
 
-    snapshot.topMemoryProcesses = SelectTopMemoryProcesses(raw.processes, 5);
+    UpdateAndApplySlowMetrics(raw, snapshot, mode);
     snapshot.raw = std::move(raw);
 
     if (snapshot.raw.systemCpu.available) previousSystemCpu_ = snapshot.raw.systemCpu;
@@ -237,8 +306,8 @@ PerformanceSnapshot WindowsSampler::BuildPerformanceSnapshot(RawPerformanceSnaps
     return snapshot;
 }
 
-PerformanceSnapshot WindowsSampler::Sample() {
-    return BuildPerformanceSnapshot(CaptureRawSnapshot());
+PerformanceSnapshot WindowsSampler::Sample(SampleMode mode) {
+    return BuildPerformanceSnapshot(CaptureRawSnapshot(mode), mode);
 }
 
 void WindowsSampler::ResetCpuBaseline() {

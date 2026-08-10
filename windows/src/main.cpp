@@ -31,7 +31,8 @@ constexpr wchar_t kSingletonName[] = L"Local\\CodexMonitorHUDWindowsFoundation";
 constexpr int kPinButtonId = 1001;
 constexpr int kMinimizeButtonId = 1002;
 constexpr UINT_PTR kSampleTimerId = 2001;
-constexpr UINT kSampleIntervalMs = 5000;
+constexpr UINT kFastSampleIntervalMs = 5000;
+constexpr ULONGLONG kSlowSampleIntervalMs = 20000;
 constexpr int kMinimumWidth = 390;
 constexpr int kMinimumHeight = 600;
 
@@ -50,6 +51,7 @@ struct AppState {
     bool alwaysOnTop = true;
     bool samplingPaused = false;
     bool timerActive = false;
+    ULONGLONG nextSlowSampleTick = 0;
     codex_monitor::WindowsSampler sampler;
     codex_monitor::PerformanceSnapshot latestSnapshot;
 };
@@ -219,9 +221,7 @@ std::wstring BuildCommitCardText(const codex_monitor::PerformanceSnapshot& snaps
 std::wstring BuildRankingCardText(const codex_monitor::PerformanceSnapshot& snapshot) {
     std::wostringstream output;
     output << L"TOP 5 PROCESSES BY WORKING SET\r\n";
-    if (!snapshot.raw.processListAvailable) {
-        output << L"Process list unavailable\r\n";
-    } else if (snapshot.topMemoryProcesses.empty()) {
+    if (!snapshot.topMemoryRankingAvailable || snapshot.topMemoryProcesses.empty()) {
         output << L"Working-set metrics unavailable\r\n";
     } else {
         for (std::size_t index = 0; index < snapshot.topMemoryProcesses.size(); ++index) {
@@ -252,7 +252,7 @@ void UpdateStatusText(AppState& state) {
     if (state.samplingPaused) {
         output << L"paused while minimized";
     } else if (state.timerActive) {
-        output << L"5 seconds";
+        output << L"5 s fast / 20 s full";
     } else {
         output << L"timer unavailable";
     }
@@ -362,8 +362,11 @@ bool IsModuleCard(const AppState& state, HWND control) {
            state.moduleCards.end();
 }
 
-void RefreshPerformanceSnapshot(AppState& state) {
-    state.latestSnapshot = state.sampler.Sample();
+void RefreshPerformanceSnapshot(AppState& state, codex_monitor::SampleMode mode) {
+    state.latestSnapshot = state.sampler.Sample(mode);
+    if (mode == codex_monitor::SampleMode::kFastAndSlow) {
+        state.nextSlowSampleTick = GetTickCount64() + kSlowSampleIntervalMs;
+    }
     UpdateModuleCards(state);
     UpdateStatusText(state);
 }
@@ -375,7 +378,7 @@ void StopSamplingTimer(HWND window, AppState& state) {
 
 void StartSamplingTimer(HWND window, AppState& state) {
     if (state.samplingPaused) return;
-    state.timerActive = SetTimer(window, kSampleTimerId, kSampleIntervalMs, nullptr) != 0;
+    state.timerActive = SetTimer(window, kSampleTimerId, kFastSampleIntervalMs, nullptr) != 0;
     UpdateStatusText(state);
 }
 
@@ -391,7 +394,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
     switch (message) {
         case WM_CREATE:
             if (!state || !CreateControls(window, *state)) return -1;
-            RefreshPerformanceSnapshot(*state);
+            RefreshPerformanceSnapshot(*state, codex_monitor::SampleMode::kFastAndSlow);
             StartSamplingTimer(window, *state);
             return 0;
 
@@ -409,7 +412,11 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
 
         case WM_TIMER:
             if (state && wParam == kSampleTimerId && !state->samplingPaused) {
-                RefreshPerformanceSnapshot(*state);
+                const codex_monitor::SampleMode mode =
+                    GetTickCount64() >= state->nextSlowSampleTick
+                        ? codex_monitor::SampleMode::kFastAndSlow
+                        : codex_monitor::SampleMode::kFast;
+                RefreshPerformanceSnapshot(*state, mode);
                 return 0;
             }
             break;
@@ -426,7 +433,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             LayoutControls(window, *state);
             if (state->samplingPaused) {
                 state->samplingPaused = false;
-                RefreshPerformanceSnapshot(*state);
+                RefreshPerformanceSnapshot(*state, codex_monitor::SampleMode::kFastAndSlow);
                 StartSamplingTimer(window, *state);
             }
             return 0;

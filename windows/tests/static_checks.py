@@ -34,7 +34,9 @@ def main() -> None:
         "HWND_NOTOPMOST": "topmost mode can be disabled",
         "WM_GETMINMAXINFO": "resizing has a usable minimum size",
         "WM_DPICHANGED": "layout follows per-monitor DPI changes",
-        "kSampleIntervalMs = 5000": "visible sampling uses the requested five-second cadence",
+        "kFastSampleIntervalMs = 5000": "system and target sampling uses five seconds",
+        "kSlowSampleIntervalMs = 20000": "commit, paging, and ranking use twenty seconds",
+        "GetTickCount64() >= state->nextSlowSampleTick": "slow sampling is scheduled by elapsed time",
         "WM_TIMER": "the HUD refreshes from the sampler",
         "SIZE_MINIMIZED": "minimization has an explicit low-burden path",
         "KillTimer(window, kSampleTimerId)": "minimization stops periodic sampling",
@@ -65,6 +67,12 @@ def main() -> None:
         "ComputeSystemCpuPercent": "system CPU is calculated from two snapshots",
         "ComputeWholeMachineCpuShare": "target CPU is normalized to the machine denominator",
         "SelectTopMemoryProcesses(raw.processes, 5)": "exactly five top-memory entries are requested",
+        "const bool captureCpu = process.isTargetTree": "non-target processes do not receive CPU queries",
+        "process.isTargetTree || captureAllProcessMemory": "all-process memory is limited to slow samples",
+        "if (mode == SampleMode::kFastAndSlow)": "slow APIs have an explicit cadence gate",
+        "slowMetricsCache_.commitAvailable": "last valid commit values survive fast samples or failures",
+        "slowMetricsCache_.pageFileAvailable": "last valid page-file values survive fast samples or failures",
+        "slowMetricsCache_.rankingAvailable": "last valid ranking survives fast samples or failures",
     }
     for token, reason in sampler_contracts.items():
         require(SAMPLER, token, reason)
@@ -74,11 +82,19 @@ def main() -> None:
         "struct PerformanceSnapshot": "derived UI readings have a clear snapshot boundary",
         "std::optional<double> systemCpuPercent": "unavailable CPU is represented, not replaced by zero",
         "bool workingSetAvailable": "permission and exit races can degrade per process",
+        "bool workingSetAttempted": "intentional fast-sample omissions are not permission failures",
         "bool processListAvailable": "process enumeration failure is represented explicitly",
+        "bool topMemoryRankingAvailable": "a cached empty state is distinguishable from unavailable data",
     }
     for token, reason in snapshot_contracts.items():
         require(SNAPSHOT, token, reason)
     require(SAMPLER_HEADER, "class WindowsSampler", "native collection has a sampler module")
+    require(SAMPLER_HEADER, "enum class SampleMode", "fast and slow sampling are explicit")
+
+    if MAIN.count("SampleMode::kFastAndSlow") < 3:
+        raise AssertionError("initial startup, scheduled refresh, and restore must request slow metrics")
+    if SAMPLER.count("GetProcessTimes") != 1:
+        raise AssertionError("process CPU should have one target-gated native query site")
 
     math_contracts = {
         "BuildTargetProcessSet": "process-tree selection is portable and testable",
