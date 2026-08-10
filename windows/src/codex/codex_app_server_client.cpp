@@ -12,6 +12,7 @@
 #endif
 
 #include <winrt/Windows.Data.Json.h>
+#include <winrt/Windows.Foundation.Collections.h>
 
 #include <array>
 #include <chrono>

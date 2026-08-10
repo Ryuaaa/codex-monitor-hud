@@ -1562,7 +1562,8 @@ LRESULT CALLBACK SettingsWindowProcedure(HWND window, UINT message,
                 const int line = ScaleForDpi(window, 30);
                 RECT client{};
                 GetClientRect(window, &client);
-                const int page = std::max(line, client.bottom - client.top - line);
+                const int page = std::max(
+                    line, static_cast<int>(client.bottom - client.top) - line);
                 switch (LOWORD(wParam)) {
                     case SB_LINEUP:
                         requested -= line;
