@@ -245,6 +245,32 @@ if(BUILD_TESTING)
     endif()
     add_test(NAME windows_update_msi_identity
         COMMAND CodexMonitorUpdateMsiIdentityTests)
+
+    add_executable(CodexMonitorUpdateApplyTransactionTests
+        src/update/update_apply_transaction_win32.cpp
+        src/update/update_installer_verifier_win32.cpp
+        src/update/update_msi_identity_win32.cpp
+        tests/update_apply_transaction_test.cpp
+    )
+    configure_codex_monitor_target(CodexMonitorUpdateApplyTransactionTests)
+    target_compile_definitions(
+        CodexMonitorUpdateApplyTransactionTests PRIVATE
+        CODEX_MONITOR_UPDATE_APPLY_TRANSACTION_TESTING=1
+    )
+    if(WIN32)
+        target_compile_definitions(
+            CodexMonitorUpdateApplyTransactionTests PRIVATE
+            UNICODE
+            _UNICODE
+            NOMINMAX
+            WINVER=0x0A00
+            _WIN32_WINNT=0x0A00
+        )
+        target_link_libraries(CodexMonitorUpdateApplyTransactionTests PRIVATE
+            bcrypt wintrust crypt32 msi)
+    endif()
+    add_test(NAME windows_update_apply_transaction
+        COMMAND CodexMonitorUpdateApplyTransactionTests)
 endif()
 
 if(WIN32)
@@ -505,6 +531,7 @@ if(WIN32)
         src/update/github_release_selector.cpp
         src/update/update_check_win32.cpp
         src/update/update_asset_download_win32.cpp
+        src/update/update_apply_transaction_win32.cpp
         src/update/update_fetch_win32.cpp
         src/update/update_installer_verifier_win32.cpp
         src/update/update_msi_identity_win32.cpp

@@ -149,6 +149,15 @@ UPDATE_MSI_IDENTITY = (
 UPDATE_MSI_IDENTITY_HEADER = (
     WINDOWS_ROOT / "src" / "update" / "update_msi_identity_win32.h"
 ).read_text(encoding="utf-8")
+UPDATE_APPLY_TRANSACTION = (
+    WINDOWS_ROOT / "src" / "update" / "update_apply_transaction_win32.cpp"
+).read_text(encoding="utf-8")
+UPDATE_APPLY_TRANSACTION_HEADER = (
+    WINDOWS_ROOT / "src" / "update" / "update_apply_transaction_win32.h"
+).read_text(encoding="utf-8")
+UPDATE_APPLY_TRANSACTION_TEST = (
+    WINDOWS_ROOT / "tests" / "update_apply_transaction_test.cpp"
+).read_text(encoding="utf-8")
 UPDATE_STATE = (
     WINDOWS_ROOT / "src" / "update" / "update_state_store.cpp"
 ).read_text(encoding="utf-8")
@@ -467,7 +476,8 @@ def main() -> None:
                       UPDATE_STATE +
                       UPDATE_INSTALLER_VERIFIER_HEADER +
                       UPDATE_INSTALLER_VERIFIER + UPDATE_MSI_IDENTITY_HEADER +
-                      UPDATE_MSI_IDENTITY + UPDATE_WORKER_HEADER +
+                      UPDATE_MSI_IDENTITY + UPDATE_APPLY_TRANSACTION_HEADER +
+                      UPDATE_APPLY_TRANSACTION + UPDATE_WORKER_HEADER +
                       UPDATE_WORKER + MAIN)
     for token, reason in update_contracts.items():
         require(update_sources, token, reason)
@@ -534,6 +544,57 @@ def main() -> None:
             "the package architecture and language are fixed",
     }.items():
         require(msi_identity_sources, token, reason)
+    update_apply_sources = (
+        UPDATE_APPLY_TRANSACTION_HEADER + UPDATE_APPLY_TRANSACTION
+    )
+    for token, reason in {
+        "LockCanonicalInstallerPath":
+            "the apply transaction locks the complete canonical MSI path",
+        "FILE_SHARE_READ, nullptr":
+            "the locked MSI denies write and delete replacement",
+        "VerifyDownloadedWindowsInstallerChecksum":
+            "the locked transaction includes the SHA-256 gate",
+        "VerifyWindowsMsiIdentityAndPublisher":
+            "the locked transaction includes Authenticode and MSI identity",
+        "installCallback(locked.canonicalPath)":
+            "the install callback runs before the path locks leave scope",
+        "MsiInstallProductW":
+            "the production transaction performs a synchronous Windows Installer call",
+        "MsiSetInternalUI":
+            "the production transaction suppresses installer UI without spawning an async process",
+        "installAttempted = true":
+            "the production install boundary is explicitly observable in transaction tests",
+    }.items():
+        require(update_apply_sources, token, reason)
+    require(msi_identity_sources, "WTD_REVOKE_WHOLECHAIN",
+            "the production trust path cannot disable revocation checks")
+    reject(update_apply_sources, "revocationChecks",
+           "the transaction API must not expose a revocation bypass")
+    require(UPDATE_APPLY_TRANSACTION_TEST, "callbackCount == 0",
+            "verification failures assert that installer launch is impossible")
+    require(UPDATE_APPLY_TRANSACTION_TEST,
+            "ArePathAndAncestorLocksHeldWhileCallbackRuns",
+            "the signed fixture proves locks survive through the callback")
+    require(UPDATE_APPLY_TRANSACTION_TEST, "--install-signed-msi",
+            "the signed fixture can execute the production synchronous installer path")
+    test_apply_macro = "CODEX_MONITOR_UPDATE_APPLY_TRANSACTION_TESTING"
+    if CMAKE.count(test_apply_macro) != 1:
+        raise AssertionError(
+            "the injectable update callback macro must belong to exactly one test target"
+        )
+    require(UPDATE_APPLY_TRANSACTION_HEADER, test_apply_macro,
+            "the injectable callback API is hidden from production builds")
+    require(UPDATE_APPLY_TRANSACTION, test_apply_macro,
+            "the injectable callback implementation is hidden from production builds")
+    require(WINDOWS_WORKFLOW,
+            "--verify-apply-signed-msi",
+            "Windows CI runs the transaction against a real signed MSI")
+    require(WINDOWS_WORKFLOW,
+            "publisher-rejected",
+            "Windows CI proves publisher failure invokes no callback")
+    require(WINDOWS_WORKFLOW,
+            "checksum-rejected",
+            "Windows CI proves checksum failure invokes no callback")
     require(RESOURCE_SCRIPT, "CODEX_MONITOR_WINDOWS_VERSION_MAJOR",
             "the executable resource version follows the CMake project version")
     reject(RESOURCE_SCRIPT, "FILEVERSION 0,3,0,0",
@@ -1007,6 +1068,8 @@ def main() -> None:
             "strict MSI SHA-256 verification is compiled into the HUD",
         "src/update/update_msi_identity_win32.cpp":
             "publisher trust and MSI identity verification are compiled into the HUD",
+        "src/update/update_apply_transaction_win32.cpp":
+            "the continuous-lock update apply transaction is compiled into the HUD",
         "src/update/update_worker.cpp":
             "daily and manual update scheduling is compiled into the HUD",
         "src/main.cpp": "the product window is compiled into the HUD",
@@ -1088,6 +1151,8 @@ def main() -> None:
             "update asset URL and download policy tests are registered with CTest",
         "add_test(NAME windows_update_msi_identity":
             "publisher and MSI identity policy tests are registered with CTest",
+        "add_test(NAME windows_update_apply_transaction":
+            "the continuous-lock update transaction is registered with CTest",
         "add_executable(CodexMonitorCodexProcessTests":
             "bounded process integration tests are buildable",
         "add_test(NAME windows_codex_process":

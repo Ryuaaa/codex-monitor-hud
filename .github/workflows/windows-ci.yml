@@ -225,6 +225,8 @@ jobs:
 
           $identityTest = (Resolve-Path -LiteralPath `
             "windows/out/build/Release/CodexMonitorUpdateMsiIdentityTests.exe").Path
+          $applyTransactionTest = (Resolve-Path -LiteralPath `
+            "windows/out/build/Release/CodexMonitorUpdateApplyTransactionTests.exe").Path
           $cmake = Get-Content -LiteralPath "windows/CMakeLists.txt" -Raw
           if ($cmake -notmatch `
               'project\(CodexMonitorHUDWindows VERSION ([0-9]+\.[0-9]+\.[0-9]+)') {
@@ -258,6 +260,10 @@ jobs:
 
           $certificate = $null
           $storeThumbprintSha1 = $null
+          $transactionInstallDirectory = Join-Path $env:LOCALAPPDATA `
+            "Programs\Codex Monitor HUD"
+          $transactionInstalledBinary = Join-Path `
+            $transactionInstallDirectory "CodexMonitorHUD.exe"
           try {
             Write-Host "phase=certificate-create start"
             $certificate = New-SelfSignedCertificate `
@@ -274,16 +280,35 @@ jobs:
             $storeThumbprintSha1 = $certificate.Thumbprint
             Write-Host "phase=certificate-create done"
 
-            $publicCertificate = Join-Path $temporaryDirectory `
-              "ci-code-signing.cer"
-            Write-Host "phase=certificate-export-import start"
-            Export-Certificate -Cert $certificate `
-              -FilePath $publicCertificate -Type CERT -Force | Out-Null
-            Import-Certificate -FilePath $publicCertificate `
-              -CertStoreLocation "Cert:\CurrentUser\Root" | Out-Null
-            Import-Certificate -FilePath $publicCertificate `
-              -CertStoreLocation "Cert:\CurrentUser\TrustedPublisher" | Out-Null
-            Write-Host "phase=certificate-export-import done"
+            # Avoid the PKI export/import cmdlets here: Import-Certificate
+            # stalled in the hosted runner's current-user trust stores.
+            # X509Store adds the same public certificate directly and leaves
+            # the private key only in CurrentUser\My.
+            Write-Host "phase=certificate-trust-stores start"
+            $publicCertificate = `
+              [System.Security.Cryptography.X509Certificates.X509Certificate2]::new(
+                $certificate.RawData)
+            try {
+              foreach ($storeName in @("Root", "TrustedPublisher")) {
+                Write-Host "phase=certificate-trust-$storeName start"
+                $store = `
+                  [System.Security.Cryptography.X509Certificates.X509Store]::new(
+                    $storeName,
+                    [System.Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser)
+                try {
+                  $store.Open(
+                    [System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+                  $store.Add($publicCertificate)
+                } finally {
+                  $store.Close()
+                  $store.Dispose()
+                }
+                Write-Host "phase=certificate-trust-$storeName done"
+              }
+            } finally {
+              $publicCertificate.Dispose()
+            }
+            Write-Host "phase=certificate-trust-stores done"
 
             $sha256 = [System.Security.Cryptography.SHA256]::Create()
             try {
@@ -311,6 +336,9 @@ jobs:
             }
             Write-Host "phase=signtool-verify done"
 
+            $signedInstallerSha256 = (Get-FileHash -LiteralPath `
+              $signedInstaller -Algorithm SHA256).Hash.ToLowerInvariant()
+
             Write-Host "phase=identity-correct-pin start"
             & $identityTest --verify-signed-msi $signedInstaller `
               $expectedVersion $publisherPinSha256 verified
@@ -318,6 +346,36 @@ jobs:
               throw "The signed MSI did not pass the pinned publisher check"
             }
             Write-Host "phase=identity-correct-pin done"
+
+            Write-Host "phase=apply-transaction-locks start"
+            & $applyTransactionTest --verify-apply-signed-msi `
+              $signedInstaller $expectedVersion $publisherPinSha256 `
+              $signedInstallerSha256 installed
+            if ($LASTEXITCODE -ne 0) {
+              throw "The signed MSI did not remain locked through the apply callback"
+            }
+            Write-Host "phase=apply-transaction-locks done"
+
+            Write-Host "phase=apply-transaction-real-install start"
+            & $applyTransactionTest --install-signed-msi `
+              $signedInstaller $expectedVersion $publisherPinSha256 `
+              $signedInstallerSha256
+            if ($LASTEXITCODE -ne 0) {
+              throw "The production apply transaction did not complete the signed MSI install"
+            }
+            if (-not (Test-Path -LiteralPath $transactionInstalledBinary `
+                -PathType Leaf)) {
+              throw "The production apply transaction did not install the HUD executable"
+            }
+            $sourceHash = (Get-FileHash -LiteralPath `
+              "windows/out/build/Release/CodexMonitorHUD.exe" `
+              -Algorithm SHA256).Hash
+            $transactionHash = (Get-FileHash -LiteralPath `
+              $transactionInstalledBinary -Algorithm SHA256).Hash
+            if ($sourceHash -ne $transactionHash) {
+              throw "The transaction-installed executable does not match the tested build"
+            }
+            Write-Host "phase=apply-transaction-real-install done"
 
             $wrongFirstCharacter = if ($publisherPinSha256[0] -eq '0') {
               '1'
@@ -333,6 +391,29 @@ jobs:
               throw "The signed MSI did not reject the wrong publisher pin"
             }
             Write-Host "phase=identity-wrong-pin done"
+
+            Write-Host "phase=apply-transaction-wrong-pin start"
+            & $applyTransactionTest --verify-apply-signed-msi `
+              $signedInstaller $expectedVersion $wrongPublisherPin `
+              $signedInstallerSha256 publisher-rejected
+            if ($LASTEXITCODE -ne 0) {
+              throw "The apply transaction invoked the callback for a wrong publisher pin"
+            }
+            Write-Host "phase=apply-transaction-wrong-pin done"
+
+            $wrongInstallerSha256 = if ($signedInstallerSha256[0] -eq '0') {
+              '1' + $signedInstallerSha256.Substring(1)
+            } else {
+              '0' + $signedInstallerSha256.Substring(1)
+            }
+            Write-Host "phase=apply-transaction-wrong-checksum start"
+            & $applyTransactionTest --verify-apply-signed-msi `
+              $signedInstaller $expectedVersion $publisherPinSha256 `
+              $wrongInstallerSha256 checksum-rejected
+            if ($LASTEXITCODE -ne 0) {
+              throw "The apply transaction invoked the callback for a wrong checksum"
+            }
+            Write-Host "phase=apply-transaction-wrong-checksum done"
 
             $tamperedInstaller = Join-Path $temporaryDirectory `
               "CodexMonitorHUD-windows-x64-tampered.msi"
@@ -358,6 +439,29 @@ jobs:
           } finally {
             Write-Host "phase=cleanup start"
             $cleanupFailed = $false
+            try {
+              $transactionUninstallLog = Join-Path $env:RUNNER_TEMP `
+                "codex-monitor-transaction-uninstall.log"
+              $transactionUninstallArguments = `
+                "/x `"$signedInstaller`" /qn /norestart " +
+                "/L*v `"$transactionUninstallLog`""
+              $transactionUninstall = Start-Process msiexec.exe `
+                -Wait -PassThru -ArgumentList $transactionUninstallArguments
+              if ($transactionUninstall.ExitCode -notin @(0, 1605, 3010)) {
+                $cleanupFailed = $true
+                if (Test-Path -LiteralPath $transactionUninstallLog) {
+                  Get-Content -LiteralPath $transactionUninstallLog -Tail 100
+                }
+                Write-Warning `
+                  "Failed to remove the transaction-installed MSI"
+              }
+              if (Test-Path -LiteralPath $transactionInstalledBinary) {
+                $cleanupFailed = $true
+              }
+            } catch {
+              $cleanupFailed = $true
+              Write-Warning "Failed to run transaction MSI cleanup"
+            }
             if (-not [string]::IsNullOrWhiteSpace($storeThumbprintSha1)) {
               foreach ($store in @("My", "Root", "TrustedPublisher")) {
                 $certificatePath = `
