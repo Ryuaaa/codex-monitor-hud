@@ -169,6 +169,12 @@ if(WIN32)
         add_test(NAME windows_codex_worker_backoff
             COMMAND CodexMonitorCodexWorkerTests
                     $<TARGET_FILE:CodexMonitorFakeCodexAppServer> backoff)
+        set_tests_properties(
+            windows_codex_worker
+            windows_codex_worker_success
+            windows_codex_worker_pause
+            windows_codex_worker_backoff
+            PROPERTIES TIMEOUT 30)
     endif()
 
     add_executable(CodexMonitorHUD WIN32
