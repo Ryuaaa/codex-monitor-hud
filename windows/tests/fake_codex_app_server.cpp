@@ -106,6 +106,17 @@ bool Contains(std::string_view value, std::string_view token) {
     return value.find(token) != std::string_view::npos;
 }
 
+void SignalConfiguredReadyEvent() {
+    wchar_t name[256]{};
+    const DWORD length = GetEnvironmentVariableW(
+        L"CODEX_FAKE_READY_EVENT", name, static_cast<DWORD>(std::size(name)));
+    if (length == 0 || length >= std::size(name)) return;
+    HANDLE event = OpenEventW(EVENT_MODIFY_STATE, FALSE, name);
+    if (!event) return;
+    SetEvent(event);
+    CloseHandle(event);
+}
+
 bool ReadAndValidateAppServerRequests() {
     std::vector<std::string> requests;
     for (int index = 0; index < 5; ++index) {
@@ -199,6 +210,7 @@ int RunAppServerScenario(const std::wstring& scenario,
 
     if (scenario == L"app-cancel") {
         if (SpawnHangingChild() == 0) return 29;
+        SignalConfiguredReadyEvent();
         Sleep(INFINITE);
         return 0;
     }

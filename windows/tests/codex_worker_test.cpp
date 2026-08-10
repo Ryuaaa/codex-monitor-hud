@@ -78,6 +78,12 @@ std::filesystem::path CreateTestDirectory() {
     return error ? std::filesystem::path{} : path;
 }
 
+std::wstring CreateReadyEventName() {
+    return L"Local\\CodexMonitorWorkerReady-" +
+           std::to_wstring(GetCurrentProcessId()) + L"-" +
+           std::to_wstring(GetTickCount64());
+}
+
 bool ProcessWithImagePathExists(const std::filesystem::path& executable) {
     HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
     if (snapshot == INVALID_HANDLE_VALUE) return false;
@@ -167,6 +173,12 @@ void TestPauseCancelsAndResumeRefreshes(HWND window,
                                         const std::filesystem::path& executable) {
     Stage("pause_begin");
     ScopedEnvironmentVariable scenario(L"CODEX_FAKE_SCENARIO", L"app-cancel");
+    const std::wstring readyEventName = CreateReadyEventName();
+    ScopedEnvironmentVariable readyEventVariable(L"CODEX_FAKE_READY_EVENT",
+                                                   readyEventName);
+    HANDLE readyEvent = CreateEventW(nullptr, TRUE, FALSE, readyEventName.c_str());
+    Expect(readyEvent != nullptr,
+           "the cancellation test must create its ready event");
     Stage("pause_environment_ready");
     CodexWorker worker;
     Stage("pause_worker_constructed");
@@ -178,9 +190,10 @@ void TestPauseCancelsAndResumeRefreshes(HWND window,
     Stage("pause_worker_activate_returned");
     Expect(activated,
            "the cancellation worker must queue an immediate refresh");
-    Stage("pause_process_scan_begin");
-    Expect(WaitUntil([&] { return ProcessWithImagePathExists(executable); }, 5s),
+    Stage("pause_ready_wait_begin");
+    Expect(readyEvent && WaitForSingleObject(readyEvent, 5000) == WAIT_OBJECT_0,
            "the hanging fake app-server must start before pause");
+    if (readyEvent) CloseHandle(readyEvent);
     Stage("pause_process_started");
 
     worker.PauseAndInvalidate();
