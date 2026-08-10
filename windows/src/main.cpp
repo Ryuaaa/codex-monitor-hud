@@ -10,6 +10,8 @@
 
 #include <windows.h>
 
+#include <winrt/base.h>
+
 #include "../resources/resource.h"
 #include "codex/codex_usage_math.h"
 #include "codex/codex_worker.h"
@@ -1975,6 +1977,16 @@ codex_monitor::WindowPlacement InitialWindowPlacement(const AppState& state, UIN
 }  // namespace
 
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand) {
+    // Keep one process-lifetime WinRT apartment alive so the projection's
+    // process-wide activation-factory cache remains valid across worker
+    // thread shutdown and recreation. The operating system releases it when
+    // the process exits, matching the standard C++/WinRT application pattern.
+    try {
+        winrt::init_apartment(winrt::apartment_type::single_threaded);
+    } catch (...) {
+        return 1;
+    }
+
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
 
     HANDLE singleton = CreateMutexW(nullptr, TRUE, kSingletonName);

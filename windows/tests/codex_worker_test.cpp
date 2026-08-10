@@ -8,6 +8,8 @@
 
 #include "codex/codex_worker.h"
 
+#include <winrt/base.h>
+
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -336,6 +338,7 @@ void TestFailureBackoffAndRecovery(HWND window) {
 
 int wmain(int argc, wchar_t** argv) {
     InstallCrashStackLogger();
+    winrt::init_apartment(winrt::apartment_type::multi_threaded);
     Stage("main_begin");
     const std::filesystem::path fakeServer =
         argc >= 2 ? std::filesystem::path(argv[1]) : std::filesystem::path{};
