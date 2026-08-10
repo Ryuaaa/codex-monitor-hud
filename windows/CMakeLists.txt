@@ -148,6 +148,14 @@ if(WIN32)
             WINVER=0x0A00
             _WIN32_WINNT=0x0A00
         )
+        if(MSVC)
+            target_compile_options(CodexMonitorCodexWorkerTests PRIVATE
+                $<$<COMPILE_LANGUAGE:CXX>:/fsanitize=address>)
+            target_link_options(CodexMonitorCodexWorkerTests PRIVATE
+                /fsanitize=address
+                /INCREMENTAL:NO
+            )
+        endif()
         target_link_libraries(CodexMonitorCodexWorkerTests PRIVATE user32 windowsapp)
         add_test(NAME windows_codex_worker
             COMMAND CodexMonitorCodexWorkerTests
