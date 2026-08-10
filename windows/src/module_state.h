@@ -15,6 +15,7 @@ enum class Page {
 };
 
 enum class ModuleId {
+    kSystemDiagnosis,
     kTargetProcessTree,
     kSystemResources,
     kCommitAndPageFile,
@@ -37,7 +38,7 @@ struct ModuleDefinition {
     bool defaultNativePageVisible;
 };
 
-constexpr std::size_t kModuleCount = 9;
+constexpr std::size_t kModuleCount = 10;
 
 struct WindowPlacement {
     int x = 0;

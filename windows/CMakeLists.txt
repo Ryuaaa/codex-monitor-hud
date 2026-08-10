@@ -33,6 +33,14 @@ function(configure_codex_monitor_target target)
 endfunction()
 
 if(BUILD_TESTING)
+    add_executable(CodexMonitorPerformanceDiagnosisTests
+        src/performance_diagnosis.cpp
+        tests/performance_diagnosis_test.cpp
+    )
+    configure_codex_monitor_target(CodexMonitorPerformanceDiagnosisTests)
+    add_test(NAME windows_performance_diagnosis
+        COMMAND CodexMonitorPerformanceDiagnosisTests)
+
     add_executable(CodexMonitorSnapshotMathTests
         tests/snapshot_math_test.cpp
     )
@@ -191,6 +199,7 @@ if(WIN32)
         src/codex/codex_worker.cpp
         src/main.cpp
         src/module_state.cpp
+        src/performance_diagnosis.cpp
         src/performance_worker.cpp
         src/sampling_schedule.cpp
         src/settings_store_win32.cpp

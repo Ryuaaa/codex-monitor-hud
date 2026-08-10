@@ -8,6 +8,14 @@ namespace codex_monitor {
 namespace {
 
 constexpr std::array<ModuleDefinition, kModuleCount> kRegistry{{
+    {ModuleId::kSystemDiagnosis,
+     "system-diagnosis",
+     L"System diagnosis & Codex / ChatGPT impact",
+     Page::kComputer,
+     true,
+     false,
+     true,
+     true},
     {ModuleId::kTargetProcessTree,
      "target-process-tree",
      L"Codex / ChatGPT process tree",
@@ -244,7 +252,7 @@ bool MoveHomeModule(SettingsState& settings, ModuleId id, int direction) {
 std::string SerializeSettings(const SettingsState& settings) {
     const std::vector<ModuleId> order = SanitizeHomeOrder(settings.homeOrder);
     std::ostringstream output;
-    output << "version=2\n";
+    output << "version=3\n";
     output << "page=" << PageKey(settings.currentPage) << '\n';
     output << "always_on_top=" << (settings.alwaysOnTop ? 1 : 0) << '\n';
     output << "home_order=";
@@ -340,9 +348,9 @@ SettingsState ParseSettings(std::string_view text) {
     }
 
     settings.homeOrder = SanitizeHomeOrder(requestedOrder);
-    // Missing visibility keys mean an older settings file. The registry defaults
-    // preserve the original four Home cards, keep newly added Codex Home cards
-    // off, and establish independent defaults for the native pages.
+    // Missing visibility keys mean an older settings file. Registry defaults
+    // enable the current performance cards, keep Codex Home cards off, and
+    // establish independent defaults for the native pages.
     if (!homeVisibleKeyFound) {
         for (std::size_t index = 0; index < kRegistry.size(); ++index) {
             settings.homeVisible[index] = kRegistry[index].defaultHomeVisible;

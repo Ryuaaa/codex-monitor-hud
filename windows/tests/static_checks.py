@@ -20,6 +20,10 @@ SNAPSHOT = (WINDOWS_ROOT / "src" / "performance_snapshot.h").read_text(encoding=
 MATH = (WINDOWS_ROOT / "src" / "snapshot_math.h").read_text(encoding="utf-8")
 TEST = (WINDOWS_ROOT / "tests" / "snapshot_math_test.cpp").read_text(encoding="utf-8")
 STATE_TEST = (WINDOWS_ROOT / "tests" / "module_state_test.cpp").read_text(encoding="utf-8")
+DIAGNOSIS = (WINDOWS_ROOT / "src" / "performance_diagnosis.cpp").read_text(encoding="utf-8")
+DIAGNOSIS_TEST = (WINDOWS_ROOT / "tests" / "performance_diagnosis_test.cpp").read_text(
+    encoding="utf-8"
+)
 SCHEDULE_TEST = (WINDOWS_ROOT / "tests" / "sampling_schedule_test.cpp").read_text(encoding="utf-8")
 CMAKE = (WINDOWS_ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
 CODEX_TYPES = (WINDOWS_ROOT / "src" / "codex" / "codex_types.h").read_text(
@@ -146,6 +150,8 @@ def main() -> None:
         "kSettingsButtonId": "the shell exposes settings",
         "ModuleRegistry()": "module controls are created from the registry",
         "VisibleHomeModules": "homepage cards follow saved visibility and order",
+        "SYSTEM + CODEX/CHATGPT":
+            "the first performance card names the full process-tree scope",
         "WM_EXITSIZEMOVE": "window placement is persisted after interactive movement",
         "WM_DISPLAYCHANGE": "saved placement is repaired after monitor changes",
         "RecreateSettingsFonts(window, *state)":
@@ -279,6 +285,7 @@ def main() -> None:
         "nativePageVisible": "own-page visibility is independent from Home visibility",
         "kCodexFiveHourQuota": "the five-hour quota has its own module identity",
         "kCodexWeeklyQuota": "the weekly quota has its own module identity",
+        "kSystemDiagnosis": "the system diagnosis has its own module identity",
         "SanitizeHomeOrder": "saved order is repaired against the current registry",
         "VisibleHomeModules": "homepage visibility is derived in the portable model",
         "VisibleModulesForNativePage": "native pages are filtered by registry metadata",
@@ -297,15 +304,39 @@ def main() -> None:
         "intentionally empty homepage": "all-hidden homepage intent is fixed",
         "unknown page must fall back to home": "damaged settings have a safe fallback",
         "off-screen saved window must return": "monitor removal recovery is fixed",
-        "TestVersionTwoRoundTripAndIndependentQuotaSwitches":
-            "the two quota switches and version 2 schema have a round-trip test",
+        "TestVersionThreeRoundTripAndIndependentQuotaSwitches":
+            "the two quota switches and version 3 schema have a round-trip test",
         "TestVersionOneMigrationPreservesOldHomeChoices":
             "version 1 settings migrate without enabling new Home work",
-        '"version=2\\n"': "the current persisted settings schema is version 2",
+        '"version=3\\n"': "the current persisted settings schema is version 3",
         '"version=1\\n"': "the previous settings schema has an explicit migration fixture",
     }
     for token, reason in state_test_contracts.items():
         require(STATE_TEST, token, reason)
+
+    diagnosis_contracts = {
+        "Missing a low metric cannot prove":
+            "incomplete low readings cannot claim that the computer is comfortable",
+        "shareOfBusyCpu":
+            "target-app CPU impact is related to current whole-machine pressure",
+        "shareOfPhysicalMemory":
+            "target-app working set is compared with physical memory capacity",
+        "working set contains shared pages":
+            "memory attribution is explicitly confidence-limited",
+    }
+    for token, reason in diagnosis_contracts.items():
+        require(DIAGNOSIS, token, reason)
+
+    diagnosis_test_contracts = {
+        "missing metrics must remain unavailable": "missing evidence has a fixed safe result",
+        "a low CPU sample alone cannot prove": "partial system evidence cannot report comfort",
+        "a low partial process total is a lower bound":
+            "partial target readings cannot prove low impact",
+        "target CPU above system CPU must be rejected":
+            "inconsistent attribution data is not silently corrected",
+    }
+    for token, reason in diagnosis_test_contracts.items():
+        require(DIAGNOSIS_TEST, token, reason)
 
     persistence_contracts = {
         "FOLDERID_LocalAppData": "settings live in the per-user Windows data directory",
@@ -546,10 +577,15 @@ def main() -> None:
         "add_executable(CodexMonitorHUD WIN32": "the executable uses the Windows GUI subsystem",
         "src/windows_sampler.cpp": "the native sampler is compiled into the HUD",
         "src/performance_worker.cpp": "the HUD builds its serial background worker",
+        "src/performance_diagnosis.cpp": "the HUD builds the pure diagnosis model",
         "src/sampling_schedule.cpp": "the request scheduler is shared with fixed tests",
         "src/module_state.cpp": "the module state model is compiled into the HUD",
         "src/settings_store_win32.cpp": "the per-user settings store is compiled into the HUD",
         "add_executable(CodexMonitorSnapshotMathTests": "portable fixed tests are buildable",
+        "add_executable(CodexMonitorPerformanceDiagnosisTests":
+            "portable diagnosis tests are buildable",
+        "add_test(NAME windows_performance_diagnosis":
+            "portable diagnosis tests are registered with CTest",
         "add_test(NAME windows_snapshot_math": "portable tests are registered with CTest",
         "add_executable(CodexMonitorModuleStateTests": "portable state tests are buildable",
         "add_test(NAME windows_module_state": "portable state tests are registered with CTest",

@@ -31,8 +31,10 @@ void TestNewInstallDefaultsUseRegistryPolicy() {
            "every registered module must have a homepage order entry");
 
     const std::vector<ModuleId> home = codex_monitor::VisibleHomeModules(settings);
-    Expect(home.size() == 4,
-           "only the original four performance modules are visible on a new homepage");
+    Expect(home.size() == 5,
+           "the system diagnosis and four original performance modules are visible on a new homepage");
+    Expect(Contains(home, ModuleId::kSystemDiagnosis),
+           "the system diagnosis must be visible on a new homepage");
     Expect(codex_monitor::HomeNeedsPerformanceData(settings),
            "the default homepage must request performance data");
     Expect(!codex_monitor::HomeNeedsCodexData(settings),
@@ -40,8 +42,10 @@ void TestNewInstallDefaultsUseRegistryPolicy() {
 
     const std::vector<ModuleId> computer =
         codex_monitor::VisibleModulesForNativePage(settings, Page::kComputer);
-    Expect(computer.size() == 4,
-           "the computer page must contain exactly the four performance modules");
+    Expect(computer.size() == 5,
+           "the computer page must contain the system diagnosis and four original performance modules");
+    Expect(Contains(computer, ModuleId::kSystemDiagnosis),
+           "the system diagnosis must be visible on a new computer page");
     for (ModuleId id : computer) {
         const codex_monitor::ModuleDefinition& definition =
             codex_monitor::ModuleRegistry()[codex_monitor::ModuleIndex(id)];
@@ -88,7 +92,7 @@ void TestOrderSanitizationAndMovement() {
            "the first module must not move beyond the registry boundary");
 }
 
-void TestVersionTwoRoundTripAndIndependentQuotaSwitches() {
+void TestVersionThreeRoundTripAndIndependentQuotaSwitches() {
     using codex_monitor::ModuleId;
     using codex_monitor::Page;
 
@@ -108,8 +112,8 @@ void TestVersionTwoRoundTripAndIndependentQuotaSwitches() {
     settings.windowPlacement = codex_monitor::WindowPlacement{-900, 120, 720, 640};
 
     const std::string serialized = codex_monitor::SerializeSettings(settings);
-    Expect(serialized.find("version=2\n") == 0,
-           "the settings whitelist must be serialized as version 2");
+    Expect(serialized.find("version=3\n") == 0,
+           "the settings whitelist must be serialized as version 3");
 
     const codex_monitor::SettingsState parsed = codex_monitor::ParseSettings(serialized);
     Expect(parsed.currentPage == Page::kCodex,
@@ -179,6 +183,10 @@ void TestVersionOneMigrationPreservesOldHomeChoices() {
                Contains(nativeCodex, ModuleId::kCodexRecentTasks) &&
                !Contains(nativeCodex, ModuleId::kCodexAccountTokenUsage),
            "version 1 migration must apply independent Codex-page defaults");
+    const std::vector<ModuleId> nativeComputer =
+        codex_monitor::VisibleModulesForNativePage(migrated, Page::kComputer);
+    Expect(Contains(nativeComputer, ModuleId::kSystemDiagnosis),
+           "version 1 migration without a native visibility key must enable the new diagnosis default");
 }
 
 void TestPageFilteringAndHomeDemandGates() {
@@ -209,12 +217,12 @@ void TestPageFilteringAndHomeDemandGates() {
     settings.nativePageVisible.fill(true);
     const std::vector<ModuleId> computer =
         codex_monitor::VisibleModulesForNativePage(settings, Page::kComputer);
-    Expect(computer.size() == 4,
+    Expect(computer.size() == 5,
            "the computer page must filter out all five Codex modules even when enabled");
     const std::vector<ModuleId> codex =
         codex_monitor::VisibleModulesForNativePage(settings, Page::kCodex);
     Expect(codex.size() == 5,
-           "the Codex page must filter out all four computer modules even when enabled");
+           "the Codex page must filter out all five computer modules even when enabled");
 }
 
 void TestMalformedSettingsFallBackSafely() {
@@ -233,12 +241,12 @@ void TestMalformedSettingsFallBackSafely() {
     Expect(parsed.alwaysOnTop, "an invalid topmost value must retain the default");
     Expect(parsed.homeOrder.size() == codex_monitor::kModuleCount,
            "a malformed order must still contain the full registry");
-    Expect(codex_monitor::VisibleHomeModules(parsed).size() == 4,
+    Expect(codex_monitor::VisibleHomeModules(parsed).size() == 5,
            "unknown homepage visibility keys must retain safe registry defaults");
     Expect(!codex_monitor::HomeNeedsCodexData(parsed),
            "damaged settings must not silently enable new Codex homepage work");
-    Expect(codex_monitor::VisibleModulesForNativePage(parsed, Page::kComputer).size() == 4,
-           "damaged native visibility must keep the four computer defaults");
+    Expect(codex_monitor::VisibleModulesForNativePage(parsed, Page::kComputer).size() == 5,
+           "damaged native visibility must keep the five computer defaults");
     Expect(codex_monitor::VisibleModulesForNativePage(parsed, Page::kCodex).size() == 4,
            "damaged native visibility must keep safe Codex defaults");
     Expect(!parsed.windowPlacement, "an invalid window placement must be ignored");
@@ -274,7 +282,7 @@ void TestWindowPlacementReturnsToAVisibleWorkArea() {
 int main() {
     TestNewInstallDefaultsUseRegistryPolicy();
     TestOrderSanitizationAndMovement();
-    TestVersionTwoRoundTripAndIndependentQuotaSwitches();
+    TestVersionThreeRoundTripAndIndependentQuotaSwitches();
     TestVersionOneMigrationPreservesOldHomeChoices();
     TestPageFilteringAndHomeDemandGates();
     TestMalformedSettingsFallBackSafely();

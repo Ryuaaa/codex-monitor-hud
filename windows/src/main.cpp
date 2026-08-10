@@ -16,6 +16,7 @@
 #include "codex/codex_usage_math.h"
 #include "codex/codex_worker.h"
 #include "module_state.h"
+#include "performance_diagnosis.h"
 #include "performance_worker.h"
 #include "performance_snapshot.h"
 #include "settings_store_win32.h"
@@ -470,6 +471,88 @@ std::wstring BuildRankingCardText(const codex_monitor::PerformanceSnapshot& snap
     return output.str();
 }
 
+std::wstring DiagnosisPercent(const std::optional<double>& percent) {
+    if (!percent) return L"--";
+    std::wostringstream output;
+    output << std::fixed << std::setprecision(0) << *percent << L"%";
+    return output.str();
+}
+
+std::wstring_view PressureLabel(codex_monitor::SystemPressure pressure) {
+    switch (pressure) {
+        case codex_monitor::SystemPressure::kUnavailable:
+            return L"Data unavailable";
+        case codex_monitor::SystemPressure::kComfortable:
+            return L"Comfortable";
+        case codex_monitor::SystemPressure::kElevated:
+            return L"Elevated";
+        case codex_monitor::SystemPressure::kHigh:
+            return L"High";
+    }
+    return L"Data unavailable";
+}
+
+std::wstring_view BottleneckLabel(codex_monitor::SystemBottleneck bottleneck) {
+    switch (bottleneck) {
+        case codex_monitor::SystemBottleneck::kUnavailable:
+            return L"Unknown";
+        case codex_monitor::SystemBottleneck::kNone:
+            return L"None";
+        case codex_monitor::SystemBottleneck::kCpu:
+            return L"CPU";
+        case codex_monitor::SystemBottleneck::kMemory:
+            return L"Memory";
+        case codex_monitor::SystemBottleneck::kMixed:
+            return L"CPU + memory";
+    }
+    return L"Unknown";
+}
+
+std::wstring_view TargetImpactLabel(codex_monitor::TargetImpact impact) {
+    switch (impact) {
+        case codex_monitor::TargetImpact::kUnavailable:
+            return L"Unknown";
+        case codex_monitor::TargetImpact::kNotDetected:
+            return L"Not detected";
+        case codex_monitor::TargetImpact::kLow:
+            return L"Low";
+        case codex_monitor::TargetImpact::kPossible:
+            return L"Possible";
+        case codex_monitor::TargetImpact::kHigh:
+            return L"High";
+    }
+    return L"Unknown";
+}
+
+std::wstring_view ConfidenceLabel(codex_monitor::DiagnosisConfidence confidence) {
+    switch (confidence) {
+        case codex_monitor::DiagnosisConfidence::kLow:
+            return L"Low";
+        case codex_monitor::DiagnosisConfidence::kMedium:
+            return L"Medium";
+        case codex_monitor::DiagnosisConfidence::kHigh:
+            return L"High";
+    }
+    return L"Low";
+}
+
+std::wstring BuildDiagnosisCardText(
+    const codex_monitor::PerformanceSnapshot& snapshot) {
+    const codex_monitor::PerformanceDiagnosis diagnosis =
+        codex_monitor::DiagnosePerformance(snapshot);
+    std::wostringstream output;
+    output << L"SYSTEM + CODEX/CHATGPT\r\n"
+           << L"Pressure: " << PressureLabel(diagnosis.pressure)
+           << L"\r\nBottleneck: " << BottleneckLabel(diagnosis.bottleneck)
+           << L"  |  Impact: " << TargetImpactLabel(diagnosis.targetImpact)
+           << L"\r\nCPU " << DiagnosisPercent(diagnosis.cpuPercent)
+           << L"  |  RAM " << DiagnosisPercent(diagnosis.physicalMemoryPercent)
+           << L"  |  Commit " << DiagnosisPercent(diagnosis.commitPercent)
+           << L"\r\nConfidence: " << ConfidenceLabel(diagnosis.confidence)
+           << L"  |  snapshot";
+    return output.str();
+}
+
 std::wstring_view CodexModuleHeading(codex_monitor::ModuleId id) {
     switch (id) {
         case codex_monitor::ModuleId::kCodexFiveHourQuota:
@@ -482,6 +565,7 @@ std::wstring_view CodexModuleHeading(codex_monitor::ModuleId id) {
             return L"CODEX ACCOUNT TOKEN USAGE";
         case codex_monitor::ModuleId::kCodexRecentTasks:
             return L"CODEX RECENT TASKS (HISTORY)";
+        case codex_monitor::ModuleId::kSystemDiagnosis:
         case codex_monitor::ModuleId::kTargetProcessTree:
         case codex_monitor::ModuleId::kSystemResources:
         case codex_monitor::ModuleId::kCommitAndPageFile:
@@ -671,6 +755,7 @@ std::wstring BuildCodexCardText(codex_monitor::ModuleId id,
             return BuildTokenUsageCardText(state);
         case codex_monitor::ModuleId::kCodexRecentTasks:
             return BuildRecentTasksCardText(state);
+        case codex_monitor::ModuleId::kSystemDiagnosis:
         case codex_monitor::ModuleId::kTargetProcessTree:
         case codex_monitor::ModuleId::kSystemResources:
         case codex_monitor::ModuleId::kCommitAndPageFile:
@@ -681,8 +766,10 @@ std::wstring BuildCodexCardText(codex_monitor::ModuleId id,
 }
 
 std::wstring BuildModuleCardText(codex_monitor::ModuleId id,
-                                 const codex_monitor::PerformanceSnapshot& snapshot) {
+    const codex_monitor::PerformanceSnapshot& snapshot) {
     switch (id) {
+        case codex_monitor::ModuleId::kSystemDiagnosis:
+            return BuildDiagnosisCardText(snapshot);
         case codex_monitor::ModuleId::kTargetProcessTree:
             return BuildTargetCardText(snapshot);
         case codex_monitor::ModuleId::kSystemResources:
