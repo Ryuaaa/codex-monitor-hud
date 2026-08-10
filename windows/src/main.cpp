@@ -23,6 +23,7 @@
 #include "service_status_worker.h"
 #include "settings_store_win32.h"
 #include "snapshot_math.h"
+#include "update/update_worker.h"
 
 #include <algorithm>
 #include <chrono>
@@ -48,6 +49,11 @@ constexpr wchar_t kSettingsWindowClassName[] = L"CodexMonitorHUDWindowsSettingsW
 constexpr wchar_t kWindowTitle[] = L"Codex Monitor HUD";
 constexpr wchar_t kSingletonName[] = L"Local\\CodexMonitorHUDWindowsFoundation";
 
+#ifndef CODEX_MONITOR_WINDOWS_VERSION
+#define CODEX_MONITOR_WINDOWS_VERSION "0.3.0"
+#endif
+constexpr char kApplicationVersion[] = CODEX_MONITOR_WINDOWS_VERSION;
+
 constexpr int kPinButtonId = 1001;
 constexpr int kMinimizeButtonId = 1002;
 constexpr int kHomePageButtonId = 1010;
@@ -59,11 +65,13 @@ constexpr int kSettingsMoveUpBaseId = 3100;
 constexpr int kSettingsMoveDownBaseId = 3200;
 constexpr int kSettingsTopmostId = 3300;
 constexpr int kSettingsCloseId = 3301;
+constexpr int kSettingsCheckUpdatesId = 3302;
 constexpr int kSettingsNativeVisibleBaseId = 3400;
 constexpr UINT_PTR kSampleTimerId = 2001;
 constexpr UINT kSampleReadyMessage = WM_APP + 1;
 constexpr UINT kCodexReadyMessage = WM_APP + 2;
 constexpr UINT kServiceStatusReadyMessage = WM_APP + 3;
+constexpr UINT kUpdateReadyMessage = WM_APP + 4;
 constexpr UINT kFastSampleIntervalMs = 5000;
 constexpr ULONGLONG kSlowSampleIntervalMs = 20000;
 constexpr int kMinimumWidth = 390;
@@ -100,6 +108,8 @@ struct AppState {
     HWND settingsWindow = nullptr;
     HWND settingsHeading = nullptr;
     HWND settingsTopmostCheck = nullptr;
+    HWND settingsUpdateStatus = nullptr;
+    HWND settingsCheckUpdatesButton = nullptr;
     HWND settingsCloseButton = nullptr;
     std::vector<ModuleViews> moduleViews;
     std::vector<SettingsRow> settingsRows;
@@ -125,6 +135,7 @@ struct AppState {
     bool hasServiceStatusRefresh = false;
     bool serviceStatusLastRefreshSucceeded = false;
     bool serviceStatusShowingLastKnown = false;
+    bool updateWorkerAvailable = false;
     int contentScrollRow = 0;
     int contentScrollMaximumRow = 0;
     int contentVisibleRows = 1;
@@ -150,6 +161,10 @@ struct AppState {
     std::optional<std::chrono::system_clock::time_point>
         serviceStatusLastSuccessfulRefresh;
     std::chrono::seconds serviceStatusNextRefreshDelay{60};
+    codex_monitor::update::WindowsUpdateWorker updateWorker;
+    std::optional<codex_monitor::update::CompletedWindowsUpdateCheck>
+        latestUpdateCheck;
+    std::string availableUpdateVersion;
 };
 
 void LayoutControls(HWND window, AppState& state);
@@ -159,6 +174,7 @@ void UpdateCodexDemand(HWND window, AppState& state);
 void UpdateServiceStatusDemand(HWND window, AppState& state);
 void PersistSettings(AppState& state);
 void RefreshSettingsControls(AppState& state);
+void RefreshUpdateControls(AppState& state);
 
 int ScaleForDpi(HWND window, int value) {
     const UINT dpi = window ? GetDpiForWindow(window) : GetDpiForSystem();
@@ -225,6 +241,8 @@ void RecreateSettingsFonts(HWND window, AppState& state) {
 
     ApplyFont(state.settingsHeading, state.settingsBodyFont);
     ApplyFont(state.settingsTopmostCheck, state.settingsSmallFont);
+    ApplyFont(state.settingsUpdateStatus, state.settingsSmallFont);
+    ApplyFont(state.settingsCheckUpdatesButton, state.settingsSmallFont);
     ApplyFont(state.settingsCloseButton, state.settingsSmallFont);
     for (const SettingsRow& row : state.settingsRows) {
         ApplyFont(row.nameLabel, state.settingsSmallFont);
@@ -1314,6 +1332,11 @@ void UpdateStatusText(AppState& state) {
     if (!needsPerformance && !needsCodex && !needsService) {
         output << L"  |  No active data modules";
     }
+    if (!state.availableUpdateVersion.empty()) {
+        output << L"  |  Update: "
+               << std::wstring(state.availableUpdateVersion.begin(),
+                               state.availableUpdateVersion.end());
+    }
     SetWindowTextW(state.status, output.str().c_str());
 }
 
@@ -1409,6 +1432,15 @@ void ApplyServiceStatusRefresh(
     state.serviceStatusNextRefreshDelay = completed.nextRefreshDelay;
     state.hasServiceStatusRefresh = true;
     UpdateServiceStatusCards(state);
+    UpdateStatusText(state);
+}
+
+void ApplyWindowsUpdateCheck(
+    AppState& state,
+    codex_monitor::update::CompletedWindowsUpdateCheck completed) {
+    state.availableUpdateVersion = completed.availableVersion;
+    state.latestUpdateCheck = std::move(completed);
+    RefreshUpdateControls(state);
     UpdateStatusText(state);
 }
 
@@ -1847,6 +1879,51 @@ void SwitchPage(HWND window, AppState& state, codex_monitor::Page page) {
     PersistSettings(state);
 }
 
+void RefreshUpdateControls(AppState& state) {
+    if (!state.settingsUpdateStatus || !state.settingsCheckUpdatesButton) {
+        return;
+    }
+    std::wstring message;
+    if (!state.updateWorkerAvailable) {
+        message = L"Windows 更新检查当前不可用";
+    } else if (state.updateWorker.IsBusy()) {
+        message = L"正在检查 Windows 更新…";
+    } else if (!state.latestUpdateCheck) {
+        message = L"每天自动检查一次，也可以手动检查";
+    } else {
+        const auto& completed = *state.latestUpdateCheck;
+        if (completed.fromCache && !completed.availableVersion.empty()) {
+            message = L"已记录 Windows 新版 " +
+                      std::wstring(completed.availableVersion.begin(),
+                                   completed.availableVersion.end());
+        } else {
+            switch (completed.result.status) {
+                case codex_monitor::update::WindowsUpdateCheckStatus::kUpdateAvailable:
+                    message = L"发现 Windows 新版 " +
+                              std::wstring(completed.availableVersion.begin(),
+                                           completed.availableVersion.end());
+                    break;
+                case codex_monitor::update::WindowsUpdateCheckStatus::kUpToDate:
+                    message = L"当前 Windows 版已是最新版";
+                    break;
+                case codex_monitor::update::WindowsUpdateCheckStatus::kFetchFailed:
+                    message = L"更新检查失败；不会影响监控";
+                    break;
+                case codex_monitor::update::WindowsUpdateCheckStatus::kInvalidCurrentVersion:
+                    message = L"当前版本号无法用于自动更新";
+                    break;
+                case codex_monitor::update::WindowsUpdateCheckStatus::kInvalidResponse:
+                    message = L"GitHub 更新信息格式异常";
+                    break;
+            }
+        }
+        if (completed.stateSaveFailed) message += L"；检查记录未保存";
+    }
+    SetWindowTextW(state.settingsUpdateStatus, message.c_str());
+    EnableWindow(state.settingsCheckUpdatesButton,
+                 state.updateWorkerAvailable && !state.updateWorker.IsBusy());
+}
+
 void RefreshSettingsControls(AppState& state) {
     if (!state.settingsWindow) return;
     state.settings.homeOrder = codex_monitor::SanitizeHomeOrder(state.settings.homeOrder);
@@ -1870,6 +1947,7 @@ void RefreshSettingsControls(AppState& state) {
     }
     SendMessageW(state.settingsTopmostCheck, BM_SETCHECK,
                  state.settings.alwaysOnTop ? BST_CHECKED : BST_UNCHECKED, 0);
+    RefreshUpdateControls(state);
     LayoutSettingsControls(state.settingsWindow, state);
 }
 
@@ -1894,7 +1972,8 @@ void LayoutSettingsControls(HWND window, AppState& state) {
     const int rowCount = static_cast<int>(state.settings.homeOrder.size());
     const int contentHeight = margin + headingAdvance +
         rowCount * (rowHeight + gap) + ScaleForDpi(window, 4) +
-        rowHeight + ScaleForDpi(window, 12) + rowHeight + margin;
+        rowHeight + ScaleForDpi(window, 8) + rowHeight +
+        ScaleForDpi(window, 12) + rowHeight + margin;
     state.settingsScrollMaximum = std::max(0, contentHeight - height);
     state.settingsScrollOffset =
         std::clamp(state.settingsScrollOffset, 0, state.settingsScrollMaximum);
@@ -1931,6 +2010,15 @@ void LayoutSettingsControls(HWND window, AppState& state) {
     y += ScaleForDpi(window, 4);
     MoveWindow(state.settingsTopmostCheck, margin, y,
                width - margin * 2, rowHeight, TRUE);
+    y += rowHeight + ScaleForDpi(window, 8);
+    const int updateButtonWidth = ScaleForDpi(window, 104);
+    MoveWindow(state.settingsUpdateStatus, margin, y,
+               std::max(ScaleForDpi(window, 180),
+                        width - margin * 2 - updateButtonWidth - gap),
+               rowHeight, TRUE);
+    MoveWindow(state.settingsCheckUpdatesButton,
+               width - margin - updateButtonWidth, y,
+               updateButtonWidth, rowHeight, TRUE);
     y += rowHeight + ScaleForDpi(window, 12);
     MoveWindow(state.settingsCloseButton, width - margin - ScaleForDpi(window, 82), y,
                ScaleForDpi(window, 82), rowHeight, TRUE);
@@ -1984,9 +2072,16 @@ bool CreateSettingsControls(HWND window, AppState& state) {
         0, 0, 0, 0, window,
         reinterpret_cast<HMENU>(static_cast<INT_PTR>(kSettingsTopmostId)),
         GetModuleHandleW(nullptr), nullptr);
+    state.settingsUpdateStatus = CreateLabel(
+        window, L"每天自动检查一次，也可以手动检查",
+        SS_LEFT | SS_CENTERIMAGE);
+    state.settingsCheckUpdatesButton =
+        CreateButton(window, L"检查更新", kSettingsCheckUpdatesId);
     state.settingsCloseButton = CreateButton(window, L"Close", kSettingsCloseId);
 
-    if (!state.settingsHeading || !state.settingsTopmostCheck || !state.settingsCloseButton) {
+    if (!state.settingsHeading || !state.settingsTopmostCheck ||
+        !state.settingsUpdateStatus || !state.settingsCheckUpdatesButton ||
+        !state.settingsCloseButton) {
         return false;
     }
     for (const SettingsRow& row : state.settingsRows) {
@@ -2124,6 +2219,14 @@ LRESULT CALLBACK SettingsWindowProcedure(HWND window, UINT message,
                 UpdateTopmostState(state->mainWindow, *state, enabled, true);
                 return 0;
             }
+            if (controlId == kSettingsCheckUpdatesId) {
+                if (state->updateWorkerAvailable &&
+                    state->updateWorker.RequestManualCheck()) {
+                    RefreshUpdateControls(*state);
+                    UpdateStatusText(*state);
+                }
+                return 0;
+            }
             if (controlId == kSettingsCloseId) {
                 DestroyWindow(window);
                 return 0;
@@ -2239,6 +2342,8 @@ LRESULT CALLBACK SettingsWindowProcedure(HWND window, UINT message,
                 state->settingsWindow = nullptr;
                 state->settingsHeading = nullptr;
                 state->settingsTopmostCheck = nullptr;
+                state->settingsUpdateStatus = nullptr;
+                state->settingsCheckUpdatesButton = nullptr;
                 state->settingsCloseButton = nullptr;
                 state->settingsRows.clear();
                 state->settingsScrollOffset = 0;
@@ -2264,7 +2369,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             if (!state->performanceWorker.Start(window, kSampleReadyMessage)) return -1;
             state->codexWorkerAvailable =
                 state->codexWorker.Start(
-                    window, kCodexReadyMessage, "0.3.0",
+                    window, kCodexReadyMessage, kApplicationVersion,
                     state->settingsPath.empty()
                         ? std::filesystem::path{}
                         : state->settingsPath.parent_path() /
@@ -2272,6 +2377,12 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             state->serviceStatusWorkerAvailable =
                 state->serviceStatusWorker.Start(window,
                                                  kServiceStatusReadyMessage);
+            state->updateWorkerAvailable = state->updateWorker.Start(
+                window, kUpdateReadyMessage, kApplicationVersion,
+                state->settingsPath.empty()
+                    ? std::filesystem::path{}
+                    : state->settingsPath.parent_path() /
+                          L"update-state.ini");
             UpdateSamplingDemand(window, *state);
             UpdateCodexDemand(window, *state);
             UpdateServiceStatusDemand(window, *state);
@@ -2346,6 +2457,20 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
                 if (completed && !state->serviceStatusPaused) {
                     ApplyServiceStatusRefresh(*state, std::move(*completed));
                 } else {
+                    UpdateStatusText(*state);
+                }
+            }
+            return 0;
+
+        case kUpdateReadyMessage:
+            if (state) {
+                std::optional<
+                    codex_monitor::update::CompletedWindowsUpdateCheck>
+                    completed = state->updateWorker.TakeLatest();
+                if (completed) {
+                    ApplyWindowsUpdateCheck(*state, std::move(*completed));
+                } else {
+                    RefreshUpdateControls(*state);
                     UpdateStatusText(*state);
                 }
             }
@@ -2509,6 +2634,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
                 state->performanceWorker.StopAndJoin();
                 state->codexWorker.StopAndJoin();
                 state->serviceStatusWorker.StopAndJoin();
+                state->updateWorker.RequestStop();
                 if (state->settingsWindow) DestroyWindow(state->settingsWindow);
                 DeleteFonts(*state);
                 if (state->backgroundBrush) DeleteObject(state->backgroundBrush);
@@ -2642,6 +2768,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand) {
         }
     }
 
+    // The window is already gone, so a slow synchronous network teardown can
+    // no longer freeze visible UI while the worker finishes its in-flight call.
+    state.updateWorker.StopAndJoin();
     CloseHandle(singleton);
     return static_cast<int>(message.wParam);
 }

@@ -122,6 +122,21 @@ SERVICE_STATUS_JSON_TEST = (
 SERVICE_STATUS_WORKER_TEST = (
     WINDOWS_ROOT / "tests" / "service_status_worker_test.cpp"
 ).read_text(encoding="utf-8")
+UPDATE_SELECTOR = (
+    WINDOWS_ROOT / "src" / "update" / "github_release_selector.cpp"
+).read_text(encoding="utf-8")
+UPDATE_FETCH = (
+    WINDOWS_ROOT / "src" / "update" / "update_fetch_win32.cpp"
+).read_text(encoding="utf-8")
+UPDATE_STATE = (
+    WINDOWS_ROOT / "src" / "update" / "update_state_store.cpp"
+).read_text(encoding="utf-8")
+UPDATE_WORKER = (
+    WINDOWS_ROOT / "src" / "update" / "update_worker.cpp"
+).read_text(encoding="utf-8")
+UPDATE_WORKER_HEADER = (
+    WINDOWS_ROOT / "src" / "update" / "update_worker.h"
+).read_text(encoding="utf-8")
 RESOURCE_SCRIPT = (WINDOWS_ROOT / "resources" / "CodexMonitorHUD.rc").read_text(
     encoding="utf-8"
 )
@@ -390,6 +405,41 @@ def main() -> None:
            "path", "cost refresh results must not expose local source paths")
     reject(struct_body(CODEX_WORKER_HEADER, "CodexCostRefresh"),
            "raw", "cost refresh results must not expose raw session JSON")
+
+    update_contracts = {
+        "CodexMonitorHUD-windows-x64-":
+            "Windows updates require the exact architecture-specific MSI name",
+        "draft || release.prerelease":
+            "draft and preview releases cannot become automatic updates",
+        "IsAllowedDownloadUrl":
+            "selected installers must use the exact repository release URL",
+        "WINHTTP_DISABLE_COOKIES":
+            "update checks send no browser cookies",
+        "WINHTTP_DISABLE_AUTHENTICATION":
+            "update checks send no automatic credentials",
+        "WINHTTP_DISABLE_REDIRECTS":
+            "the release-list request cannot redirect to another host",
+        "kMaximumResponseBytes = 2 * 1024 * 1024":
+            "the public release response is bounded",
+        "automaticCheckInterval{24 * 60 * 60}":
+            "automatic Windows update checks run at most daily",
+        "RequestManualCheck":
+            "the user can explicitly bypass the daily cadence",
+        "checked_version=":
+            "an app upgrade invalidates stale cached update offers",
+        '"version=2\\nlast_check="':
+            "the checked-version schema has an explicit format revision",
+        "RequestStop":
+            "visible window shutdown never waits for synchronous network work",
+        "update-state.ini":
+            "the UI supplies an independent update-state file",
+    }
+    update_sources = (UPDATE_SELECTOR + UPDATE_FETCH + UPDATE_STATE +
+                      UPDATE_WORKER_HEADER + UPDATE_WORKER + MAIN)
+    for token, reason in update_contracts.items():
+        require(update_sources, token, reason)
+    reject(UPDATE_FETCH, "Authorization", "public update checks must not send a token")
+    reject(UPDATE_FETCH, "Cookie:", "public update checks must not send cookies")
 
     diagnosis_contracts = {
         "Missing a low metric cannot prove":
@@ -786,6 +836,9 @@ def main() -> None:
         "nativeVisibleCheck": "settings expose the own-page visibility checkbox",
         "kSettingsVisibleBaseId": "Home checkbox commands are independently routed",
         "kSettingsNativeVisibleBaseId": "own-page checkbox commands are independently routed",
+        "kSettingsCheckUpdatesId": "settings expose an explicit update check button",
+        "kUpdateReadyMessage": "update completion has a dedicated UI message",
+        "updateWorker.StopAndJoin": "window teardown stops the update worker",
         "BS_AUTOCHECKBOX": "visibility controls have visible native check states",
         "BM_GETCHECK": "visibility changes read the actual checkbox state",
         "settingsScrollMaximum": "small high-DPI screens have bounded settings scrolling",
@@ -824,6 +877,12 @@ def main() -> None:
             "the stable status presentation model is compiled into the HUD",
         "src/service_status_worker.cpp":
             "the visibility-driven status worker is compiled into the HUD",
+        "src/update/github_release_selector.cpp":
+            "strict Windows release selection is compiled into the HUD",
+        "src/update/update_fetch_win32.cpp":
+            "the bounded public GitHub transport is compiled into the HUD",
+        "src/update/update_worker.cpp":
+            "daily and manual update scheduling is compiled into the HUD",
         "src/main.cpp": "the product window is compiled into the HUD",
     }
     for token, reason in hud_source_contracts.items():
@@ -885,6 +944,16 @@ def main() -> None:
             "portable quota history tests are buildable",
         "add_test(NAME windows_quota_history_store":
             "portable quota history tests are registered with CTest",
+        "add_test(NAME windows_github_release_selector":
+            "strict release selection tests are registered with CTest",
+        "add_test(NAME windows_update_state_store":
+            "persistent daily cadence tests are registered with CTest",
+        "add_test(NAME windows_github_release_json":
+            "GitHub release JSON tests are registered with CTest",
+        "add_test(NAME windows_update_check":
+            "Windows-only release evaluation tests are registered with CTest",
+        "add_test(NAME windows_update_worker":
+            "daily and manual update worker tests are registered with CTest",
         "add_executable(CodexMonitorCodexProcessTests":
             "bounded process integration tests are buildable",
         "add_test(NAME windows_codex_process":

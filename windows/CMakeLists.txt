@@ -14,6 +14,9 @@ function(configure_codex_monitor_target target)
         ${CMAKE_CURRENT_SOURCE_DIR}/src
         ${CMAKE_CURRENT_SOURCE_DIR}/resources
     )
+    target_compile_definitions(${target} PRIVATE
+        CODEX_MONITOR_WINDOWS_VERSION="${PROJECT_VERSION}"
+    )
     if(MSVC)
         target_compile_options(${target} PRIVATE
             $<$<COMPILE_LANGUAGE:CXX>:/W4>
@@ -152,6 +155,22 @@ if(BUILD_TESTING)
     configure_codex_monitor_target(CodexMonitorQuotaHistoryStoreTests)
     add_test(NAME windows_quota_history_store
         COMMAND CodexMonitorQuotaHistoryStoreTests)
+
+    add_executable(CodexMonitorGitHubReleaseSelectorTests
+        src/update/github_release_selector.cpp
+        tests/github_release_selector_test.cpp
+    )
+    configure_codex_monitor_target(CodexMonitorGitHubReleaseSelectorTests)
+    add_test(NAME windows_github_release_selector
+        COMMAND CodexMonitorGitHubReleaseSelectorTests)
+
+    add_executable(CodexMonitorUpdateStateStoreTests
+        src/update/update_state_store.cpp
+        tests/update_state_store_test.cpp
+    )
+    configure_codex_monitor_target(CodexMonitorUpdateStateStoreTests)
+    add_test(NAME windows_update_state_store
+        COMMAND CodexMonitorUpdateStateStoreTests)
 endif()
 
 if(WIN32)
@@ -210,6 +229,68 @@ if(WIN32)
         target_link_libraries(CodexMonitorServiceStatusJsonTests PRIVATE windowsapp)
         add_test(NAME windows_service_status_json
             COMMAND CodexMonitorServiceStatusJsonTests)
+
+        add_executable(CodexMonitorGitHubReleaseJsonTests
+            src/update/github_release_json_win32.cpp
+            tests/github_release_json_test.cpp
+        )
+        configure_codex_monitor_target(CodexMonitorGitHubReleaseJsonTests)
+        target_compile_definitions(CodexMonitorGitHubReleaseJsonTests PRIVATE
+            UNICODE
+            _UNICODE
+            NOMINMAX
+            _SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS
+            WINVER=0x0A00
+            _WIN32_WINNT=0x0A00
+        )
+        target_link_libraries(CodexMonitorGitHubReleaseJsonTests PRIVATE windowsapp)
+        add_test(NAME windows_github_release_json
+            COMMAND CodexMonitorGitHubReleaseJsonTests)
+
+        add_executable(CodexMonitorUpdateCheckTests
+            src/update/github_release_json_win32.cpp
+            src/update/github_release_selector.cpp
+            src/update/update_check_win32.cpp
+            src/update/update_fetch_win32.cpp
+            tests/update_check_test.cpp
+        )
+        configure_codex_monitor_target(CodexMonitorUpdateCheckTests)
+        target_compile_definitions(CodexMonitorUpdateCheckTests PRIVATE
+            UNICODE
+            _UNICODE
+            NOMINMAX
+            _SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS
+            WINVER=0x0A00
+            _WIN32_WINNT=0x0A00
+        )
+        target_link_libraries(CodexMonitorUpdateCheckTests PRIVATE
+            winhttp windowsapp)
+        add_test(NAME windows_update_check
+            COMMAND CodexMonitorUpdateCheckTests)
+
+        add_executable(CodexMonitorUpdateWorkerTests
+            src/update/github_release_json_win32.cpp
+            src/update/github_release_selector.cpp
+            src/update/update_check_win32.cpp
+            src/update/update_fetch_win32.cpp
+            src/update/update_state_store.cpp
+            src/update/update_worker.cpp
+            tests/update_worker_test.cpp
+        )
+        configure_codex_monitor_target(CodexMonitorUpdateWorkerTests)
+        target_compile_definitions(CodexMonitorUpdateWorkerTests PRIVATE
+            UNICODE
+            _UNICODE
+            NOMINMAX
+            _SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS
+            WINVER=0x0A00
+            _WIN32_WINNT=0x0A00
+        )
+        target_link_libraries(CodexMonitorUpdateWorkerTests PRIVATE
+            user32 winhttp windowsapp)
+        add_test(NAME windows_update_worker
+            COMMAND CodexMonitorUpdateWorkerTests)
+        set_tests_properties(windows_update_worker PROPERTIES TIMEOUT 20)
 
         add_executable(CodexMonitorServiceStatusWorkerTests
             src/service_status_worker.cpp
@@ -344,6 +425,12 @@ if(WIN32)
         src/service_status_model.cpp
         src/service_status_worker.cpp
         src/settings_store_win32.cpp
+        src/update/github_release_json_win32.cpp
+        src/update/github_release_selector.cpp
+        src/update/update_check_win32.cpp
+        src/update/update_fetch_win32.cpp
+        src/update/update_state_store.cpp
+        src/update/update_worker.cpp
         src/windows_sampler.cpp
     )
     configure_codex_monitor_target(CodexMonitorHUD)
