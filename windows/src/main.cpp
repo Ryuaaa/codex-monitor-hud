@@ -703,6 +703,12 @@ std::wstring BuildTokenUsageCardText(const AppState& state) {
     }
     output << L"\r\n近7日：" << FormatTokenCount(totals->last7DaysTokens)
            << L"  |  近30日：" << FormatTokenCount(totals->thirtyDayTokens);
+    output << L"\r\n本月：" << FormatTokenCount(totals->monthToDateTokens);
+    if (totals->monthForecastTokens) {
+        output << L"  |  月末约：" << FormatTokenCount(*totals->monthForecastTokens);
+    } else {
+        output << L"  |  月末约：当前数据不足";
+    }
     if (totals->saturated) output << L"（达到上限，非精确）";
     AppendMethodRefreshWarning(method, output);
     return output.str();

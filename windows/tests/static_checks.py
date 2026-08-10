@@ -605,6 +605,10 @@ def main() -> None:
         "NativePageNeedsCodexData": "the Codex native page follows its own switches",
         "UpdateCodexDemand": "all demand transitions share one start/stop gate",
         "codexWorker.PauseAndInvalidate": "minimize and hidden modules stop Codex work",
+        "totals->monthForecastTokens":
+            "the tested monthly Token projection is displayed in the HUD",
+        "月末约：当前数据不足":
+            "the HUD does not fabricate a monthly projection when evidence is missing",
         "codexWorker.ActivateAndRefresh": "new demand refreshes immediately",
         "codexWorker.Start": "the app-server worker starts with the window",
         "kCodexReadyMessage": "worker completion has a dedicated UI message",
