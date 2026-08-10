@@ -194,6 +194,46 @@ if(BUILD_TESTING)
     endif()
     add_test(NAME windows_update_installer_verifier
         COMMAND CodexMonitorUpdateInstallerVerifierTests)
+
+    add_executable(CodexMonitorUpdateAssetDownloadTests
+        src/update/update_asset_download_win32.cpp
+        tests/update_asset_download_test.cpp
+    )
+    configure_codex_monitor_target(CodexMonitorUpdateAssetDownloadTests)
+    if(WIN32)
+        target_compile_definitions(
+            CodexMonitorUpdateAssetDownloadTests PRIVATE
+            UNICODE
+            _UNICODE
+            NOMINMAX
+            WINVER=0x0A00
+            _WIN32_WINNT=0x0A00
+        )
+        target_link_libraries(
+            CodexMonitorUpdateAssetDownloadTests PRIVATE winhttp)
+    endif()
+    add_test(NAME windows_update_asset_download
+        COMMAND CodexMonitorUpdateAssetDownloadTests)
+
+    add_executable(CodexMonitorUpdateMsiIdentityTests
+        src/update/update_msi_identity_win32.cpp
+        tests/update_msi_identity_test.cpp
+    )
+    configure_codex_monitor_target(CodexMonitorUpdateMsiIdentityTests)
+    if(WIN32)
+        target_compile_definitions(
+            CodexMonitorUpdateMsiIdentityTests PRIVATE
+            UNICODE
+            _UNICODE
+            NOMINMAX
+            WINVER=0x0A00
+            _WIN32_WINNT=0x0A00
+        )
+        target_link_libraries(CodexMonitorUpdateMsiIdentityTests PRIVATE
+            wintrust crypt32 msi)
+    endif()
+    add_test(NAME windows_update_msi_identity
+        COMMAND CodexMonitorUpdateMsiIdentityTests)
 endif()
 
 if(WIN32)
@@ -451,8 +491,10 @@ if(WIN32)
         src/update/github_release_json_win32.cpp
         src/update/github_release_selector.cpp
         src/update/update_check_win32.cpp
+        src/update/update_asset_download_win32.cpp
         src/update/update_fetch_win32.cpp
         src/update/update_installer_verifier_win32.cpp
+        src/update/update_msi_identity_win32.cpp
         src/update/update_state_store.cpp
         src/update/update_worker.cpp
         src/windows_sampler.cpp
@@ -468,7 +510,8 @@ if(WIN32)
         _WIN32_WINNT=0x0A00
     )
     target_link_libraries(CodexMonitorHUD PRIVATE
-        user32 gdi32 psapi shell32 ole32 winhttp windowsapp bcrypt)
+        user32 gdi32 psapi shell32 ole32 winhttp windowsapp bcrypt
+        wintrust crypt32 msi)
 else()
     message(STATUS "Non-Windows host: configuring portable snapshot and state tests only.")
 endif()

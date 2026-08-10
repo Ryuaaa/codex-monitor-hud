@@ -128,11 +128,23 @@ UPDATE_SELECTOR = (
 UPDATE_FETCH = (
     WINDOWS_ROOT / "src" / "update" / "update_fetch_win32.cpp"
 ).read_text(encoding="utf-8")
+UPDATE_ASSET_DOWNLOAD = (
+    WINDOWS_ROOT / "src" / "update" / "update_asset_download_win32.cpp"
+).read_text(encoding="utf-8")
+UPDATE_ASSET_DOWNLOAD_HEADER = (
+    WINDOWS_ROOT / "src" / "update" / "update_asset_download_win32.h"
+).read_text(encoding="utf-8")
 UPDATE_INSTALLER_VERIFIER = (
     WINDOWS_ROOT / "src" / "update" / "update_installer_verifier_win32.cpp"
 ).read_text(encoding="utf-8")
 UPDATE_INSTALLER_VERIFIER_HEADER = (
     WINDOWS_ROOT / "src" / "update" / "update_installer_verifier_win32.h"
+).read_text(encoding="utf-8")
+UPDATE_MSI_IDENTITY = (
+    WINDOWS_ROOT / "src" / "update" / "update_msi_identity_win32.cpp"
+).read_text(encoding="utf-8")
+UPDATE_MSI_IDENTITY_HEADER = (
+    WINDOWS_ROOT / "src" / "update" / "update_msi_identity_win32.h"
 ).read_text(encoding="utf-8")
 UPDATE_STATE = (
     WINDOWS_ROOT / "src" / "update" / "update_state_store.cpp"
@@ -440,14 +452,44 @@ def main() -> None:
         "update-state.ini":
             "the UI supplies an independent update-state file",
     }
-    update_sources = (UPDATE_SELECTOR + UPDATE_FETCH + UPDATE_STATE +
+    update_sources = (UPDATE_SELECTOR + UPDATE_FETCH +
+                      UPDATE_ASSET_DOWNLOAD_HEADER + UPDATE_ASSET_DOWNLOAD +
+                      UPDATE_STATE +
                       UPDATE_INSTALLER_VERIFIER_HEADER +
-                      UPDATE_INSTALLER_VERIFIER + UPDATE_WORKER_HEADER +
+                      UPDATE_INSTALLER_VERIFIER + UPDATE_MSI_IDENTITY_HEADER +
+                      UPDATE_MSI_IDENTITY + UPDATE_WORKER_HEADER +
                       UPDATE_WORKER + MAIN)
     for token, reason in update_contracts.items():
         require(update_sources, token, reason)
     reject(UPDATE_FETCH, "Authorization", "public update checks must not send a token")
     reject(UPDATE_FETCH, "Cookie:", "public update checks must not send cookies")
+    for token, reason in {
+        "release-assets.githubusercontent.com":
+            "asset redirects are restricted to GitHub's release CDN",
+        "WINHTTP_DISABLE_REDIRECTS":
+            "asset redirects are followed only after explicit validation",
+        "WINHTTP_DISABLE_COOKIES":
+            "asset downloads never send browser cookies",
+        "WINHTTP_DISABLE_AUTHENTICATION":
+            "asset downloads never send automatic credentials",
+        "CREATE_NEW":
+            "downloaded assets cannot overwrite an existing path",
+        "FILE_FLAG_OPEN_REPARSE_POINT":
+            "download destinations reject filesystem redirection",
+        "LockDirectoryChain":
+            "the complete local directory chain stays fixed during download",
+        "DRIVE_FIXED":
+            "update assets cannot be written through UNC or network paths",
+        "GENERIC_WRITE | DELETE":
+            "failed partial downloads can be deleted by their open handle",
+        "maximumBytes":
+            "each downloaded asset has a caller-supplied hard size limit",
+    }.items():
+        require(UPDATE_ASSET_DOWNLOAD, token, reason)
+    reject(UPDATE_ASSET_DOWNLOAD, "Authorization:",
+           "asset downloads must not send a token")
+    reject(UPDATE_ASSET_DOWNLOAD, "Cookie:",
+           "asset downloads must not send cookies")
     installer_verifier_sources = (
         UPDATE_INSTALLER_VERIFIER_HEADER + UPDATE_INSTALLER_VERIFIER
     )
@@ -464,6 +506,24 @@ def main() -> None:
             "checksum equality cannot be mistaken for publisher trust",
     }.items():
         require(installer_verifier_sources, token, reason)
+    msi_identity_sources = UPDATE_MSI_IDENTITY_HEADER + UPDATE_MSI_IDENTITY
+    for token, reason in {
+        "WinVerifyTrust":
+            "a checksum cannot replace Windows publisher trust validation",
+        "WTD_REVOKE_WHOLECHAIN":
+            "the Authenticode chain is revocation checked",
+        "CERT_SHA256_HASH_PROP_ID":
+            "the actual signing certificate is pinned by SHA-256",
+        "kMissingTrustedPublisherFingerprint":
+            "one-click installation fails closed until a publisher pin exists",
+        "MsiOpenDatabaseW":
+            "the MSI identity is inspected through the Windows Installer API",
+        "kWindowsMsiUpgradeCode":
+            "the package must belong to the expected upgrade family",
+        "kWindowsMsiTemplate":
+            "the package architecture and language are fixed",
+    }.items():
+        require(msi_identity_sources, token, reason)
     require(RESOURCE_SCRIPT, "CODEX_MONITOR_WINDOWS_VERSION_MAJOR",
             "the executable resource version follows the CMake project version")
     reject(RESOURCE_SCRIPT, "FILEVERSION 0,3,0,0",
@@ -921,8 +981,12 @@ def main() -> None:
             "strict Windows release selection is compiled into the HUD",
         "src/update/update_fetch_win32.cpp":
             "the bounded public GitHub transport is compiled into the HUD",
+        "src/update/update_asset_download_win32.cpp":
+            "the allow-listed update asset downloader is compiled into the HUD",
         "src/update/update_installer_verifier_win32.cpp":
             "strict MSI SHA-256 verification is compiled into the HUD",
+        "src/update/update_msi_identity_win32.cpp":
+            "publisher trust and MSI identity verification are compiled into the HUD",
         "src/update/update_worker.cpp":
             "daily and manual update scheduling is compiled into the HUD",
         "src/main.cpp": "the product window is compiled into the HUD",
@@ -998,6 +1062,10 @@ def main() -> None:
             "daily and manual update worker tests are registered with CTest",
         "add_test(NAME windows_update_installer_verifier":
             "downloaded MSI checksum verification tests are registered with CTest",
+        "add_test(NAME windows_update_asset_download":
+            "update asset URL and download policy tests are registered with CTest",
+        "add_test(NAME windows_update_msi_identity":
+            "publisher and MSI identity policy tests are registered with CTest",
         "add_executable(CodexMonitorCodexProcessTests":
             "bounded process integration tests are buildable",
         "add_test(NAME windows_codex_process":

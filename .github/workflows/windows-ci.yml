@@ -208,6 +208,179 @@ jobs:
             throw "MSI uninstall left the application executable behind"
           }
 
+      - name: Test Authenticode publisher pin against built MSI
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+
+          $installers = @(Get-ChildItem -LiteralPath "windows/out/installer" `
+            -Filter "CodexMonitorHUD-windows-x64-*.msi" -File)
+          if ($installers.Count -ne 1) {
+            throw "Expected exactly one Windows MSI, found $($installers.Count)"
+          }
+
+          $identityTest = (Resolve-Path -LiteralPath `
+            "windows/out/build/Release/CodexMonitorUpdateMsiIdentityTests.exe").Path
+          $cmake = Get-Content -LiteralPath "windows/CMakeLists.txt" -Raw
+          if ($cmake -notmatch `
+              'project\(CodexMonitorHUDWindows VERSION ([0-9]+\.[0-9]+\.[0-9]+)') {
+            throw "Could not read the expected Windows version"
+          }
+          $expectedVersion = $Matches[1]
+
+          $windowsKitsBin = Join-Path ${env:ProgramFiles(x86)} `
+            "Windows Kits\10\bin"
+          $signTool = Get-ChildItem -LiteralPath $windowsKitsBin -Directory |
+            Where-Object { $_.Name -match '^\d+(\.\d+){3}$' } |
+            Sort-Object { [version]$_.Name } -Descending |
+            ForEach-Object {
+              $candidate = Join-Path $_.FullName "x64\signtool.exe"
+              if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+                $candidate
+              }
+            } |
+            Select-Object -First 1
+          if ([string]::IsNullOrWhiteSpace($signTool)) {
+            throw "Could not find the x64 Windows SDK signtool.exe"
+          }
+
+          $temporaryDirectory = Join-Path $env:RUNNER_TEMP `
+            ("codex-monitor-authenticode-" + [guid]::NewGuid().ToString("N"))
+          New-Item -ItemType Directory -Path $temporaryDirectory | Out-Null
+          $signedInstaller = Join-Path $temporaryDirectory $installers[0].Name
+          Copy-Item -LiteralPath $installers[0].FullName `
+            -Destination $signedInstaller
+          $signedInstaller = (Resolve-Path -LiteralPath $signedInstaller).Path
+
+          $certificate = $null
+          $storeThumbprintSha1 = $null
+          try {
+            $certificate = New-SelfSignedCertificate `
+              -Type CodeSigningCert `
+              -Subject ("CN=Codex Monitor HUD CI " + $env:GITHUB_RUN_ID + `
+                "-" + $env:GITHUB_RUN_ATTEMPT) `
+              -CertStoreLocation "Cert:\CurrentUser\My" `
+              -KeyAlgorithm RSA `
+              -KeyLength 2048 `
+              -HashAlgorithm SHA256 `
+              -KeyExportPolicy NonExportable `
+              -NotBefore (Get-Date).AddMinutes(-5) `
+              -NotAfter (Get-Date).AddHours(2)
+            $storeThumbprintSha1 = $certificate.Thumbprint
+
+            $publicCertificate = Join-Path $temporaryDirectory `
+              "ci-code-signing.cer"
+            Export-Certificate -Cert $certificate `
+              -FilePath $publicCertificate -Type CERT -Force | Out-Null
+            Import-Certificate -FilePath $publicCertificate `
+              -CertStoreLocation "Cert:\CurrentUser\Root" | Out-Null
+            Import-Certificate -FilePath $publicCertificate `
+              -CertStoreLocation "Cert:\CurrentUser\TrustedPublisher" | Out-Null
+
+            $sha256 = [System.Security.Cryptography.SHA256]::Create()
+            try {
+              $publisherPinSha256 = -join (
+                $sha256.ComputeHash($certificate.RawData) |
+                  ForEach-Object { $_.ToString("x2") })
+            } finally {
+              $sha256.Dispose()
+            }
+            if ($publisherPinSha256.Length -ne 64) {
+              throw "The CI publisher certificate SHA-256 pin is invalid"
+            }
+
+            & $signTool sign /fd SHA256 /sha1 $storeThumbprintSha1 `
+              /s My $signedInstaller
+            if ($LASTEXITCODE -ne 0) {
+              throw "Authenticode signing failed with exit code $LASTEXITCODE"
+            }
+            & $signTool verify /pa /all $signedInstaller
+            if ($LASTEXITCODE -ne 0) {
+              throw "Authenticode verification failed with exit code $LASTEXITCODE"
+            }
+
+            & $identityTest --verify-signed-msi $signedInstaller `
+              $expectedVersion $publisherPinSha256 verified
+            if ($LASTEXITCODE -ne 0) {
+              throw "The signed MSI did not pass the pinned publisher check"
+            }
+
+            $wrongFirstCharacter = if ($publisherPinSha256[0] -eq '0') {
+              '1'
+            } else {
+              '0'
+            }
+            $wrongPublisherPin = $wrongFirstCharacter + `
+              $publisherPinSha256.Substring(1)
+            & $identityTest --verify-signed-msi $signedInstaller `
+              $expectedVersion $wrongPublisherPin publisher-fingerprint-mismatch
+            if ($LASTEXITCODE -ne 0) {
+              throw "The signed MSI did not reject the wrong publisher pin"
+            }
+
+            $tamperedInstaller = Join-Path $temporaryDirectory `
+              "CodexMonitorHUD-windows-x64-tampered.msi"
+            Copy-Item -LiteralPath $signedInstaller `
+              -Destination $tamperedInstaller
+            $tamperedBytes = [System.IO.File]::ReadAllBytes($tamperedInstaller)
+            if ($tamperedBytes.Length -lt 1024) {
+              throw "The signed MSI is unexpectedly small"
+            }
+            $tamperedIndex = [Math]::Min(4096, $tamperedBytes.Length - 1)
+            $tamperedBytes[$tamperedIndex] = `
+              $tamperedBytes[$tamperedIndex] -bxor 0x01
+            [System.IO.File]::WriteAllBytes(
+              $tamperedInstaller, $tamperedBytes)
+            & $identityTest --verify-signed-msi $tamperedInstaller `
+              $expectedVersion $publisherPinSha256 `
+              signature-verification-failed
+            if ($LASTEXITCODE -ne 0) {
+              throw "The publisher check accepted a tampered signed MSI"
+            }
+          } finally {
+            $cleanupFailed = $false
+            if (-not [string]::IsNullOrWhiteSpace($storeThumbprintSha1)) {
+              foreach ($store in @("My", "Root", "TrustedPublisher")) {
+                $certificatePath = `
+                  "Cert:\CurrentUser\$store\$storeThumbprintSha1"
+                try {
+                  if (Test-Path -LiteralPath $certificatePath) {
+                    if ($store -eq "My") {
+                      Remove-Item -LiteralPath $certificatePath `
+                        -DeleteKey -Force -ErrorAction Stop
+                    } else {
+                      Remove-Item -LiteralPath $certificatePath `
+                        -Force -ErrorAction Stop
+                    }
+                  }
+                  if (Test-Path -LiteralPath $certificatePath) {
+                    $cleanupFailed = $true
+                  }
+                } catch {
+                  $cleanupFailed = $true
+                  Write-Warning `
+                    "Failed to remove the CI certificate from $store"
+                }
+              }
+            }
+            if ($null -ne $certificate) {
+              $certificate.Dispose()
+            }
+            try {
+              if (Test-Path -LiteralPath $temporaryDirectory) {
+                Remove-Item -LiteralPath $temporaryDirectory `
+                  -Recurse -Force -ErrorAction Stop
+              }
+            } catch {
+              $cleanupFailed = $true
+              Write-Warning "Failed to remove the Authenticode test directory"
+            }
+            if ($cleanupFailed) {
+              throw "Authenticode CI test cleanup was incomplete"
+            }
+          }
+
       - name: Upload Windows executable
         uses: actions/upload-artifact@v4
         with:
