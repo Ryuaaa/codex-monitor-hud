@@ -36,9 +36,56 @@ if(BUILD_TESTING)
     )
     configure_codex_monitor_target(CodexMonitorSamplingScheduleTests)
     add_test(NAME windows_sampling_schedule COMMAND CodexMonitorSamplingScheduleTests)
+
+    add_executable(CodexMonitorCodexRefreshScheduleTests
+        src/codex/codex_refresh_schedule.cpp
+        tests/codex_refresh_schedule_test.cpp
+    )
+    configure_codex_monitor_target(CodexMonitorCodexRefreshScheduleTests)
+    add_test(NAME windows_codex_refresh_schedule
+        COMMAND CodexMonitorCodexRefreshScheduleTests)
 endif()
 
 if(WIN32)
+    if(BUILD_TESTING)
+        add_executable(CodexMonitorFakeCodexAppServer
+            tests/fake_codex_app_server.cpp
+        )
+        configure_codex_monitor_target(CodexMonitorFakeCodexAppServer)
+
+        add_executable(CodexMonitorCodexProcessTests
+            src/codex/codex_executable.cpp
+            src/codex/codex_process.cpp
+            tests/codex_process_test.cpp
+        )
+        configure_codex_monitor_target(CodexMonitorCodexProcessTests)
+        target_compile_definitions(CodexMonitorCodexProcessTests PRIVATE
+            UNICODE
+            _UNICODE
+            NOMINMAX
+            WINVER=0x0A00
+            _WIN32_WINNT=0x0A00
+        )
+        add_test(NAME windows_codex_process
+            COMMAND CodexMonitorCodexProcessTests
+                    $<TARGET_FILE:CodexMonitorFakeCodexAppServer>)
+
+        add_executable(CodexMonitorCodexJsonTests
+            src/codex/codex_json_win32.cpp
+            tests/codex_json_test.cpp
+        )
+        configure_codex_monitor_target(CodexMonitorCodexJsonTests)
+        target_compile_definitions(CodexMonitorCodexJsonTests PRIVATE
+            UNICODE
+            _UNICODE
+            NOMINMAX
+            WINVER=0x0A00
+            _WIN32_WINNT=0x0A00
+        )
+        target_link_libraries(CodexMonitorCodexJsonTests PRIVATE windowsapp)
+        add_test(NAME windows_codex_json COMMAND CodexMonitorCodexJsonTests)
+    endif()
+
     add_executable(CodexMonitorHUD WIN32
         src/main.cpp
         src/module_state.cpp

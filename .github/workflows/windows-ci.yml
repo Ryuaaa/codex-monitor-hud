@@ -42,6 +42,9 @@ jobs:
       - name: Build Release executable
         run: cmake --build windows/out/build --config Release --parallel
 
+      - name: Run Release tests
+        run: ctest --test-dir windows/out/build -C Release --output-on-failure
+
       - name: Verify build output
         shell: pwsh
         run: |
