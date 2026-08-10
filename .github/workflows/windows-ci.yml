@@ -209,7 +209,10 @@ jobs:
           }
 
       - name: Test Authenticode publisher pin against built MSI
-        shell: pwsh
+        # The PKI module is native to Windows PowerShell. Running its
+        # certificate cmdlets through the PowerShell 7 compatibility layer can
+        # stall a hosted runner before signtool is reached.
+        shell: powershell
         run: |
           Set-StrictMode -Version Latest
           $ErrorActionPreference = "Stop"
@@ -256,6 +259,7 @@ jobs:
           $certificate = $null
           $storeThumbprintSha1 = $null
           try {
+            Write-Host "phase=certificate-create start"
             $certificate = New-SelfSignedCertificate `
               -Type CodeSigningCert `
               -Subject ("CN=Codex Monitor HUD CI " + $env:GITHUB_RUN_ID + `
@@ -268,15 +272,18 @@ jobs:
               -NotBefore (Get-Date).AddMinutes(-5) `
               -NotAfter (Get-Date).AddHours(2)
             $storeThumbprintSha1 = $certificate.Thumbprint
+            Write-Host "phase=certificate-create done"
 
             $publicCertificate = Join-Path $temporaryDirectory `
               "ci-code-signing.cer"
+            Write-Host "phase=certificate-export-import start"
             Export-Certificate -Cert $certificate `
               -FilePath $publicCertificate -Type CERT -Force | Out-Null
             Import-Certificate -FilePath $publicCertificate `
               -CertStoreLocation "Cert:\CurrentUser\Root" | Out-Null
             Import-Certificate -FilePath $publicCertificate `
               -CertStoreLocation "Cert:\CurrentUser\TrustedPublisher" | Out-Null
+            Write-Host "phase=certificate-export-import done"
 
             $sha256 = [System.Security.Cryptography.SHA256]::Create()
             try {
@@ -290,21 +297,27 @@ jobs:
               throw "The CI publisher certificate SHA-256 pin is invalid"
             }
 
+            Write-Host "phase=signtool-sign start"
             & $signTool sign /fd SHA256 /sha1 $storeThumbprintSha1 `
               /s My $signedInstaller
             if ($LASTEXITCODE -ne 0) {
               throw "Authenticode signing failed with exit code $LASTEXITCODE"
             }
+            Write-Host "phase=signtool-sign done"
+            Write-Host "phase=signtool-verify start"
             & $signTool verify /pa /all $signedInstaller
             if ($LASTEXITCODE -ne 0) {
               throw "Authenticode verification failed with exit code $LASTEXITCODE"
             }
+            Write-Host "phase=signtool-verify done"
 
+            Write-Host "phase=identity-correct-pin start"
             & $identityTest --verify-signed-msi $signedInstaller `
               $expectedVersion $publisherPinSha256 verified
             if ($LASTEXITCODE -ne 0) {
               throw "The signed MSI did not pass the pinned publisher check"
             }
+            Write-Host "phase=identity-correct-pin done"
 
             $wrongFirstCharacter = if ($publisherPinSha256[0] -eq '0') {
               '1'
@@ -313,11 +326,13 @@ jobs:
             }
             $wrongPublisherPin = $wrongFirstCharacter + `
               $publisherPinSha256.Substring(1)
+            Write-Host "phase=identity-wrong-pin start"
             & $identityTest --verify-signed-msi $signedInstaller `
               $expectedVersion $wrongPublisherPin publisher-fingerprint-mismatch
             if ($LASTEXITCODE -ne 0) {
               throw "The signed MSI did not reject the wrong publisher pin"
             }
+            Write-Host "phase=identity-wrong-pin done"
 
             $tamperedInstaller = Join-Path $temporaryDirectory `
               "CodexMonitorHUD-windows-x64-tampered.msi"
@@ -332,13 +347,16 @@ jobs:
               $tamperedBytes[$tamperedIndex] -bxor 0x01
             [System.IO.File]::WriteAllBytes(
               $tamperedInstaller, $tamperedBytes)
+            Write-Host "phase=identity-tampered start"
             & $identityTest --verify-signed-msi $tamperedInstaller `
               $expectedVersion $publisherPinSha256 `
               signature-verification-failed
             if ($LASTEXITCODE -ne 0) {
               throw "The publisher check accepted a tampered signed MSI"
             }
+            Write-Host "phase=identity-tampered done"
           } finally {
+            Write-Host "phase=cleanup start"
             $cleanupFailed = $false
             if (-not [string]::IsNullOrWhiteSpace($storeThumbprintSha1)) {
               foreach ($store in @("My", "Root", "TrustedPublisher")) {
@@ -379,6 +397,7 @@ jobs:
             if ($cleanupFailed) {
               throw "Authenticode CI test cleanup was incomplete"
             }
+            Write-Host "phase=cleanup done"
           }
 
       - name: Upload Windows executable
