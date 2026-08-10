@@ -16,10 +16,15 @@
 #include <cstddef>
 #include <cstdio>
 #include <cwchar>
+#include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <iterator>
 #include <optional>
+#include <sstream>
 #include <string>
+#include <string_view>
 #include <thread>
 
 namespace {
@@ -222,6 +227,69 @@ void DrainRefreshMessages(HWND window) {
     }
 }
 
+std::optional<std::string> ReadTextFile(
+    const std::filesystem::path& path) {
+    std::ifstream input(path, std::ios::binary);
+    if (!input) return std::nullopt;
+    return std::string(std::istreambuf_iterator<char>(input),
+                       std::istreambuf_iterator<char>());
+}
+
+bool WriteTextFile(const std::filesystem::path& path,
+                   std::string_view contents) {
+    std::ofstream output(path, std::ios::binary | std::ios::trunc);
+    if (!output) return false;
+    output.write(contents.data(), static_cast<std::streamsize>(contents.size()));
+    output.flush();
+    return static_cast<bool>(output);
+}
+
+bool IsWhitelistedQuotaHistory(std::string_view contents) {
+    std::istringstream input{std::string(contents)};
+    std::string version;
+    std::string sample;
+    std::string extra;
+    if (!std::getline(input, version) || version != "version=1" ||
+        !std::getline(input, sample) || std::getline(input, extra)) {
+        return false;
+    }
+
+    constexpr std::array<std::string_view, 6> prefixes = {
+        "sample",
+        "captured_at=",
+        "five_hour_remaining=",
+        "five_hour_reset_at=",
+        "weekly_remaining=",
+        "weekly_reset_at=",
+    };
+    std::size_t start = 0;
+    for (std::size_t index = 0; index < prefixes.size(); ++index) {
+        const std::size_t separator = sample.find('\t', start);
+        if ((index + 1 < prefixes.size()) !=
+            (separator != std::string::npos)) {
+            return false;
+        }
+        const std::size_t end = separator == std::string::npos
+                                    ? sample.size()
+                                    : separator;
+        const std::string_view field(sample.data() + start, end - start);
+        if (index == 0) {
+            if (field != prefixes[index]) return false;
+        } else if (field.size() <= prefixes[index].size() ||
+                   field.substr(0, prefixes[index].size()) != prefixes[index]) {
+            return false;
+        }
+        start = end + 1;
+    }
+    return true;
+}
+
+std::int64_t CurrentUnixSeconds() {
+    return std::chrono::duration_cast<std::chrono::seconds>(
+               std::chrono::system_clock::now().time_since_epoch())
+        .count();
+}
+
 void TestSuccessfulBackgroundRefresh(HWND window) {
     Stage("success_begin");
     ScopedEnvironmentVariable scenario(L"CODEX_FAKE_SCENARIO", L"app-success");
@@ -263,10 +331,15 @@ void TestPauseCancelsAndResumeRefreshes(HWND window,
     Stage("pause_environment_ready");
     CodexWorker worker;
     Stage("pause_worker_constructed");
-    const bool started = worker.Start(window, kWorkerReadyMessage, "test-version");
+    const std::filesystem::path historyPath =
+        executable.parent_path() / L"quota-cancel-history.txt";
+    const bool started = worker.Start(window, kWorkerReadyMessage, "test-version",
+                                      historyPath);
     Stage("pause_worker_start_returned");
     Expect(started,
            "the cancellation worker must start");
+    Expect(worker.SetQuotaForecastEnabled(true),
+           "the cancellation test must enable quota history before refresh");
     const bool activated = worker.ActivateAndRefresh();
     Stage("pause_worker_activate_returned");
     Expect(activated,
@@ -284,6 +357,8 @@ void TestPauseCancelsAndResumeRefreshes(HWND window,
     DrainRefreshMessages(window);
     Expect(!worker.TakeLatest(),
            "a result invalidated by pause must not reach the UI");
+    Expect(!std::filesystem::exists(historyPath),
+           "a cancelled Codex refresh must not write quota history");
 
     scenario.Set(L"app-success");
     Expect(worker.ActivateAndRefresh(),
@@ -334,6 +409,96 @@ void TestFailureBackoffAndRecovery(HWND window) {
     Stage("backoff_end");
 }
 
+void TestQuotaForecastDemandGating(HWND window,
+                                  const std::filesystem::path& testRoot) {
+    Stage("quota_begin");
+    ScopedEnvironmentVariable scenario(L"CODEX_FAKE_SCENARIO", L"app-success");
+    const std::filesystem::path historyPath =
+        testRoot / L"quota-demand-history.txt";
+
+    CodexWorker worker;
+    Expect(worker.Start(window, kWorkerReadyMessage, "test-version", historyPath),
+           "the quota worker must start with a history destination");
+    Expect(worker.ActivateAndRefresh(),
+           "the quota worker must queue its default-disabled refresh");
+    const auto disabled = WaitForRefresh(window, worker, 10s);
+    Expect(disabled && disabled->succeeded,
+           "the default-disabled quota refresh must otherwise succeed");
+    Expect(disabled && !disabled->quotaForecastUpdate,
+           "quota forecast output must be absent while the feature is disabled");
+    Expect(!std::filesystem::exists(historyPath),
+           "quota history must not be created while the feature is disabled");
+
+    Expect(worker.SetQuotaForecastEnabled(true),
+           "explicitly enabling quota forecast must change worker demand");
+    const auto enabled = WaitForRefresh(window, worker, 10s);
+    Expect(enabled && enabled->succeeded && enabled->quotaForecastUpdate,
+           "enabling quota forecast must publish a forecast update");
+    if (enabled && enabled->quotaForecastUpdate) {
+        const auto& update = *enabled->quotaForecastUpdate;
+        Expect(update.fiveHour.windowReturned && update.weekly.windowReturned,
+               "the forecast update must identify both returned quota windows");
+        Expect(update.historyStored && !update.historySaveFailed,
+               "a successful enabled refresh must persist its quota sample");
+    }
+    const auto written = ReadTextFile(historyPath);
+    Expect(written && IsWhitelistedQuotaHistory(*written),
+           "quota history must contain only the versioned whitelist fields");
+    if (written) {
+        Expect(written->find("email") == std::string::npos &&
+                   written->find("thread") == std::string::npos &&
+                   written->find("preview") == std::string::npos &&
+                   written->find("token") == std::string::npos,
+               "quota history must exclude account, task, and token data");
+    }
+
+    const std::int64_t now = CurrentUnixSeconds();
+    std::ostringstream fixture;
+    fixture << "version=1\n"
+            << "sample\tcaptured_at=" << now - 120
+            << "\tfive_hour_remaining=75\tfive_hour_reset_at=" << now + 18000
+            << "\tweekly_remaining=60\tweekly_reset_at=" << now + 604800
+            << '\n';
+    Expect(WriteTextFile(historyPath, fixture.str()),
+           "the disable-gating fixture must replace quota history");
+    const auto beforeDisabledRefresh = ReadTextFile(historyPath);
+
+    Expect(worker.SetQuotaForecastEnabled(false),
+           "disabling quota forecast must change worker demand");
+    Expect(worker.RequestRefresh(),
+           "other visible Codex modules must still be able to refresh");
+    const auto refreshedWhileDisabled = WaitForRefresh(window, worker, 10s);
+    Expect(refreshedWhileDisabled && refreshedWhileDisabled->succeeded,
+           "the ordinary Codex refresh must succeed after forecast is disabled");
+    Expect(refreshedWhileDisabled &&
+               !refreshedWhileDisabled->quotaForecastUpdate,
+           "a disabled forecast must not publish stale output");
+    const auto afterDisabledRefresh = ReadTextFile(historyPath);
+    Expect(beforeDisabledRefresh && afterDisabledRefresh &&
+               *beforeDisabledRefresh == *afterDisabledRefresh,
+           "ordinary Codex refreshes must not modify disabled quota history");
+    worker.StopAndJoin();
+
+    const std::filesystem::path failedHistoryPath =
+        testRoot / L"quota-failed-history.txt";
+    scenario.Set(L"app-init-error");
+    CodexWorker failedWorker;
+    Expect(failedWorker.Start(window, kWorkerReadyMessage, "test-version",
+                              failedHistoryPath),
+           "the failed quota worker must start");
+    Expect(failedWorker.SetQuotaForecastEnabled(true),
+           "the failed quota worker must enable quota forecast");
+    Expect(failedWorker.ActivateAndRefresh(),
+           "the failed quota worker must queue a refresh");
+    const auto failed = WaitForRefresh(window, failedWorker, 10s);
+    Expect(failed && !failed->succeeded && !failed->quotaForecastUpdate,
+           "a failed refresh must not publish quota forecast output");
+    failedWorker.StopAndJoin();
+    Expect(!std::filesystem::exists(failedHistoryPath),
+           "a failed refresh must not create quota history");
+    Stage("quota_end");
+}
+
 }  // namespace
 
 int wmain(int argc, wchar_t** argv) {
@@ -344,7 +509,8 @@ int wmain(int argc, wchar_t** argv) {
         argc >= 2 ? std::filesystem::path(argv[1]) : std::filesystem::path{};
     const std::wstring mode = argc >= 3 ? argv[2] : L"all";
     const bool validMode = mode == L"all" || mode == L"success" ||
-                           mode == L"pause" || mode == L"backoff";
+                           mode == L"pause" || mode == L"backoff" ||
+                           mode == L"quota";
     const std::filesystem::path testRoot = CreateTestDirectory();
     if (fakeServer.empty() || testRoot.empty() || !validMode) {
         std::cerr << "FAIL: worker test requires a fake app-server and temp directory\n";
@@ -378,6 +544,10 @@ int wmain(int argc, wchar_t** argv) {
     }
     if (mode == L"all" || mode == L"backoff") {
         TestFailureBackoffAndRecovery(window);
+        DrainRefreshMessages(window);
+    }
+    if (mode == L"all" || mode == L"quota") {
+        TestQuotaForecastDemandGating(window, testRoot);
     }
 
     Stage("cleanup_begin");

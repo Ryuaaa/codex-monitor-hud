@@ -319,6 +319,7 @@ def main() -> None:
         "nativePageVisible": "own-page visibility is independent from Home visibility",
         "kCodexFiveHourQuota": "the five-hour quota has its own module identity",
         "kCodexWeeklyQuota": "the weekly quota has its own module identity",
+        "kCodexQuotaForecast": "quota trend forecasting has its own module identity",
         "kSystemDiagnosis": "the system diagnosis has its own module identity",
         "kOpenAIServiceStatus": "official service status has its own module identity",
         "SanitizeHomeOrder": "saved order is repaired against the current registry",
@@ -340,13 +341,13 @@ def main() -> None:
         "intentionally empty homepage": "all-hidden homepage intent is fixed",
         "unknown page must fall back to home": "damaged settings have a safe fallback",
         "off-screen saved window must return": "monitor removal recovery is fixed",
-        "TestVersionFourRoundTripAndIndependentQuotaSwitches":
-            "the two quota switches and version 4 schema have a round-trip test",
+        "TestVersionFiveRoundTripAndIndependentQuotaSwitches":
+            "the independent quota switches and version 5 schema have a round-trip test",
         "TestVersionThreeMigrationPreservesExplicitVisibility":
             "version 3 settings retain explicit visibility when the service module is added",
         "TestVersionOneMigrationPreservesOldHomeChoices":
             "version 1 settings migrate without enabling new Home work",
-        '"version=4\\n"': "the current persisted settings schema is version 4",
+        '"version=5\\n"': "the current persisted settings schema is version 5",
         '"version=1\\n"': "the previous settings schema has an explicit migration fixture",
     }
     for token, reason in state_test_contracts.items():
@@ -555,6 +556,9 @@ def main() -> None:
         "kFailedRefreshDelays": "failed refreshes use a bounded backoff sequence",
         "std::chrono::seconds{900}": "failure backoff is capped at fifteen minutes",
         "cancellationEpoch_": "pause uses a monotonic cancellation generation",
+        "quotaForecastEpoch_": "hiding forecast invalidates a pending history commit",
+        "SetQuotaForecastEnabled": "quota history work follows forecast-card visibility",
+        "MoveFileExW": "Windows history replacement is atomic and replaces an old file",
         "fetch_add": "pause and stop permanently invalidate an old generation",
         "PauseAndInvalidate": "no-demand states invalidate in-flight work",
         "ActivateAndRefresh": "resume immediately requests fresh data",
@@ -597,6 +601,8 @@ def main() -> None:
             "consecutive failures back off and a success restores normal cadence",
         "ProcessWithImagePathExists":
             "the worker integration test checks for orphaned app-server processes",
+        "TestQuotaForecastDemandGating":
+            "forecast history is covered across disabled, enabled, failure, and cancellation paths",
     }.items():
         require(CODEX_WORKER_TEST, token, reason)
 
@@ -716,6 +722,9 @@ def main() -> None:
         "codexWorker.StopAndJoin": "window teardown reaps the Codex worker",
         "ApplyCodexRefresh": "real returned data is applied to cards",
         "BuildQuotaCardText": "quota cards use parsed rate-limit data",
+        "BuildQuotaForecastCardText": "the HUD shows the tested quota trend forecast",
+        "CurrentPageShowsQuotaForecast":
+            "forecast history work follows only a currently visible forecast card",
         "BuildSubscriptionCardText": "subscription cards use parsed account data",
         "CalculateUsageCalendarTotals": "Token cards use official daily totals",
         "BuildRecentTasksCardText": "recent-task cards use official task history",
@@ -804,6 +813,14 @@ def main() -> None:
             "official daily usage math tests are buildable",
         "add_test(NAME windows_codex_usage_math":
             "official daily usage math tests are registered with CTest",
+        "add_executable(CodexMonitorQuotaForecastTests":
+            "portable quota forecast tests are buildable",
+        "add_test(NAME windows_quota_forecast":
+            "portable quota forecast tests are registered with CTest",
+        "add_executable(CodexMonitorQuotaHistoryStoreTests":
+            "portable quota history tests are buildable",
+        "add_test(NAME windows_quota_history_store":
+            "portable quota history tests are registered with CTest",
         "add_executable(CodexMonitorCodexProcessTests":
             "bounded process integration tests are buildable",
         "add_test(NAME windows_codex_process":
@@ -820,6 +837,8 @@ def main() -> None:
             "the background Codex worker integration test is buildable",
         "add_test(NAME windows_codex_worker":
             "the background Codex worker integration test is registered with CTest",
+        "add_test(NAME windows_codex_worker_quota":
+            "quota demand gating has a focused Windows worker test",
         "add_executable(CodexMonitorServiceStatusModelTests":
             "portable service-status mapping tests are buildable",
         "add_test(NAME windows_service_status_model":

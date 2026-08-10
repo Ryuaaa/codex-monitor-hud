@@ -22,6 +22,7 @@ enum class ModuleId {
     kTopMemoryProcesses,
     kCodexFiveHourQuota,
     kCodexWeeklyQuota,
+    kCodexQuotaForecast,
     kCodexSubscriptionType,
     kCodexAccountTokenUsage,
     kCodexRecentTasks,
@@ -40,7 +41,7 @@ struct ModuleDefinition {
     bool defaultNativePageVisible;
 };
 
-constexpr std::size_t kModuleCount = 11;
+constexpr std::size_t kModuleCount = 12;
 
 struct WindowPlacement {
     int x = 0;

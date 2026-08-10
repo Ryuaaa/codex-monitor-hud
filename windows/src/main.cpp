@@ -25,6 +25,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <ctime>
@@ -138,6 +139,8 @@ struct AppState {
     codex_monitor::codex::CodexWorker codexWorker;
     codex_monitor::codex::CodexDataState latestCodexData;
     codex_monitor::codex::AppServerRefreshReport latestCodexReport;
+    std::optional<codex_monitor::codex::QuotaForecastRefresh>
+        latestQuotaForecast;
     std::chrono::seconds codexNextRefreshDelay{60};
     codex_monitor::OpenAIServiceStatusWorker serviceStatusWorker;
     std::optional<codex_monitor::OpenAIServiceStatusModel> latestServiceStatus;
@@ -586,6 +589,8 @@ std::wstring_view CodexModuleHeading(codex_monitor::ModuleId id) {
             return L"CODEX 5-HOUR QUOTA";
         case codex_monitor::ModuleId::kCodexWeeklyQuota:
             return L"CODEX WEEKLY QUOTA";
+        case codex_monitor::ModuleId::kCodexQuotaForecast:
+            return L"CODEX QUOTA TREND FORECAST";
         case codex_monitor::ModuleId::kCodexSubscriptionType:
             return L"CODEX SUBSCRIPTION TYPE";
         case codex_monitor::ModuleId::kCodexAccountTokenUsage:
@@ -606,6 +611,9 @@ std::wstring_view CodexModuleHeading(codex_monitor::ModuleId id) {
 
 std::wstring BuildCodexUnavailableText(codex_monitor::ModuleId id) {
     std::wstring detail = L"正在连接本机 Codex 只读接口\r\n当前未返回；不会模拟数值";
+    if (id == codex_monitor::ModuleId::kCodexQuotaForecast) {
+        detail = L"正在等待额度数据\r\n至少需要15分钟历史才能判断趋势";
+    }
     if (id == codex_monitor::ModuleId::kCodexRecentTasks) {
         detail = L"正在连接本机 Codex 只读接口\r\n"
                  L"当前未返回；状态只表示 app-server 进程范围，"
@@ -720,6 +728,98 @@ std::wstring BuildQuotaCardText(const AppState& state, bool weekly) {
     return output.str();
 }
 
+std::wstring_view ForecastConfidenceLabel(
+    codex_monitor::codex::QuotaForecastConfidence confidence) {
+    switch (confidence) {
+        case codex_monitor::codex::QuotaForecastConfidence::kLow:
+            return L"低";
+        case codex_monitor::codex::QuotaForecastConfidence::kMedium:
+            return L"中";
+        case codex_monitor::codex::QuotaForecastConfidence::kHigh:
+            return L"高";
+        case codex_monitor::codex::QuotaForecastConfidence::kUnavailable:
+            return L"";
+    }
+    return L"";
+}
+
+void AppendQuotaForecastLine(
+    std::wostringstream& output,
+    std::wstring_view label,
+    const codex_monitor::codex::QuotaWindowForecastRefresh& window) {
+    using codex_monitor::codex::QuotaForecastState;
+    using codex_monitor::codex::QuotaForecastUnavailableReason;
+
+    output << L"\r\n" << label << L"：";
+    if (!window.windowReturned) {
+        output << L"当前未返回";
+        return;
+    }
+
+    const auto& forecast = window.forecast;
+    switch (forecast.state) {
+        case QuotaForecastState::kUnavailable:
+            if (forecast.unavailableReason ==
+                QuotaForecastUnavailableReason::kInsufficientHistory) {
+                output << L"正在积累历史（至少15分钟）";
+            } else if (forecast.unavailableReason ==
+                       QuotaForecastUnavailableReason::kInvalidCurrentState) {
+                output << L"恢复时间未返回";
+            } else {
+                output << L"暂时无法计算";
+            }
+            return;
+        case QuotaForecastState::kStable:
+            output << L"近期平稳";
+            break;
+        case QuotaForecastState::kLastsToReset: {
+            const int projected = std::clamp(
+                static_cast<int>(std::lround(
+                    forecast.projectedRemainingAtResetPercent.value_or(0.0))),
+                0, 100);
+            output << L"可撑到恢复，预计剩余 " << projected << L"%";
+            break;
+        }
+        case QuotaForecastState::kMayExhaustEarly:
+            output << L"可能提前用完";
+            if (forecast.projectedExhaustAtUnixSeconds) {
+                const auto exhaustAt = static_cast<std::int64_t>(
+                    std::llround(*forecast.projectedExhaustAtUnixSeconds));
+                if (const auto localTime = FormatUnixLocalTime(exhaustAt)) {
+                    output << L" · " << *localTime;
+                }
+            }
+            break;
+    }
+    const std::wstring_view confidence =
+        ForecastConfidenceLabel(forecast.confidence);
+    if (!confidence.empty()) output << L" · " << confidence << L"置信";
+}
+
+std::wstring BuildQuotaForecastCardText(const AppState& state) {
+    std::wostringstream output;
+    output << CodexModuleHeading(
+        codex_monitor::ModuleId::kCodexQuotaForecast);
+    if (!state.latestQuotaForecast) {
+        if (!state.latestCodexData.rateLimits.lastValue) {
+            output << L"\r\n" << CodexFailureReason(state);
+        } else {
+            output << L"\r\n等待下一次额度更新";
+        }
+        output << L"\r\n至少需要15分钟历史才能判断趋势";
+        return output.str();
+    }
+
+    AppendQuotaForecastLine(output, L"5小时", state.latestQuotaForecast->fiveHour);
+    AppendQuotaForecastLine(output, L"每周", state.latestQuotaForecast->weekly);
+    if (state.latestQuotaForecast->historySaveFailed) {
+        output << L"\r\n历史保存失败；当前结果未丢失";
+    } else if (state.latestCodexData.rateLimits.lastFailure) {
+        output << L"\r\n更新失败，显示上次预测";
+    }
+    return output.str();
+}
+
 std::wstring BuildSubscriptionCardText(const AppState& state) {
     std::optional<std::wstring> plan;
     bool displayingStaleData = false;
@@ -826,6 +926,8 @@ std::wstring BuildCodexCardText(codex_monitor::ModuleId id,
             return BuildQuotaCardText(state, false);
         case codex_monitor::ModuleId::kCodexWeeklyQuota:
             return BuildQuotaCardText(state, true);
+        case codex_monitor::ModuleId::kCodexQuotaForecast:
+            return BuildQuotaForecastCardText(state);
         case codex_monitor::ModuleId::kCodexSubscriptionType:
             return BuildSubscriptionCardText(state);
         case codex_monitor::ModuleId::kCodexAccountTokenUsage:
@@ -859,6 +961,7 @@ std::wstring BuildModuleCardText(codex_monitor::ModuleId id,
             return BuildRankingCardText(snapshot);
         case codex_monitor::ModuleId::kCodexFiveHourQuota:
         case codex_monitor::ModuleId::kCodexWeeklyQuota:
+        case codex_monitor::ModuleId::kCodexQuotaForecast:
         case codex_monitor::ModuleId::kCodexSubscriptionType:
         case codex_monitor::ModuleId::kCodexAccountTokenUsage:
         case codex_monitor::ModuleId::kCodexRecentTasks:
@@ -960,6 +1063,20 @@ bool CurrentPageNeedsCodexData(const AppState& state) {
             return codex_monitor::HomeNeedsCodexData(state.settings);
         case codex_monitor::Page::kCodex:
             return NativePageNeedsCodexData(state.settings, codex_monitor::Page::kCodex);
+        case codex_monitor::Page::kComputer:
+            return false;
+    }
+    return false;
+}
+
+bool CurrentPageShowsQuotaForecast(const AppState& state) {
+    const std::size_t index = codex_monitor::ModuleIndex(
+        codex_monitor::ModuleId::kCodexQuotaForecast);
+    switch (state.settings.currentPage) {
+        case codex_monitor::Page::kHome:
+            return state.settings.homeVisible[index];
+        case codex_monitor::Page::kCodex:
+            return state.settings.nativePageVisible[index];
         case codex_monitor::Page::kComputer:
             return false;
     }
@@ -1109,6 +1226,10 @@ void ApplyCodexRefresh(
     codex_monitor::codex::CompletedCodexRefresh completed) {
     state.latestCodexData = std::move(completed.data);
     state.latestCodexReport = std::move(completed.report);
+    if (completed.quotaForecastUpdate) {
+        state.latestQuotaForecast =
+            std::move(completed.quotaForecastUpdate);
+    }
     state.codexLastRefreshSucceeded = completed.succeeded;
     state.codexNextRefreshDelay = completed.nextRefreshDelay;
     state.hasCodexRefresh = true;
@@ -1161,8 +1282,14 @@ void UpdateSamplingDemand(HWND window, AppState& state) {
 }
 
 void UpdateCodexDemand(HWND, AppState& state) {
+    const bool forecastEnabled = !state.windowMinimized && !state.windowHidden &&
+                                 CurrentPageShowsQuotaForecast(state);
+    if (state.codexWorkerAvailable) {
+        state.codexWorker.SetQuotaForecastEnabled(forecastEnabled);
+    }
     const bool shouldRefresh =
-        !state.windowMinimized && CurrentPageNeedsCodexData(state);
+        !state.windowMinimized && !state.windowHidden &&
+        CurrentPageNeedsCodexData(state);
     if (!shouldRefresh) {
         if (!state.codexPaused && state.codexWorkerAvailable) {
             state.codexWorker.PauseAndInvalidate();
@@ -1967,7 +2094,12 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             if (!state || !CreateControls(window, *state)) return -1;
             if (!state->performanceWorker.Start(window, kSampleReadyMessage)) return -1;
             state->codexWorkerAvailable =
-                state->codexWorker.Start(window, kCodexReadyMessage, "0.3.0");
+                state->codexWorker.Start(
+                    window, kCodexReadyMessage, "0.3.0",
+                    state->settingsPath.empty()
+                        ? std::filesystem::path{}
+                        : state->settingsPath.parent_path() /
+                              L"quota-usage-history.txt");
             state->serviceStatusWorkerAvailable =
                 state->serviceStatusWorker.Start(window,
                                                  kServiceStatusReadyMessage);
@@ -2123,6 +2255,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         case WM_SHOWWINDOW:
             if (state) {
                 state->windowHidden = wParam == FALSE;
+                UpdateCodexDemand(window, *state);
                 UpdateServiceStatusDemand(window, *state);
             }
             break;

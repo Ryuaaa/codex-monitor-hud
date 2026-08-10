@@ -83,6 +83,21 @@ if(BUILD_TESTING)
     )
     configure_codex_monitor_target(CodexMonitorCodexUsageMathTests)
     add_test(NAME windows_codex_usage_math COMMAND CodexMonitorCodexUsageMathTests)
+
+    add_executable(CodexMonitorQuotaForecastTests
+        src/codex/quota_forecast.cpp
+        tests/quota_forecast_test.cpp
+    )
+    configure_codex_monitor_target(CodexMonitorQuotaForecastTests)
+    add_test(NAME windows_quota_forecast COMMAND CodexMonitorQuotaForecastTests)
+
+    add_executable(CodexMonitorQuotaHistoryStoreTests
+        src/codex/quota_history_store.cpp
+        tests/quota_history_store_test.cpp
+    )
+    configure_codex_monitor_target(CodexMonitorQuotaHistoryStoreTests)
+    add_test(NAME windows_quota_history_store
+        COMMAND CodexMonitorQuotaHistoryStoreTests)
 endif()
 
 if(WIN32)
@@ -188,6 +203,8 @@ if(WIN32)
             src/codex/codex_executable.cpp
             src/codex/codex_json_win32.cpp
             src/codex/codex_process.cpp
+            src/codex/quota_forecast.cpp
+            src/codex/quota_history_store.cpp
             src/codex/codex_refresh_schedule.cpp
             src/codex/codex_worker.cpp
             tests/codex_worker_test.cpp
@@ -225,11 +242,15 @@ if(WIN32)
         add_test(NAME windows_codex_worker_backoff
             COMMAND CodexMonitorCodexWorkerTests
                     $<TARGET_FILE:CodexMonitorFakeCodexAppServer> backoff)
+        add_test(NAME windows_codex_worker_quota
+            COMMAND CodexMonitorCodexWorkerTests
+                    $<TARGET_FILE:CodexMonitorFakeCodexAppServer> quota)
         set_tests_properties(
             windows_codex_worker
             windows_codex_worker_success
             windows_codex_worker_pause
             windows_codex_worker_backoff
+            windows_codex_worker_quota
             PROPERTIES TIMEOUT 30)
     endif()
 
@@ -239,6 +260,8 @@ if(WIN32)
         src/codex/codex_executable.cpp
         src/codex/codex_json_win32.cpp
         src/codex/codex_process.cpp
+        src/codex/quota_forecast.cpp
+        src/codex/quota_history_store.cpp
         src/codex/codex_refresh_schedule.cpp
         src/codex/codex_usage_math.cpp
         src/codex/codex_worker.cpp

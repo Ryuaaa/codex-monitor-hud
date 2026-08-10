@@ -71,6 +71,15 @@ constexpr std::array<ModuleDefinition, kModuleCount> kRegistry{{
      false,
      false,
      true},
+    {ModuleId::kCodexQuotaForecast,
+     "codex-quota-forecast",
+     L"Codex quota trend forecast",
+     Page::kCodex,
+     false,
+     true,
+     false,
+     false,
+     true},
     {ModuleId::kCodexSubscriptionType,
      "codex-subscription-type",
      L"Codex subscription type",
@@ -278,7 +287,7 @@ bool MoveHomeModule(SettingsState& settings, ModuleId id, int direction) {
 std::string SerializeSettings(const SettingsState& settings) {
     const std::vector<ModuleId> order = SanitizeHomeOrder(settings.homeOrder);
     std::ostringstream output;
-    output << "version=4\n";
+    output << "version=5\n";
     output << "page=" << PageKey(settings.currentPage) << '\n';
     output << "always_on_top=" << (settings.alwaysOnTop ? 1 : 0) << '\n';
     output << "home_order=";
@@ -315,6 +324,8 @@ SettingsState ParseSettings(std::string_view text) {
     SettingsState settings = DefaultSettings();
     bool homeVisibleKeyFound = false;
     bool nativeVisibleKeyFound = false;
+    bool nativeVisibleKeySeen = false;
+    std::optional<int> version;
     std::vector<ModuleId> requestedOrder;
 
     for (std::string_view line : Split(text, '\n')) {
@@ -324,7 +335,9 @@ SettingsState ParseSettings(std::string_view text) {
         const std::string_view key = line.substr(0, separator);
         const std::string_view value = line.substr(separator + 1);
 
-        if (key == "page") {
+        if (key == "version") {
+            version = ParseInt(value);
+        } else if (key == "page") {
             settings.currentPage = PageFromKey(value);
         } else if (key == "always_on_top") {
             if (value == "0") settings.alwaysOnTop = false;
@@ -348,6 +361,7 @@ SettingsState ParseSettings(std::string_view text) {
                 settings.homeVisible = requestedVisibility;
             }
         } else if (key == "native_visible") {
+            nativeVisibleKeySeen = true;
             std::array<bool, kModuleCount> requestedVisibility{};
             bool recognizedVisibleModule = false;
             for (std::string_view token : Split(value, ',')) {
@@ -386,6 +400,19 @@ SettingsState ParseSettings(std::string_view text) {
         for (std::size_t index = 0; index < kRegistry.size(); ++index) {
             settings.nativePageVisible[index] =
                 kRegistry[index].defaultNativePageVisible;
+        }
+        // Only a valid v5 file that genuinely omitted native_visible receives
+        // newly introduced native-page defaults. Older, unknown, and malformed
+        // files keep all pre-v5 defaults but must not silently opt an existing
+        // user into the forecast module.
+        // A genuinely new install is created through DefaultSettings() before
+        // any file exists. An empty file is damaged existing state, so it must
+        // not silently opt the user into newly introduced work.
+        const bool useCurrentNativeDefaults =
+            version == 5 && !nativeVisibleKeySeen;
+        if (!useCurrentNativeDefaults) {
+            settings.nativePageVisible[ModuleIndex(ModuleId::kCodexQuotaForecast)] =
+                false;
         }
     }
     return settings;

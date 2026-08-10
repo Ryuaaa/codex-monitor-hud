@@ -60,12 +60,14 @@ void TestNewInstallDefaultsUseRegistryPolicy() {
 
     const std::vector<ModuleId> codex =
         codex_monitor::VisibleModulesForNativePage(settings, Page::kCodex);
-    Expect(codex.size() == 5,
-           "the Codex page defaults to both quotas, subscription, recent history, and service status");
+    Expect(codex.size() == 6,
+           "the Codex page defaults to quotas, forecast, subscription, recent history, and service status");
     Expect(Contains(codex, ModuleId::kCodexFiveHourQuota),
            "the five-hour quota must be visible on a new Codex page");
     Expect(Contains(codex, ModuleId::kCodexWeeklyQuota),
            "the weekly quota must be visible on a new Codex page");
+    Expect(Contains(codex, ModuleId::kCodexQuotaForecast),
+           "the quota trend forecast must be visible on a new Codex page");
     Expect(Contains(codex, ModuleId::kCodexRecentTasks),
            "recent task history must be visible on a new Codex page");
     Expect(Contains(codex, ModuleId::kOpenAIServiceStatus),
@@ -97,7 +99,7 @@ void TestOrderSanitizationAndMovement() {
            "the first module must not move beyond the registry boundary");
 }
 
-void TestVersionFourRoundTripAndIndependentQuotaSwitches() {
+void TestVersionFiveRoundTripAndIndependentQuotaSwitches() {
     using codex_monitor::ModuleId;
     using codex_monitor::Page;
 
@@ -119,8 +121,8 @@ void TestVersionFourRoundTripAndIndependentQuotaSwitches() {
     settings.windowPlacement = codex_monitor::WindowPlacement{-900, 120, 720, 640};
 
     const std::string serialized = codex_monitor::SerializeSettings(settings);
-    Expect(serialized.find("version=4\n") == 0,
-           "the settings whitelist must be serialized as version 4");
+    Expect(serialized.find("version=5\n") == 0,
+           "the settings whitelist must be serialized as version 5");
 
     const codex_monitor::SettingsState parsed = codex_monitor::ParseSettings(serialized);
     Expect(parsed.currentPage == Page::kCodex,
@@ -145,6 +147,8 @@ void TestVersionFourRoundTripAndIndependentQuotaSwitches() {
            "the weekly quota and service-status native-page switches must round-trip");
     Expect(!Contains(nativeCodex, ModuleId::kCodexFiveHourQuota),
            "the five-hour quota native-page switch must remain off independently");
+    Expect(!Contains(nativeCodex, ModuleId::kCodexQuotaForecast),
+           "an explicit native-page selection must not silently add the forecast module");
 }
 
 void TestVersionThreeMigrationPreservesExplicitVisibility() {
@@ -164,6 +168,8 @@ void TestVersionThreeMigrationPreservesExplicitVisibility() {
         codex_monitor::VisibleModulesForNativePage(migrated, Page::kCodex);
     Expect(!Contains(nativeCodex, ModuleId::kOpenAIServiceStatus),
            "version 3 migration must preserve an explicit Codex-page selection");
+    Expect(!Contains(nativeCodex, ModuleId::kCodexQuotaForecast),
+           "version 3 migration must not silently enable the forecast module");
     Expect(migrated.homeOrder.size() == codex_monitor::kModuleCount,
            "version 3 migration must append the service-status module to homepage order");
 }
@@ -213,12 +219,43 @@ void TestVersionOneMigrationPreservesOldHomeChoices() {
                Contains(nativeCodex, ModuleId::kCodexWeeklyQuota) &&
                Contains(nativeCodex, ModuleId::kCodexRecentTasks) &&
                Contains(nativeCodex, ModuleId::kOpenAIServiceStatus) &&
+               !Contains(nativeCodex, ModuleId::kCodexQuotaForecast) &&
                !Contains(nativeCodex, ModuleId::kCodexAccountTokenUsage),
-           "version 1 migration must apply independent Codex-page defaults");
+           "version 1 migration must keep pre-v5 Codex defaults without enabling forecast");
     const std::vector<ModuleId> nativeComputer =
         codex_monitor::VisibleModulesForNativePage(migrated, Page::kComputer);
     Expect(Contains(nativeComputer, ModuleId::kSystemDiagnosis),
            "version 1 migration without a native visibility key must enable the new diagnosis default");
+}
+
+void TestForecastNativeDefaultMigrationPolicy() {
+    using codex_monitor::ModuleId;
+    using codex_monitor::Page;
+
+    const auto ForecastIsVisible = [](const codex_monitor::SettingsState& settings) {
+        return Contains(codex_monitor::VisibleModulesForNativePage(settings, Page::kCodex),
+                        ModuleId::kCodexQuotaForecast);
+    };
+
+    Expect(ForecastIsVisible(codex_monitor::DefaultSettings()),
+           "a genuinely new install must use the current forecast default");
+    Expect(!ForecastIsVisible(codex_monitor::ParseSettings("")),
+           "an empty existing settings file must not opt into forecast");
+    Expect(ForecastIsVisible(codex_monitor::ParseSettings(
+               "version=5\npage=codex\n")),
+           "a valid version 5 file missing native visibility may use current defaults");
+    Expect(!ForecastIsVisible(codex_monitor::ParseSettings(
+               "version=4\npage=codex\n")),
+           "version 4 missing native visibility must not opt into forecast");
+    Expect(!ForecastIsVisible(codex_monitor::ParseSettings(
+               "version=broken\npage=codex\n")),
+           "an unknown non-empty settings version must not opt into forecast");
+    Expect(!ForecastIsVisible(codex_monitor::ParseSettings(
+               "version=5\nnative_visible=unknown\n")),
+           "a damaged native visibility entry must not opt into forecast");
+    Expect(!ForecastIsVisible(codex_monitor::ParseSettings(
+               "version=5\nnative_visible=codex-weekly-quota\n")),
+           "an explicit version 5 selection must leave unlisted forecast off");
 }
 
 void TestPageFilteringAndHomeDemandGates() {
@@ -261,11 +298,11 @@ void TestPageFilteringAndHomeDemandGates() {
     const std::vector<ModuleId> computer =
         codex_monitor::VisibleModulesForNativePage(settings, Page::kComputer);
     Expect(computer.size() == 5,
-           "the computer page must filter out all six Codex-page modules even when enabled");
+           "the computer page must filter out all seven Codex-page modules even when enabled");
     const std::vector<ModuleId> codex =
         codex_monitor::VisibleModulesForNativePage(settings, Page::kCodex);
-    Expect(codex.size() == 6,
-           "the Codex page must include its six modules and filter out computer modules");
+    Expect(codex.size() == 7,
+           "the Codex page must include its seven modules and filter out computer modules");
 }
 
 void TestMalformedSettingsFallBackSafely() {
@@ -327,9 +364,10 @@ void TestWindowPlacementReturnsToAVisibleWorkArea() {
 int main() {
     TestNewInstallDefaultsUseRegistryPolicy();
     TestOrderSanitizationAndMovement();
-    TestVersionFourRoundTripAndIndependentQuotaSwitches();
+    TestVersionFiveRoundTripAndIndependentQuotaSwitches();
     TestVersionThreeMigrationPreservesExplicitVisibility();
     TestVersionOneMigrationPreservesOldHomeChoices();
+    TestForecastNativeDefaultMigrationPolicy();
     TestPageFilteringAndHomeDemandGates();
     TestMalformedSettingsFallBackSafely();
     TestWindowPlacementReturnsToAVisibleWorkArea();

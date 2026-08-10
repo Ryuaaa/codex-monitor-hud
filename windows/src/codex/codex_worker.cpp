@@ -1,12 +1,17 @@
 #include "codex_worker.h"
 
 #include "codex_executable.h"
+#include "quota_history_store.h"
 
 #include <winrt/base.h>
 
 #include <algorithm>
 #include <array>
+#include <cmath>
+#include <filesystem>
+#include <system_error>
 #include <utility>
+#include <vector>
 
 namespace codex_monitor::codex {
 namespace {
@@ -60,6 +65,133 @@ struct RefreshResult {
     AppServerRefreshReport report;
 };
 
+const RateLimitWindow* SelectQuotaWindow(const RateLimitsData& limits,
+                                         bool weekly) noexcept {
+    const RateLimitWindow* primary = limits.primary ? &*limits.primary : nullptr;
+    const RateLimitWindow* secondary =
+        limits.secondary ? &*limits.secondary : nullptr;
+    for (const RateLimitWindow* candidate : {primary, secondary}) {
+        if (!candidate || !candidate->windowDurationMinutes) continue;
+        const bool candidateIsWeekly = *candidate->windowDurationMinutes > 1440;
+        if (candidateIsWeekly == weekly) return candidate;
+    }
+    const RateLimitWindow* fallback = weekly ? secondary : primary;
+    return fallback && !fallback->windowDurationMinutes ? fallback : nullptr;
+}
+
+QuotaHistoryWindowSample MakeHistoryWindow(
+    const RateLimitWindow* window) noexcept {
+    QuotaHistoryWindowSample result;
+    if (!window) return result;
+    const int used = std::clamp(static_cast<int>(window->usedPercent), 0, 100);
+    result.remainingPercent = static_cast<double>(100 - used);
+    result.resetsAtUnixSeconds = window->resetsAtUnixSeconds;
+    return result;
+}
+
+bool HasHistoryValue(const QuotaHistorySample& sample) noexcept {
+    return sample.fiveHour.remainingPercent ||
+           sample.fiveHour.resetsAtUnixSeconds ||
+           sample.weekly.remainingPercent ||
+           sample.weekly.resetsAtUnixSeconds;
+}
+
+std::vector<QuotaForecastSample> ForecastSamples(
+    const std::vector<QuotaHistorySample>& history,
+    bool weekly) {
+    std::vector<QuotaForecastSample> result;
+    result.reserve(history.size());
+    for (const QuotaHistorySample& sample : history) {
+        const QuotaHistoryWindowSample& window =
+            weekly ? sample.weekly : sample.fiveHour;
+        if (!window.remainingPercent || !window.resetsAtUnixSeconds) continue;
+        result.push_back(QuotaForecastSample{
+            static_cast<double>(sample.capturedAtUnixSeconds),
+            *window.remainingPercent,
+            static_cast<double>(*window.resetsAtUnixSeconds),
+        });
+    }
+    return result;
+}
+
+QuotaWindowForecastRefresh CalculateWindowForecast(
+    const RateLimitWindow* current,
+    const std::vector<QuotaHistorySample>& history,
+    bool weekly,
+    std::int64_t nowUnixSeconds) {
+    QuotaWindowForecastRefresh result;
+    result.windowReturned = current != nullptr;
+    if (!current || !current->resetsAtUnixSeconds) {
+        result.forecast = CalculateQuotaForecast(
+            {}, -1.0, -1.0, static_cast<double>(nowUnixSeconds));
+        return result;
+    }
+    const int used = std::clamp(static_cast<int>(current->usedPercent), 0, 100);
+    result.forecast = CalculateQuotaForecast(
+        ForecastSamples(history, weekly), static_cast<double>(100 - used),
+        static_cast<double>(*current->resetsAtUnixSeconds),
+        static_cast<double>(nowUnixSeconds));
+    return result;
+}
+
+QuotaForecastRefresh RefreshQuotaForecast(
+    const RateLimitsData& limits,
+    const std::filesystem::path& historyPath,
+    std::uint64_t expectedEpoch,
+    const std::atomic<std::uint64_t>& currentEpoch) {
+    const auto nowDuration = std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::system_clock::now().time_since_epoch());
+    const std::int64_t nowUnixSeconds = nowDuration.count();
+    const RateLimitWindow* fiveHour = SelectQuotaWindow(limits, false);
+    const RateLimitWindow* weekly = SelectQuotaWindow(limits, true);
+    const QuotaHistorySample current{
+        nowUnixSeconds,
+        MakeHistoryWindow(fiveHour),
+        MakeHistoryWindow(weekly),
+    };
+
+    const QuotaHistoryAtomicReplace replace =
+        [&currentEpoch, expectedEpoch](const std::filesystem::path& temporary,
+                                      const std::filesystem::path& destination) {
+            if (currentEpoch.load(std::memory_order_acquire) != expectedEpoch) {
+                return std::make_error_code(std::errc::operation_canceled);
+            }
+            if (MoveFileExW(temporary.c_str(), destination.c_str(),
+                            MOVEFILE_REPLACE_EXISTING |
+                                MOVEFILE_WRITE_THROUGH)) {
+                return std::error_code{};
+            }
+            return std::error_code(static_cast<int>(GetLastError()),
+                                   std::system_category());
+        };
+    QuotaHistoryStore store(historyPath, replace);
+    QuotaHistoryLoadResult loaded = store.Load(nowUnixSeconds);
+    std::vector<QuotaHistorySample> history =
+        loaded.ok() ? std::move(loaded.samples)
+                    : std::vector<QuotaHistorySample>{};
+    if (HasHistoryValue(current)) history.push_back(current);
+
+    QuotaForecastRefresh result;
+    result.fiveHour =
+        CalculateWindowForecast(fiveHour, history, false, nowUnixSeconds);
+    result.weekly =
+        CalculateWindowForecast(weekly, history, true, nowUnixSeconds);
+
+    if (historyPath.empty()) {
+        result.historySaveFailed = HasHistoryValue(current);
+        return result;
+    }
+    if (!HasHistoryValue(current)) {
+        return result;
+    }
+    const QuotaHistoryUpdateResult updated = store.Update(current);
+    result.historyStored =
+        updated.status == QuotaHistoryUpdateStatus::kWritten ||
+        updated.status == QuotaHistoryUpdateStatus::kSkippedTooSoon;
+    result.historySaveFailed = !result.historyStored;
+    return result;
+}
+
 struct ApartmentCleanup {
     bool initialized = false;
 
@@ -86,7 +218,8 @@ CodexWorker::~CodexWorker() {
 
 bool CodexWorker::Start(HWND completionWindow,
                         UINT completionMessage,
-                        std::string_view clientVersion) {
+                        std::string_view clientVersion,
+                        std::filesystem::path quotaHistoryPath) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (started_ || thread_.joinable() || schedule_.IsStopped() ||
         !completionWindow || completionMessage < WM_APP ||
@@ -98,14 +231,32 @@ bool CodexWorker::Start(HWND completionWindow,
     completionMessage_ = completionMessage;
     try {
         clientVersion_.assign(clientVersion);
+        quotaHistoryPath_ = std::move(quotaHistoryPath);
         thread_ = std::thread(&CodexWorker::Run, this);
     } catch (...) {
         completionWindow_ = nullptr;
         completionMessage_ = 0;
         clientVersion_.clear();
+        quotaHistoryPath_.clear();
         return false;
     }
     started_ = true;
+    return true;
+}
+
+bool CodexWorker::SetQuotaForecastEnabled(bool enabled) {
+    bool wakeWorker = false;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!started_ || quotaForecastEnabled_ == enabled) return false;
+        quotaForecastEnabled_ = enabled;
+        quotaForecastEpoch_.fetch_add(1, std::memory_order_acq_rel);
+        if (enabled && schedule_.IsActive()) {
+            wakeWorker = schedule_.Request();
+            if (wakeWorker) nextAutomaticRefresh_.reset();
+        }
+    }
+    if (wakeWorker || !enabled) wake_.notify_one();
     return true;
 }
 
@@ -144,6 +295,7 @@ void CodexWorker::PauseAndInvalidate() {
         // Resume never resets this epoch. A pre-pause callback therefore stays
         // cancelled even after a new generation becomes active.
         cancellationEpoch_.fetch_add(1, std::memory_order_acq_rel);
+        quotaForecastEpoch_.fetch_add(1, std::memory_order_acq_rel);
     }
     wake_.notify_one();
 }
@@ -172,9 +324,12 @@ void CodexWorker::StopAndJoin() {
         nextAutomaticRefresh_.reset();
         latest_.reset();
         cancellationEpoch_.fetch_add(1, std::memory_order_acq_rel);
+        quotaForecastEpoch_.fetch_add(1, std::memory_order_acq_rel);
         completionWindow_ = nullptr;
         completionMessage_ = 0;
         clientVersion_.clear();
+        quotaHistoryPath_.clear();
+        quotaForecastEnabled_ = false;
         started_ = false;
         if (thread_.joinable()) threadToJoin = std::move(thread_);
     }
@@ -202,7 +357,10 @@ void CodexWorker::Run() {
     for (;;) {
         std::optional<::codex_monitor::CodexRefreshWorkItem> item;
         std::uint64_t refreshEpoch = 0;
+        std::uint64_t forecastEpoch = 0;
+        bool forecastEnabled = false;
         std::string clientVersion;
+        std::filesystem::path quotaHistoryPath;
         {
             std::unique_lock<std::mutex> lock(mutex_);
             for (;;) {
@@ -221,6 +379,10 @@ void CodexWorker::Run() {
                     refreshEpoch =
                         cancellationEpoch_.load(std::memory_order_acquire);
                     clientVersion = clientVersion_;
+                    forecastEnabled = quotaForecastEnabled_;
+                    forecastEpoch =
+                        quotaForecastEpoch_.load(std::memory_order_acquire);
+                    quotaHistoryPath = quotaHistoryPath_;
                     break;
                 }
 
@@ -261,6 +423,17 @@ void CodexWorker::Run() {
             }
         }
 
+        std::optional<QuotaForecastRefresh> quotaForecastUpdate;
+        if (forecastEnabled && refresh.report.rateLimitsResponseReceived &&
+            !refresh.data.rateLimits.lastFailure &&
+            refresh.data.rateLimits.lastValue &&
+            cancellationEpoch_.load(std::memory_order_acquire) == refreshEpoch &&
+            quotaForecastEpoch_.load(std::memory_order_acquire) == forecastEpoch) {
+            quotaForecastUpdate = RefreshQuotaForecast(
+                *refresh.data.rateLimits.lastValue, quotaHistoryPath,
+                forecastEpoch, quotaForecastEpoch_);
+        }
+
         const bool succeeded = RefreshSucceeded(refresh.report, refresh.data);
         HWND notifyWindow = nullptr;
         UINT notifyMessage = 0;
@@ -270,6 +443,11 @@ void CodexWorker::Run() {
                 *item, succeeded ? ::codex_monitor::CodexRefreshOutcome::kSuccess
                                  : ::codex_monitor::CodexRefreshOutcome::kFailure);
             if (acceptResult) {
+                if (!quotaForecastEnabled_ ||
+                    quotaForecastEpoch_.load(std::memory_order_acquire) !=
+                        forecastEpoch) {
+                    quotaForecastUpdate.reset();
+                }
                 if (succeeded) {
                     consecutiveFailureCount = 0;
                 } else if (consecutiveFailureCount < kFailedRefreshDelays.size()) {
@@ -280,7 +458,7 @@ void CodexWorker::Run() {
                     : FailureRefreshDelay(consecutiveFailureCount);
                 latest_ = CompletedCodexRefresh{
                     std::move(refresh.data), std::move(refresh.report),
-                    succeeded, delay};
+                    std::move(quotaForecastUpdate), succeeded, delay};
                 if (schedule_.RecommendedDelay()) {
                     nextAutomaticRefresh_ =
                         std::chrono::steady_clock::now() + delay;
