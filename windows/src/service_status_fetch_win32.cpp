@@ -161,7 +161,9 @@ OpenAIServiceStatusFetchResult FetchOpenAIServiceStatus(
                          &decompression, sizeof(decompression));
 
         constexpr wchar_t kHeaders[] = L"Accept: application/json\r\n";
-        if (!WinHttpSendRequest(request.get(), kHeaders, -1L,
+        constexpr DWORD kHeaderLength =
+            static_cast<DWORD>(_countof(kHeaders) - 1);
+        if (!WinHttpSendRequest(request.get(), kHeaders, kHeaderLength,
                                 WINHTTP_NO_REQUEST_DATA, 0, 0, 0) ||
             IsCancelled(cancelled) ||
             !WinHttpReceiveResponse(request.get(), nullptr)) {
