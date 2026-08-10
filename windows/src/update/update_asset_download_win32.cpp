@@ -704,7 +704,8 @@ bool IsReservedDosDeviceSegment(std::wstring_view segment) noexcept {
     for (std::size_t index = 0; index < base.size(); ++index) {
         wchar_t character = base[index];
         if (character >= L'a' && character <= L'z') {
-            character += L'A' - L'a';
+            character = static_cast<wchar_t>(
+                character - (L'a' - L'A'));
         }
         upper[index] = character;
     }

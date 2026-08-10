@@ -91,6 +91,9 @@ constexpr std::size_t kMaximumProductNameCharacters = 256;
 constexpr std::size_t kMaximumProductVersionCharacters = 64;
 constexpr std::size_t kMaximumUpgradeCodeCharacters = 64;
 constexpr std::size_t kMaximumTemplateCharacters = 64;
+// Windows Installer documents Template as summary property ID 7. The SDK
+// headers do not consistently expose the PID_TEMPLATE alias to C++ callers.
+constexpr UINT kMsiTemplatePropertyId = 7;
 
 class FileHandle {
 public:
@@ -459,7 +462,8 @@ MsiTextReadStatus ReadMsiTemplate(MSIHANDLE database,
     wchar_t emptyBuffer[1] = {L'\0'};
     DWORD requiredCharacters = 0;
     const UINT lengthStatus = MsiSummaryInfoGetPropertyW(
-        summary.get(), PID_TEMPLATE, &dataType, &integerValue, &fileTime,
+        summary.get(), kMsiTemplatePropertyId, &dataType, &integerValue,
+        &fileTime,
         emptyBuffer, &requiredCharacters);
     if (dataType == VT_EMPTY) return MsiTextReadStatus::kMissing;
     if (dataType != VT_LPSTR) return MsiTextReadStatus::kTypeMismatch;
@@ -478,7 +482,7 @@ MsiTextReadStatus ReadMsiTemplate(MSIHANDLE database,
     DWORD bufferCharacters = requiredCharacters + 1U;
     dataType = VT_EMPTY;
     if (MsiSummaryInfoGetPropertyW(
-            summary.get(), PID_TEMPLATE, &dataType, &integerValue,
+            summary.get(), kMsiTemplatePropertyId, &dataType, &integerValue,
             &fileTime, buffer.data(), &bufferCharacters) != ERROR_SUCCESS) {
         return MsiTextReadStatus::kQueryFailed;
     }
