@@ -48,9 +48,16 @@ public:
                                    const std::function<bool()>& isCancelled = {});
 
     [[nodiscard]] const CodexDataState& data() const noexcept { return data_; }
+    // Thread-confined input for future local-only scanners. It is intentionally
+    // absent from CodexDataState and every refresh result passed to the UI.
+    [[nodiscard]] const std::optional<std::filesystem::path>& codexHome() const
+        noexcept {
+        return codexHome_;
+    }
 
 private:
     CodexDataState data_;
+    std::optional<std::filesystem::path> codexHome_;
 };
 
 }  // namespace codex_monitor::codex

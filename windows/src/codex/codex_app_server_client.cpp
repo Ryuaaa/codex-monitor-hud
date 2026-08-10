@@ -213,6 +213,9 @@ AppServerRefreshReport CodexAppServerClient::Refresh(
     const std::filesystem::path& executable,
     std::string_view clientVersion,
     const std::function<bool()>& isCancelled) {
+    // Never let a failed, cancelled, or incompatible refresh leave a stale
+    // filesystem root available to a later local scan.
+    codexHome_.reset();
     AppServerRefreshReport report;
     const auto cancelled = [&isCancelled] {
         if (!isCancelled) return false;
@@ -222,6 +225,7 @@ AppServerRefreshReport CodexAppServerClient::Refresh(
             return true;
         }
     };
+    std::optional<std::filesystem::path> initializedCodexHome;
     if (cancelled()) {
         report.failure = AppServerClientFailureKind::kCancelled;
         return report;
@@ -301,6 +305,8 @@ AppServerRefreshReport CodexAppServerClient::Refresh(
             process.Stop();
             return report;
         }
+        initializedCodexHome =
+            ParseInitializeCodexHomeResultJson(envelope.resultJson);
         report.initialized = true;
         break;
     }
@@ -430,6 +436,7 @@ AppServerRefreshReport CodexAppServerClient::Refresh(
     }
 
     process.Stop();
+    codexHome_ = std::move(initializedCodexHome);
     return report;
 }
 

@@ -521,6 +521,8 @@ def main() -> None:
         "kMaximumResponseLines = 512": "one refresh cannot parse unbounded response lines",
         "isCancelled": "the caller can cancel an in-flight refresh",
         "kCancellationPollInterval{200}": "blocked reads notice cancellation promptly",
+        "ParseInitializeCodexHomeResultJson":
+            "initialize can expose only a validated thread-confined Codex home",
     }
     app_server_sources = CODEX_APP_SERVER_HEADER + CODEX_APP_SERVER
     for token, reason in app_server_contracts.items():
@@ -529,6 +531,12 @@ def main() -> None:
             "the response-line cap is covered by an integration test")
     require(CODEX_APP_SERVER_TEST, "TestCancellationStopsTheJobWithoutMethodFailures",
             "process cancellation is covered by an integration test")
+    require(CODEX_APP_SERVER_TEST,
+            "TestCodexHomeMissingAndUntrustedValuesAreNotRetained",
+            "missing and untrusted initialize Codex-home values are covered")
+    reject(struct_body(CODEX_APP_SERVER_HEADER, "AppServerRefreshReport"),
+           "codexHome", "Codex home must not enter app-server refresh reports")
+    reject(MAIN, "codexHome", "Codex home must not enter UI code")
 
     privacy_model = without_cpp_comments(CODEX_TYPES)
     for forbidden in ("email", "preview", "id", "cwd", "path"):
@@ -586,7 +594,7 @@ def main() -> None:
     ):
         require(completed_refresh, token,
                 "the completed refresh contains only the trimmed model and refresh metadata")
-    for forbidden in ("raw", "stderr", "path"):
+    for forbidden in ("raw", "stderr", "path", "codexHome"):
         reject_regex(
             completed_refresh,
             rf"\b{forbidden}\b",

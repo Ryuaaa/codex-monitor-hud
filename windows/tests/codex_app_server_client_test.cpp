@@ -25,7 +25,9 @@ namespace {
 
 using codex_monitor::codex::AccountData;
 using codex_monitor::codex::AppServerClientFailureKind;
+using codex_monitor::codex::AppServerRefreshReport;
 using codex_monitor::codex::CodexAppServerClient;
+using codex_monitor::codex::CodexDataState;
 using codex_monitor::codex::ProcessLocalThread;
 using codex_monitor::codex::ProcessLocalThreadStatus;
 using namespace std::chrono_literals;
@@ -58,6 +60,11 @@ struct HasIdMember : std::false_type {};
 template <typename T>
 struct HasIdMember<T, std::void_t<decltype(std::declval<T>().id)>>
     : std::true_type {};
+template <typename T, typename = void>
+struct HasCodexHomeMember : std::false_type {};
+template <typename T>
+struct HasCodexHomeMember<T, std::void_t<decltype(std::declval<T>().codexHome)>>
+    : std::true_type {};
 
 static_assert(!HasEmailMember<AccountData>::value,
               "the protocol client must not acquire an account email field");
@@ -67,6 +74,10 @@ static_assert(!HasPathMember<ProcessLocalThread>::value,
               "the protocol client must not acquire rollout paths");
 static_assert(!HasIdMember<ProcessLocalThread>::value,
               "the protocol client must not acquire thread identifiers");
+static_assert(!HasCodexHomeMember<CodexDataState>::value,
+              "Codex home must not enter the product-facing data state");
+static_assert(!HasCodexHomeMember<AppServerRefreshReport>::value,
+              "Codex home must not enter refresh reports sent to callers");
 
 std::optional<std::wstring> EnvironmentValue(const wchar_t* name) {
     const DWORD required = GetEnvironmentVariableW(name, nullptr, 0);
@@ -154,6 +165,10 @@ void TestSuccessfulRefresh(const std::filesystem::path& executable) {
     const auto report = client.Refresh(executable, "test-version");
     Expect(report.initialized && report.allMethodsCompleted() && !report.failure,
            "a valid app-server refresh must initialize and complete all four methods");
+    Expect(client.codexHome() &&
+               *client.codexHome() ==
+                   std::filesystem::path(L"C:\\Users\\Codex Test\\.codex"),
+           "a validated initialize Codex home must stay on the client");
     Expect(client.data().rateLimits.lastValue &&
                client.data().rateLimits.lastValue->primary &&
                client.data().rateLimits.lastValue->primary->usedPercent == 25,
@@ -169,6 +184,36 @@ void TestSuccessfulRefresh(const std::filesystem::path& executable) {
                client.data().threadList.lastValue->threads[0].processLocalStatus ==
                    ProcessLocalThreadStatus::kActive,
            "thread status must remain explicitly scoped to this app-server process");
+}
+
+void TestCodexHomeMissingAndUntrustedValuesAreNotRetained(
+    const std::filesystem::path& executable) {
+    CodexAppServerClient client;
+    {
+        ScopedFakeScenario scenario(L"app-success");
+        Expect(client.Refresh(executable, "test-version").allMethodsCompleted() &&
+                   client.codexHome().has_value(),
+               "the Codex-home clearing test needs a valid baseline");
+    }
+    {
+        ScopedFakeScenario scenario(L"app-init-missing-home");
+        const auto report = client.Refresh(executable, "test-version");
+        Expect(report.initialized && report.allMethodsCompleted() && !report.failure,
+               "older initialize results without Codex home must remain compatible");
+        Expect(!client.codexHome(),
+               "a successful initialize without Codex home must clear stale path state");
+    }
+    for (const wchar_t* scenarioName : {
+             L"app-init-relative-home",
+             L"app-init-nul-home",
+         }) {
+        ScopedFakeScenario scenario(scenarioName);
+        const auto report = client.Refresh(executable, "test-version");
+        Expect(report.initialized && report.allMethodsCompleted() && !report.failure,
+               "an untrusted optional Codex home must not fail compatible refresh data");
+        Expect(!client.codexHome(),
+               "relative and NUL-bearing Codex homes must never be retained");
+    }
 }
 
 void TestOutOfOrderResponsesAndNotification(const std::filesystem::path& executable) {
@@ -205,6 +250,8 @@ void TestOneMethodErrorRetainsIndependentState(const std::filesystem::path& exec
                client.data().threadList.lastValue &&
                !client.data().threadList.lastFailure,
            "an account error must not clear or fail the other three methods");
+    Expect(client.codexHome().has_value(),
+           "a method-level error must not discard a successfully initialized Codex home");
 }
 
 void TestInitializeFailureStopsBeforeMethodResults(const std::filesystem::path& executable) {
@@ -227,6 +274,8 @@ void TestInitializeFailureStopsBeforeMethodResults(const std::filesystem::path& 
                client.data().usage.lastValue && client.data().usage.lastFailure &&
                client.data().threadList.lastValue && client.data().threadList.lastFailure,
            "initialize failure must mark all four methods while retaining prior values");
+    Expect(!client.codexHome(),
+           "initialize failure must clear a previously validated Codex home");
 }
 
 void TestMalformedEnvelopesAndUnknownIdsAreIsolated(
@@ -260,12 +309,20 @@ void TestStartFailureMarksAllMethods(const std::filesystem::path& executable) {
                client.data().threadList.lastValue &&
                client.data().threadList.lastFailure,
            "start failure must mark all methods while retaining prior values");
+    Expect(!client.codexHome(),
+           "transport start failure must clear a previously validated Codex home");
 }
 
 void TestCancellationStopsTheJobWithoutMethodFailures(
     const std::filesystem::path& executable) {
-    ScopedFakeScenario scenario(L"app-cancel");
     CodexAppServerClient client;
+    {
+        ScopedFakeScenario scenario(L"app-success");
+        Expect(client.Refresh(executable, "test-version").allMethodsCompleted() &&
+                   client.codexHome().has_value(),
+               "the cancellation clearing test needs a valid baseline");
+    }
+    ScopedFakeScenario scenario(L"app-cancel");
     const auto cancelAt = std::chrono::steady_clock::now() + 600ms;
     const auto report = client.Refresh(executable, "test-version", [&] {
         return std::chrono::steady_clock::now() >= cancelAt;
@@ -275,6 +332,8 @@ void TestCancellationStopsTheJobWithoutMethodFailures(
     Expect(!client.data().rateLimits.lastFailure && !client.data().account.lastFailure &&
                !client.data().usage.lastFailure && !client.data().threadList.lastFailure,
            "user cancellation must not masquerade as four interface failures");
+    Expect(!client.codexHome(),
+           "a refresh cancelled after initialize must clear stale Codex home state");
     Expect(WaitForNoMatchingProcess(executable),
            "cancellation must stop the fake app-server and its descendant job process");
 }
@@ -321,6 +380,7 @@ int wmain(int argc, wchar_t** argv) {
     }
 
     TestSuccessfulRefresh(executable);
+    TestCodexHomeMissingAndUntrustedValuesAreNotRetained(executable);
     TestOutOfOrderResponsesAndNotification(executable);
     TestOneMethodErrorRetainsIndependentState(executable);
     TestInitializeFailureStopsBeforeMethodResults(executable);

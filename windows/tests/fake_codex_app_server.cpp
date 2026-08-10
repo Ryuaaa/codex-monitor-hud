@@ -203,7 +203,19 @@ int RunAppServerScenario(const std::wstring& scenario,
         Sleep(INFINITE);
         return 0;
     }
-    if (!WriteLine(output, R"json({"id":1,"result":{"server":"fake"}})json")) {
+    std::string_view initializeResponse =
+        R"json({"id":1,"result":{"server":"fake",)json"
+        R"json("codexHome":"C:\\Users\\Codex Test\\.codex"}})json";
+    if (scenario == L"app-init-missing-home") {
+        initializeResponse = R"json({"id":1,"result":{"server":"fake"}})json";
+    } else if (scenario == L"app-init-relative-home") {
+        initializeResponse =
+            R"json({"id":1,"result":{"codexHome":"..\\private"}})json";
+    } else if (scenario == L"app-init-nul-home") {
+        initializeResponse =
+            R"json({"id":1,"result":{"codexHome":"C:\\Safe\u0000evil"}})json";
+    }
+    if (!WriteLine(output, initializeResponse)) {
         return 23;
     }
     if (!ReadAndValidateAppServerRequests()) return 24;

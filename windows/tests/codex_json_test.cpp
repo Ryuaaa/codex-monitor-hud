@@ -4,6 +4,7 @@
 
 #include <iostream>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <utility>
 
@@ -68,6 +69,36 @@ static_assert(!HasCwdMember<ProcessLocalThread>::value,
               "thread model must not retain working directories");
 static_assert(!HasPathMember<ProcessLocalThread>::value,
               "thread model must not retain rollout paths");
+
+void TestInitializeCodexHomeValidation() {
+    const auto drivePath =
+        codex_monitor::codex::ParseInitializeCodexHomeResultJson(
+            R"json({"codexHome":"C:\\Users\\Codex User\\.codex"})json");
+    Expect(drivePath && *drivePath ==
+                            std::filesystem::path(L"C:\\Users\\Codex User\\.codex"),
+           "an absolute Windows drive path must be accepted");
+
+    const auto uncPath =
+        codex_monitor::codex::ParseInitializeCodexHomeResultJson(
+            R"json({"codexHome":"\\\\server\\share\\.codex"})json");
+    Expect(uncPath && *uncPath ==
+                          std::filesystem::path(L"\\\\server\\share\\.codex"),
+           "an absolute Windows UNC path must be accepted");
+
+    for (const std::string_view json : {
+             R"json({"server":"compatible-without-codex-home"})json",
+             R"json({"codexHome":null})json",
+             R"json({"codexHome":"..\\private"})json",
+             R"json({"codexHome":"C:drive-relative"})json",
+             R"json({"codexHome":"\\root-relative"})json",
+             R"json({"codexHome":"C:\\Safe\u0000evil"})json",
+             R"json({"codexHome":42})json",
+             R"json(not-json)json",
+         }) {
+        Expect(!codex_monitor::codex::ParseInitializeCodexHomeResultJson(json),
+               "missing, invalid, relative, or NUL-bearing Codex homes must be rejected");
+    }
+}
 
 void TestCompletePayloadsAndCodexBucketPriority() {
     const auto rateLimits = codex_monitor::codex::ParseRateLimitsResultJson(R"json(
@@ -286,6 +317,7 @@ void TestMethodFailuresRetainOnlyTheirOwnLastValue() {
 
 int main() {
     winrt::init_apartment(winrt::apartment_type::multi_threaded);
+    TestInitializeCodexHomeValidation();
     TestCompletePayloadsAndCodexBucketPriority();
     TestMissingNullAndLegacyShapes();
     TestStrictTypesUnsafeIntegersAndMalformedJson();

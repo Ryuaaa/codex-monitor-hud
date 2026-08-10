@@ -12,6 +12,7 @@
 #include <winrt/Windows.Foundation.Collections.h>
 
 #include <cmath>
+#include <filesystem>
 #include <limits>
 #include <optional>
 #include <string>
@@ -387,6 +388,30 @@ bool SelectThreadArray(const JsonObject& root,
 }
 
 }  // namespace
+
+std::optional<std::filesystem::path> ParseInitializeCodexHomeResultJson(
+    std::string_view json) {
+    MethodFailure failure;
+    JsonObject root;
+    if (!ParseRootObject(json, root, failure)) return std::nullopt;
+
+    const std::optional<IJsonValue> value = FindValue(root, L"codexHome");
+    if (!value || value->ValueType() != JsonValueType::String) {
+        return std::nullopt;
+    }
+
+    const std::wstring text = CopyString(value->GetString());
+    if (text.empty() || text.find(L'\0') != std::wstring::npos) {
+        return std::nullopt;
+    }
+    try {
+        std::filesystem::path path(text);
+        if (!path.is_absolute()) return std::nullopt;
+        return path;
+    } catch (const std::filesystem::filesystem_error&) {
+        return std::nullopt;
+    }
+}
 
 MethodParseResult<RateLimitsData> ParseRateLimitsResultJson(std::string_view json) {
     MethodFailure failure;
