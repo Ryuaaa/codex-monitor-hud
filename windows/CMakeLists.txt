@@ -111,6 +111,15 @@ if(BUILD_TESTING)
     add_test(NAME windows_codex_cost_hybrid
         COMMAND CodexMonitorCodexCostHybridTests)
 
+    add_executable(CodexMonitorCodexCostEventParserTests
+        src/codex/codex_cost_model.cpp
+        src/codex/codex_cost_event_parser.cpp
+        tests/codex_cost_event_parser_test.cpp
+    )
+    configure_codex_monitor_target(CodexMonitorCodexCostEventParserTests)
+    add_test(NAME windows_codex_cost_event_parser
+        COMMAND CodexMonitorCodexCostEventParserTests)
+
     add_executable(CodexMonitorQuotaForecastTests
         src/codex/quota_forecast.cpp
         tests/quota_forecast_test.cpp
