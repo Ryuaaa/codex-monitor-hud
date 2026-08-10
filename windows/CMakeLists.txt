@@ -91,6 +91,15 @@ if(BUILD_TESTING)
     configure_codex_monitor_target(CodexMonitorCodexCostModelTests)
     add_test(NAME windows_codex_cost_model COMMAND CodexMonitorCodexCostModelTests)
 
+    add_executable(CodexMonitorCodexCostSummaryTests
+        src/codex/codex_cost_model.cpp
+        src/codex/codex_cost_summary.cpp
+        tests/codex_cost_summary_test.cpp
+    )
+    configure_codex_monitor_target(CodexMonitorCodexCostSummaryTests)
+    add_test(NAME windows_codex_cost_summary
+        COMMAND CodexMonitorCodexCostSummaryTests)
+
     add_executable(CodexMonitorQuotaForecastTests
         src/codex/quota_forecast.cpp
         tests/quota_forecast_test.cpp
