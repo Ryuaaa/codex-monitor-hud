@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Source-level contracts for the native Windows product-shell milestone."""
 
+import re
 from pathlib import Path
 
 
@@ -21,6 +22,54 @@ TEST = (WINDOWS_ROOT / "tests" / "snapshot_math_test.cpp").read_text(encoding="u
 STATE_TEST = (WINDOWS_ROOT / "tests" / "module_state_test.cpp").read_text(encoding="utf-8")
 SCHEDULE_TEST = (WINDOWS_ROOT / "tests" / "sampling_schedule_test.cpp").read_text(encoding="utf-8")
 CMAKE = (WINDOWS_ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
+CODEX_TYPES = (WINDOWS_ROOT / "src" / "codex" / "codex_types.h").read_text(
+    encoding="utf-8"
+)
+CODEX_EXECUTABLE_HEADER = (
+    WINDOWS_ROOT / "src" / "codex" / "codex_executable.h"
+).read_text(encoding="utf-8")
+CODEX_EXECUTABLE = (
+    WINDOWS_ROOT / "src" / "codex" / "codex_executable.cpp"
+).read_text(encoding="utf-8")
+CODEX_PROCESS_HEADER = (
+    WINDOWS_ROOT / "src" / "codex" / "codex_process.h"
+).read_text(encoding="utf-8")
+CODEX_PROCESS = (WINDOWS_ROOT / "src" / "codex" / "codex_process.cpp").read_text(
+    encoding="utf-8"
+)
+CODEX_APP_SERVER_HEADER = (
+    WINDOWS_ROOT / "src" / "codex" / "codex_app_server_client.h"
+).read_text(encoding="utf-8")
+CODEX_APP_SERVER = (
+    WINDOWS_ROOT / "src" / "codex" / "codex_app_server_client.cpp"
+).read_text(encoding="utf-8")
+CODEX_WORKER_HEADER = (
+    WINDOWS_ROOT / "src" / "codex" / "codex_worker.h"
+).read_text(encoding="utf-8")
+CODEX_WORKER = (WINDOWS_ROOT / "src" / "codex" / "codex_worker.cpp").read_text(
+    encoding="utf-8"
+)
+CODEX_USAGE_HEADER = (
+    WINDOWS_ROOT / "src" / "codex" / "codex_usage_math.h"
+).read_text(encoding="utf-8")
+CODEX_USAGE = (
+    WINDOWS_ROOT / "src" / "codex" / "codex_usage_math.cpp"
+).read_text(encoding="utf-8")
+CODEX_PROCESS_TEST = (
+    WINDOWS_ROOT / "tests" / "codex_process_test.cpp"
+).read_text(encoding="utf-8")
+CODEX_APP_SERVER_TEST = (
+    WINDOWS_ROOT / "tests" / "codex_app_server_client_test.cpp"
+).read_text(encoding="utf-8")
+CODEX_USAGE_TEST = (
+    WINDOWS_ROOT / "tests" / "codex_usage_math_test.cpp"
+).read_text(encoding="utf-8")
+CODEX_WORKER_TEST = (
+    WINDOWS_ROOT / "tests" / "codex_worker_test.cpp"
+).read_text(encoding="utf-8")
+RESOURCE_SCRIPT = (WINDOWS_ROOT / "resources" / "CodexMonitorHUD.rc").read_text(
+    encoding="utf-8"
+)
 
 
 def require(text: str, token: str, reason: str) -> None:
@@ -31,6 +80,43 @@ def require(text: str, token: str, reason: str) -> None:
 def reject(text: str, token: str, reason: str) -> None:
     if token in text:
         raise AssertionError(f"unexpected {token!r}: {reason}")
+
+
+def require_regex(text: str, pattern: str, reason: str) -> None:
+    if re.search(pattern, text, flags=re.MULTILINE | re.DOTALL) is None:
+        raise AssertionError(f"missing pattern {pattern!r}: {reason}")
+
+
+def reject_regex(text: str, pattern: str, reason: str) -> None:
+    if re.search(pattern, text, flags=re.MULTILINE | re.DOTALL) is not None:
+        raise AssertionError(f"unexpected pattern {pattern!r}: {reason}")
+
+
+def without_cpp_comments(text: str) -> str:
+    text = re.sub(r"/\*.*?\*/", "", text, flags=re.DOTALL)
+    return re.sub(r"//[^\n]*", "", text)
+
+
+def struct_body(text: str, name: str) -> str:
+    match = re.search(
+        rf"\bstruct\s+{re.escape(name)}\s*\{{(?P<body>.*?)\n\}};",
+        without_cpp_comments(text),
+        flags=re.DOTALL,
+    )
+    if match is None:
+        raise AssertionError(f"missing struct {name!r}")
+    return match.group("body")
+
+
+def cmake_call_body(text: str, command: str, target: str) -> str:
+    match = re.search(
+        rf"\b{re.escape(command)}\s*\(\s*{re.escape(target)}\b(?P<body>.*?)\)",
+        text,
+        flags=re.DOTALL,
+    )
+    if match is None:
+        raise AssertionError(f"missing CMake call {command}({target} ...)")
+    return match.group("body")
 
 
 def main() -> None:
@@ -52,11 +138,8 @@ def main() -> None:
         "PauseAndInvalidate": "hidden performance pages invalidate outstanding samples",
         "HomeNeedsPerformance": "homepage sampling follows visible module dependencies",
         "CurrentPageNeedsPerformance": "page-level sampling demand is centralized",
-        "case codex_monitor::Page::kCodex:\n            return false":
-            "the disconnected Codex page stops performance sampling",
-        "本机 Codex 数据尚未连接": "the Codex page states the real connection boundary",
-        "does not simulate account, usage, task, token":
-            "the disconnected Codex page cannot imply fabricated data",
+        "NativePageNeedsPerformanceData":
+            "native-page sampling follows module data dependencies",
         "kHomePageButtonId": "the shell exposes a homepage",
         "kCodexPageButtonId": "the shell exposes a Codex page",
         "kComputerPageButtonId": "the shell exposes a computer-performance page",
@@ -190,9 +273,16 @@ def main() -> None:
 
     state_contracts = {
         "struct ModuleDefinition": "module metadata has a single registry model",
+        "Page nativePage": "each module declares its own native page",
         "requiresPerformanceSampling": "sampling demand is declared per module",
+        "requiresCodexData": "Codex demand is independent from performance demand",
+        "nativePageVisible": "own-page visibility is independent from Home visibility",
+        "kCodexFiveHourQuota": "the five-hour quota has its own module identity",
+        "kCodexWeeklyQuota": "the weekly quota has its own module identity",
         "SanitizeHomeOrder": "saved order is repaired against the current registry",
         "VisibleHomeModules": "homepage visibility is derived in the portable model",
+        "VisibleModulesForNativePage": "native pages are filtered by registry metadata",
+        "HomeNeedsCodexData": "homepage Codex demand follows visible modules",
         "MoveHomeModule": "settings reorder behavior is portable and testable",
         "SerializeSettings": "settings use an explicit whitelist serializer",
         "ParseSettings": "settings parsing has a portable boundary",
@@ -207,6 +297,12 @@ def main() -> None:
         "intentionally empty homepage": "all-hidden homepage intent is fixed",
         "unknown page must fall back to home": "damaged settings have a safe fallback",
         "off-screen saved window must return": "monitor removal recovery is fixed",
+        "TestVersionTwoRoundTripAndIndependentQuotaSwitches":
+            "the two quota switches and version 2 schema have a round-trip test",
+        "TestVersionOneMigrationPreservesOldHomeChoices":
+            "version 1 settings migrate without enabling new Home work",
+        '"version=2\\n"': "the current persisted settings schema is version 2",
+        '"version=1\\n"': "the previous settings schema has an explicit migration fixture",
     }
     for token, reason in state_test_contracts.items():
         require(STATE_TEST, token, reason)
@@ -227,6 +323,225 @@ def main() -> None:
     require(MAIN, "if (wasMinimized)",
             "restoring after a display change revalidates the saved window position")
 
+    codex_process_contracts = {
+        "IsSafeCodexExecutable": "the launcher validates the executable before creation",
+        "path.is_absolute()": "automatic executable discovery rejects relative paths",
+        "kMaximumDirectPathDirectories":
+            "PATH discovery reserves candidate budget for official user layouts",
+        "CreateProcessW": "the app-server starts directly through the Win32 process API",
+        "executable.c_str()": "the absolute executable is supplied as lpApplicationName",
+        "PROC_THREAD_ATTRIBUTE_HANDLE_LIST":
+            "the child inherits only the three intended pipe handles",
+        "JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE":
+            "closing the Job cannot orphan app-server descendants",
+        "AssignProcessToJobObject": "the suspended child joins the Job before it runs",
+        "CREATE_NO_WINDOW": "the background app-server does not flash a console",
+        "CREATE_SUSPENDED": "Job assignment happens before child execution",
+        "kMaximumLineBytes = 1024 * 1024": "one NDJSON line is capped at one MiB",
+        "kMaximumStderrBytes = 16 * 1024": "retained stderr is capped at sixteen KiB",
+        "kDefaultTotalTimeout{15000}": "one app-server process has a hard fifteen-second cap",
+    }
+    codex_process_sources = (
+        CODEX_EXECUTABLE_HEADER
+        + CODEX_EXECUTABLE
+        + CODEX_PROCESS_HEADER
+        + CODEX_PROCESS
+    )
+    for token, reason in codex_process_contracts.items():
+        require(codex_process_sources, token, reason)
+    reject(CODEX_PROCESS, "ShellExecute", "the app-server must not launch through a shell")
+    reject(CODEX_PROCESS, "system(", "the app-server must not launch through a command shell")
+
+    codex_process_test_contracts = {
+        "TestExecutableDiscovery": "current-directory executable injection is covered",
+        "TestFragmentedAndMultipleLines": "direct NDJSON process transport is covered",
+        "TestOversizedLine": "the NDJSON line cap is covered",
+        "TestStderrMemoryLimit": "the stderr memory cap is covered",
+        "TestStopKillsJobTree": "descendant cleanup is covered",
+        "TestTotalTimeoutKillsSilentServer": "the hard process timeout is covered",
+    }
+    for token, reason in codex_process_test_contracts.items():
+        require(CODEX_PROCESS_TEST, token, reason)
+
+    app_server_contracts = {
+        'L"initialize"': "the official initialization request is sent first",
+        'L"initialized"': "the initialization notification completes the handshake",
+        'L"account/rateLimits/read"': "rate limits use the official method",
+        'L"account/read"': "subscription type uses the official method",
+        'L"account/usage/read"': "daily usage uses the official method",
+        'L"thread/list"': "recent task history uses the official method",
+        'L"app-server"': "each refresh launches app-server mode",
+        'L"--stdio"': "the official newline-delimited stdio transport is selected",
+        "kMaximumResponseLines = 512": "one refresh cannot parse unbounded response lines",
+        "isCancelled": "the caller can cancel an in-flight refresh",
+        "kCancellationPollInterval{200}": "blocked reads notice cancellation promptly",
+    }
+    app_server_sources = CODEX_APP_SERVER_HEADER + CODEX_APP_SERVER
+    for token, reason in app_server_contracts.items():
+        require(app_server_sources, token, reason)
+    require(CODEX_APP_SERVER_TEST, "TestResponseLineLimitStopsFlood",
+            "the response-line cap is covered by an integration test")
+    require(CODEX_APP_SERVER_TEST, "TestCancellationStopsTheJobWithoutMethodFailures",
+            "process cancellation is covered by an integration test")
+
+    privacy_model = without_cpp_comments(CODEX_TYPES)
+    for forbidden in ("email", "preview", "id", "cwd", "path"):
+        reject_regex(
+            privacy_model,
+            rf"\b{forbidden}\b",
+            f"the retained Codex product model must not contain {forbidden}",
+        )
+    require(CODEX_TYPES, "ProcessLocalThreadStatus",
+            "thread status is named as process-local in the product model")
+    for assertion in (
+        "!HasEmailMember<AccountData>::value",
+        "!HasPreviewMember<ProcessLocalThread>::value",
+        "!HasPathMember<ProcessLocalThread>::value",
+        "!HasIdMember<ProcessLocalThread>::value",
+    ):
+        require(CODEX_APP_SERVER_TEST, assertion,
+                "privacy exclusions are protected by compile-time tests")
+
+    codex_worker_contracts = {
+        "std::thread thread_": "the worker owns one serial background thread",
+        "CodexAppServerClient client": "the protocol client is owned on that worker thread",
+        "std::condition_variable": "the worker sleeps between demand and refresh deadlines",
+        "kSuccessfulRefreshDelay{300}": "normal refreshes wait five minutes",
+        "kFailedRefreshDelays": "failed refreshes use a bounded backoff sequence",
+        "std::chrono::seconds{900}": "failure backoff is capped at fifteen minutes",
+        "cancellationEpoch_": "pause uses a monotonic cancellation generation",
+        "fetch_add": "pause and stop permanently invalidate an old generation",
+        "PauseAndInvalidate": "no-demand states invalidate in-flight work",
+        "ActivateAndRefresh": "resume immediately requests fresh data",
+        "FindCodexExecutable": "executable discovery happens inside the short refresh",
+        "init_apartment": "the worker initializes its C++/WinRT apartment",
+        "uninit_apartment": "the worker releases its C++/WinRT apartment",
+        "StopAndJoin": "destruction waits for the worker and child process",
+    }
+    worker_sources = CODEX_WORKER_HEADER + CODEX_WORKER
+    for token, reason in codex_worker_contracts.items():
+        require(worker_sources, token, reason)
+    if CODEX_WORKER_HEADER.count("std::thread thread_;") != 1:
+        raise AssertionError("the Codex worker must own exactly one serial worker thread")
+    require_regex(
+        CODEX_WORKER,
+        r"PostMessageW\s*\(\s*notifyWindow\s*,\s*notifyMessage\s*,\s*0\s*,\s*0\s*\)",
+        "the UI notification must carry no owning raw pointer",
+    )
+    completed_refresh = struct_body(CODEX_WORKER_HEADER, "CompletedCodexRefresh")
+    for token in (
+        "CodexDataState data",
+        "AppServerRefreshReport report",
+        "bool succeeded",
+        "nextRefreshDelay",
+    ):
+        require(completed_refresh, token,
+                "the completed refresh contains only the trimmed model and refresh metadata")
+    for forbidden in ("raw", "stderr", "path"):
+        reject_regex(
+            completed_refresh,
+            rf"\b{forbidden}\b",
+            f"completed refreshes must not retain {forbidden}",
+        )
+    for token, reason in {
+        "TestSuccessfulBackgroundRefresh":
+            "the complete worker-to-window success path is covered",
+        "TestPauseCancelsAndResumeRefreshes":
+            "pause, child cleanup, generation invalidation, and resume are covered",
+        "TestFailureBackoffAndRecovery":
+            "consecutive failures back off and a success restores normal cadence",
+        "ProcessWithImagePathExists":
+            "the worker integration test checks for orphaned app-server processes",
+    }.items():
+        require(CODEX_WORKER_TEST, token, reason)
+
+    codex_usage_contracts = {
+        "bool todayAvailable": "today has an explicit availability bit",
+        "optional<std::int64_t> todayTokens":
+            "a missing today bucket cannot be represented as a fabricated zero",
+        "latestDate": "delayed settlement still exposes the latest reported date",
+        "latestTokens": "delayed settlement still exposes the latest reported amount",
+        "last7DaysTokens": "the recent seven-day total is available",
+        "previous7DaysTokens": "the preceding seven-day comparison is available",
+        "thirtyDayTokens": "the thirty-day total is available",
+        "monthToDateTokens": "the reference month's usage is available",
+        "monthForecastTokens": "the monthly linear projection is explicitly optional",
+        "SaturatingLinearForecast": "monthly projection cannot overflow",
+        "anchorDay - 29": "rolling totals anchor to the latest valid day",
+    }
+    usage_sources = CODEX_USAGE_HEADER + CODEX_USAGE
+    for token, reason in codex_usage_contracts.items():
+        require(usage_sources, token, reason)
+    codex_usage_test_contracts = {
+        "TestDelayedSettlementAndAnchoredWindows": "delayed daily settlement is covered",
+        "TestDuplicateBuckets": "same-day buckets are combined",
+        "TestLeapYearAndMonthBoundary": "Gregorian month and leap boundaries are covered",
+        "TestBadAndFutureDates": "future and invalid inputs cannot inflate totals",
+        "TestEmptyAndUnavailableData": "missing source data stays unavailable",
+        "TestSaturatingLargeIntegers": "large integer behavior is covered",
+    }
+    for token, reason in codex_usage_test_contracts.items():
+        require(CODEX_USAGE_TEST, token, reason)
+
+    main_codex_contracts = {
+        "CurrentPageNeedsCodexData": "Codex work follows visible module demand",
+        "HomeNeedsCodexData": "Home can request Codex independently from performance data",
+        "NativePageNeedsCodexData": "the Codex native page follows its own switches",
+        "UpdateCodexDemand": "all demand transitions share one start/stop gate",
+        "codexWorker.PauseAndInvalidate": "minimize and hidden modules stop Codex work",
+        "codexWorker.ActivateAndRefresh": "new demand refreshes immediately",
+        "codexWorker.Start": "the app-server worker starts with the window",
+        "kCodexReadyMessage": "worker completion has a dedicated UI message",
+        "codexWorker.TakeLatest": "the UI takes a copied privacy-trimmed result",
+        "codexWorker.StopAndJoin": "window teardown reaps the Codex worker",
+        "ApplyCodexRefresh": "real returned data is applied to cards",
+        "BuildQuotaCardText": "quota cards use parsed rate-limit data",
+        "BuildSubscriptionCardText": "subscription cards use parsed account data",
+        "CalculateUsageCalendarTotals": "Token cards use official daily totals",
+        "BuildRecentTasksCardText": "recent-task cards use official task history",
+        "app-server 进程范围": "task status is visibly scoped to this app-server process",
+        "WM_VSCROLL": "overflowing cards support scrollbar navigation",
+        "WM_MOUSEWHEEL": "overflowing cards support wheel navigation",
+        "UpdateContentScrollBar": "scroll range follows visible card rows",
+        "homeVisibleCheck": "settings expose the Home visibility checkbox",
+        "nativeVisibleCheck": "settings expose the own-page visibility checkbox",
+        "kSettingsVisibleBaseId": "Home checkbox commands are independently routed",
+        "kSettingsNativeVisibleBaseId": "own-page checkbox commands are independently routed",
+        "BS_AUTOCHECKBOX": "visibility controls have visible native check states",
+        "BM_GETCHECK": "visibility changes read the actual checkbox state",
+        "settingsScrollMaximum": "small high-DPI screens have bounded settings scrolling",
+        "SetSettingsScrollOffset": "settings wheel and scrollbar input share one clamp",
+        "WS_VSCROLL": "the settings window exposes native vertical scrolling",
+        "MonitorFromWindow(owner, MONITOR_DEFAULTTONEAREST)":
+            "the settings window is initially constrained to its monitor work area",
+    }
+    for token, reason in main_codex_contracts.items():
+        require(MAIN, token, reason)
+    if MAIN.count("UpdateCodexDemand(") < 5:
+        raise AssertionError(
+            "Codex demand must be reconsidered on startup, page/settings changes, and minimize/restore"
+        )
+
+    hud_sources = cmake_call_body(CMAKE, "add_executable", "CodexMonitorHUD")
+    hud_source_contracts = {
+        "resources/CodexMonitorHUD.rc": "the application icon resource is compiled into the HUD",
+        "src/codex/codex_app_server_client.cpp":
+            "the official protocol client is compiled into the HUD",
+        "src/codex/codex_executable.cpp": "safe codex.exe discovery is compiled into the HUD",
+        "src/codex/codex_json_win32.cpp": "the privacy-trimmed parser is compiled into the HUD",
+        "src/codex/codex_process.cpp": "the bounded child process transport is compiled into the HUD",
+        "src/codex/codex_refresh_schedule.cpp": "Codex request coalescing is compiled into the HUD",
+        "src/codex/codex_usage_math.cpp": "official daily usage math is compiled into the HUD",
+        "src/codex/codex_worker.cpp": "the serial Codex worker is compiled into the HUD",
+        "src/main.cpp": "the product window is compiled into the HUD",
+    }
+    for token, reason in hud_source_contracts.items():
+        require(hud_sources, token, reason)
+
+    hud_libraries = cmake_call_body(CMAKE, "target_link_libraries", "CodexMonitorHUD")
+    require(hud_libraries, "windowsapp",
+            "the HUD itself links Windows.Data.Json rather than only its tests")
+
     cmake_contracts = {
         "add_executable(CodexMonitorHUD WIN32": "the executable uses the Windows GUI subsystem",
         "src/windows_sampler.cpp": "the native sampler is compiled into the HUD",
@@ -242,14 +557,46 @@ def main() -> None:
             "portable sampling scheduling tests are buildable",
         "add_test(NAME windows_sampling_schedule":
             "sampling scheduling tests are registered with CTest",
+        "add_executable(CodexMonitorCodexRefreshScheduleTests":
+            "Codex request coalescing tests are buildable",
+        "add_test(NAME windows_codex_refresh_schedule":
+            "Codex request coalescing tests are registered with CTest",
+        "add_executable(CodexMonitorCodexUsageMathTests":
+            "official daily usage math tests are buildable",
+        "add_test(NAME windows_codex_usage_math":
+            "official daily usage math tests are registered with CTest",
+        "add_executable(CodexMonitorCodexProcessTests":
+            "bounded process integration tests are buildable",
+        "add_test(NAME windows_codex_process":
+            "bounded process integration tests are registered with CTest",
+        "add_executable(CodexMonitorCodexJsonTests":
+            "privacy parser tests are buildable",
+        "add_test(NAME windows_codex_json":
+            "privacy parser tests are registered with CTest",
+        "add_executable(CodexMonitorCodexAppServerClientTests":
+            "official protocol integration tests are buildable",
+        "add_test(NAME windows_codex_app_server_client":
+            "official protocol integration tests are registered with CTest",
+        "add_executable(CodexMonitorCodexWorkerTests":
+            "the background Codex worker integration test is buildable",
+        "add_test(NAME windows_codex_worker":
+            "the background Codex worker integration test is registered with CTest",
         "cxx_std_17": "the implementation has an explicit language baseline",
         "MSVC_RUNTIME_LIBRARY": "the release binary does not require a separate VC runtime install",
         "PSAPI_VERSION=1": "PSAPI names resolve consistently through Psapi.lib",
         "NOMINMAX": "the existing Win32 shell's std::max calls compile under Windows headers",
+        "$<$<COMPILE_LANGUAGE:CXX>:/W4>":
+            "C++ compiler flags are not forwarded to the resource compiler",
+        "windowsapp": "Windows.Data.Json is linked for the official protocol parser",
         "user32 gdi32 psapi shell32 ole32": "only documented Windows system libraries are linked",
     }
     for token, reason in cmake_contracts.items():
         require(CMAKE, token, reason)
+
+    require(RESOURCE_SCRIPT, "IDI_CODEX_MONITOR_HUD",
+            "the resource script exposes the application icon identifier")
+    require(RESOURCE_SCRIPT, "CodexMonitorHUD.ico",
+            "the resource script embeds the multi-size application icon")
 
     print("windows_static_contracts=pass")
     print(f"checked_root={WINDOWS_ROOT}")

@@ -64,6 +64,35 @@ std::filesystem::path CreateTestDirectory() {
     return error ? std::filesystem::path{} : path;
 }
 
+std::filesystem::path InstallCandidate(
+    const std::filesystem::path& source,
+    const std::filesystem::path& destination) {
+    std::error_code error;
+    std::filesystem::create_directories(destination.parent_path(), error);
+    if (!error) {
+        std::filesystem::copy_file(source, destination,
+                                   std::filesystem::copy_options::overwrite_existing,
+                                   error);
+    }
+    Expect(!error && std::filesystem::is_regular_file(destination),
+           "the executable-discovery fixture must be created");
+    return destination;
+}
+
+void SetCandidateAge(const std::filesystem::path& candidate,
+                     std::chrono::hours age) {
+    std::error_code error;
+    std::filesystem::last_write_time(
+        candidate, std::filesystem::file_time_type::clock::now() - age, error);
+    Expect(!error, "the executable-discovery fixture timestamp must be set");
+}
+
+void ClearAutomaticDiscoveryEnvironment() {
+    SetEnvironmentVariableW(L"LOCALAPPDATA", nullptr);
+    SetEnvironmentVariableW(L"USERPROFILE", nullptr);
+    SetEnvironmentVariableW(L"APPDATA", nullptr);
+}
+
 std::uint32_t ParseChildPid(const std::string& line) {
     constexpr std::string_view prefix = "{\"childPid\":";
     if (line.rfind(prefix, 0) != 0 || line.empty() || line.back() != '}') return 0;
@@ -83,13 +112,35 @@ void TestExecutableDiscovery(const std::filesystem::path& codexExecutable,
                              const std::filesystem::path& testRoot) {
     const auto oldConfigured = EnvironmentValue(L"CODEX_CLI_PATH");
     const auto oldPath = EnvironmentValue(L"PATH");
+    const auto oldLocalAppData = EnvironmentValue(L"LOCALAPPDATA");
+    const auto oldUserProfile = EnvironmentValue(L"USERPROFILE");
+    const auto oldAppData = EnvironmentValue(L"APPDATA");
     wchar_t oldCurrentDirectory[32768]{};
     const DWORD oldCurrentLength = GetCurrentDirectoryW(32768, oldCurrentDirectory);
 
+    const std::filesystem::path pathDirectory = testRoot / L"path-prefix";
+    const std::filesystem::path pathCandidate = InstallCandidate(
+        codexExecutable, pathDirectory / L"codex.exe");
+    const std::filesystem::path automaticLocal = testRoot / L"automatic-local";
+    const std::filesystem::path automaticPrograms = InstallCandidate(
+        codexExecutable,
+        automaticLocal / L"Programs" / L"OpenAI" / L"Codex" / L"bin" /
+            L"codex.exe");
+
     SetEnvironmentVariableW(L"CODEX_CLI_PATH", codexExecutable.c_str());
+    const std::wstring priorityPath = L"\"" + pathDirectory.wstring() + L"\"";
+    SetEnvironmentVariableW(L"PATH", priorityPath.c_str());
+    SetEnvironmentVariableW(L"LOCALAPPDATA", automaticLocal.c_str());
+    SetEnvironmentVariableW(L"USERPROFILE", nullptr);
+    SetEnvironmentVariableW(L"APPDATA", nullptr);
     auto found = codex_monitor::codex::FindCodexExecutable();
     Expect(found && found->lexically_normal() == codexExecutable.lexically_normal(),
            "an absolute CODEX_CLI_PATH must have priority");
+
+    SetEnvironmentVariableW(L"CODEX_CLI_PATH", L"relative\\codex.exe");
+    found = codex_monitor::codex::FindCodexExecutable();
+    Expect(found && found->lexically_normal() == pathCandidate.lexically_normal(),
+           "a direct absolute PATH candidate must precede automatic layouts");
 
     const std::filesystem::path currentOnly = testRoot / L"current-only";
     std::filesystem::create_directories(currentOnly);
@@ -97,18 +148,153 @@ void TestExecutableDiscovery(const std::filesystem::path& codexExecutable,
                                std::filesystem::copy_options::overwrite_existing);
     SetCurrentDirectoryW(currentOnly.c_str());
     SetEnvironmentVariableW(L"CODEX_CLI_PATH", L"relative\\codex.exe");
-    const std::wstring pathValue = L";;.;relative;\"" +
-                                   codexExecutable.parent_path().wstring() + L"\";";
-    SetEnvironmentVariableW(L"PATH", pathValue.c_str());
+    SetEnvironmentVariableW(L"PATH", L";;.;relative;\"\";");
+    ClearAutomaticDiscoveryEnvironment();
     found = codex_monitor::codex::FindCodexExecutable();
-    Expect(found && found->lexically_normal() == codexExecutable.lexically_normal(),
-           "PATH discovery must ignore empty/current/relative entries");
+    Expect(!found,
+           "empty, current-directory, relative PATH, and relative override entries must be rejected");
+
+    SetEnvironmentVariableW(L"CODEX_CLI_PATH", nullptr);
+    SetEnvironmentVariableW(L"PATH", L"");
+    SetEnvironmentVariableW(L"LOCALAPPDATA", automaticLocal.c_str());
+    found = codex_monitor::codex::FindCodexExecutable();
+    Expect(found && found->lexically_normal() == automaticPrograms.lexically_normal(),
+           "the known per-user Programs layout must be discovered after PATH");
+
+    const std::filesystem::path versionLocal = testRoot / L"version-local";
+    const std::filesystem::path versionRoot =
+        versionLocal / L"OpenAI" / L"Codex";
+    const auto directVersion = InstallCandidate(
+        codexExecutable, versionRoot / L"bin" / L"codex.exe");
+    const auto oldVersion = InstallCandidate(
+        codexExecutable, versionRoot / L"bin" / L"2026.08.01" / L"codex.exe");
+    const auto newestVersion = InstallCandidate(
+        codexExecutable, versionRoot / L"bin" / L"hash-new" / L"codex.exe");
+    SetCandidateAge(directVersion, 72h);
+    SetCandidateAge(oldVersion, 48h);
+    SetCandidateAge(newestVersion, 1h);
+    SetEnvironmentVariableW(L"LOCALAPPDATA", versionLocal.c_str());
+    found = codex_monitor::codex::FindCodexExecutable();
+    Expect(found && found->lexically_normal() == newestVersion.lexically_normal(),
+           "one-level version candidates must select the newest safe regular file");
+
+    const std::filesystem::path deepLocal = testRoot / L"deep-local";
+    InstallCandidate(codexExecutable,
+                     deepLocal / L"OpenAI" / L"Codex" / L"bin" /
+                         L"version" / L"nested" / L"codex.exe");
+    SetEnvironmentVariableW(L"LOCALAPPDATA", deepLocal.c_str());
+    found = codex_monitor::codex::FindCodexExecutable();
+    Expect(!found, "automatic layout discovery must never recurse beyond one child level");
+
+    const std::filesystem::path packageLocal = testRoot / L"package-local";
+    const auto packageCandidate = InstallCandidate(
+        codexExecutable,
+        packageLocal / L"Packages" / L"OpenAI.Codex_2p2nqsd0c76g0" /
+            L"LocalCache" / L"Local" / L"OpenAI" / L"Codex" / L"bin" /
+            L"hash" / L"codex.exe");
+    SetEnvironmentVariableW(L"LOCALAPPDATA", packageLocal.c_str());
+    found = codex_monitor::codex::FindCodexExecutable();
+    Expect(found && found->lexically_normal() == packageCandidate.lexically_normal(),
+           "the known packaged-app LocalCache layout must be discovered");
+
+    SetEnvironmentVariableW(L"LOCALAPPDATA", nullptr);
+    const std::filesystem::path standaloneProfile = testRoot / L"standalone-profile";
+    const auto standaloneCandidate = InstallCandidate(
+        codexExecutable,
+        standaloneProfile / L".codex" / L"packages" / L"standalone" /
+            L"releases" / L"v1" / L"bin" / L"codex.exe");
+    SetEnvironmentVariableW(L"USERPROFILE", standaloneProfile.c_str());
+    found = codex_monitor::codex::FindCodexExecutable();
+    Expect(found && found->lexically_normal() == standaloneCandidate.lexically_normal(),
+           "the known standalone-release layout must be discovered");
+
+    SetEnvironmentVariableW(L"USERPROFILE", nullptr);
+    const std::filesystem::path npmAppData = testRoot / L"npm-appdata";
+    const auto npmX64 = InstallCandidate(
+        codexExecutable,
+        npmAppData / L"npm" / L"node_modules" / L"@openai" / L"codex" /
+            L"node_modules" / L"@openai" / L"codex-win32-x64" / L"vendor" /
+            L"x86_64-pc-windows-msvc" / L"bin" / L"codex.exe");
+    const auto npmArm64 = InstallCandidate(
+        codexExecutable,
+        npmAppData / L"npm" / L"node_modules" / L"@openai" / L"codex" /
+            L"node_modules" / L"@openai" / L"codex-win32-arm64" / L"vendor" /
+            L"aarch64-pc-windows-msvc" / L"bin" / L"codex.exe");
+    SetCandidateAge(npmX64, 24h);
+    SetCandidateAge(npmArm64, 1h);
+    SetEnvironmentVariableW(L"APPDATA", npmAppData.c_str());
+    found = codex_monitor::codex::FindCodexExecutable();
+#if defined(_M_ARM64) || defined(__aarch64__)
+    Expect(found && found->lexically_normal() == npmArm64.lexically_normal(),
+           "an ARM64 build must prefer the native npm binary");
+#else
+    Expect(found && found->lexically_normal() == npmX64.lexically_normal(),
+           "an x64 build must not select a newer incompatible ARM64 npm binary");
+#endif
+
+    SetEnvironmentVariableW(L"APPDATA", nullptr);
+    const std::filesystem::path npmPathPrefix = testRoot / L"npm-path-prefix";
+    const auto npmPathCandidate = InstallCandidate(
+        codexExecutable,
+        npmPathPrefix / L"node_modules" / L"@openai" / L"codex" /
+            L"node_modules" / L"@openai" / L"codex-win32-x64" / L"vendor" /
+            L"x86_64-pc-windows-msvc" / L"bin" / L"codex.exe");
+    SetEnvironmentVariableW(L"PATH", npmPathPrefix.c_str());
+    found = codex_monitor::codex::FindCodexExecutable();
+    Expect(found && found->lexically_normal() == npmPathCandidate.lexically_normal(),
+           "an absolute PATH npm prefix must check the known native package layout");
+
+    std::wstring saturatedPath;
+    for (std::size_t index = 0;
+         index < codex_monitor::codex::kMaximumCodexExecutableCandidates + 8;
+         ++index) {
+        if (!saturatedPath.empty()) saturatedPath.push_back(L';');
+        saturatedPath += (testRoot / (L"missing-path-" + std::to_wstring(index))).wstring();
+    }
+    SetEnvironmentVariableW(L"PATH", saturatedPath.c_str());
+    SetEnvironmentVariableW(L"LOCALAPPDATA", automaticLocal.c_str());
+    found = codex_monitor::codex::FindCodexExecutable();
+    Expect(found && found->lexically_normal() == automaticPrograms.lexically_normal(),
+           "a long PATH must retain budget for the known desktop install layout");
+
+    SetEnvironmentVariableW(L"PATH", L"");
+    SetEnvironmentVariableW(L"LOCALAPPDATA", nullptr);
+    const std::filesystem::path reparseLocal = testRoot / L"reparse-local";
+    const std::filesystem::path reparseRoot =
+        reparseLocal / L"OpenAI" / L"Codex";
+    const std::filesystem::path reparseTarget = testRoot / L"reparse-target";
+    InstallCandidate(codexExecutable, reparseTarget / L"codex.exe");
+    std::filesystem::create_directories(reparseRoot / L"bin");
+    const std::filesystem::path reparseLink =
+        reparseRoot / L"bin" / L"linked-version";
+    constexpr DWORD kAllowUnprivilegedSymbolicLinkCreation = 0x2;
+    const BOOL linkCreated = CreateSymbolicLinkW(
+        reparseLink.c_str(), reparseTarget.c_str(),
+        SYMBOLIC_LINK_FLAG_DIRECTORY | kAllowUnprivilegedSymbolicLinkCreation);
+    if (linkCreated) {
+        SetEnvironmentVariableW(L"LOCALAPPDATA", reparseLocal.c_str());
+        found = codex_monitor::codex::FindCodexExecutable();
+        Expect(!found, "one-level discovery must not follow a reparse directory");
+        SetEnvironmentVariableW(
+            L"CODEX_CLI_PATH",
+            (reparseLink / L"codex.exe").c_str());
+        SetEnvironmentVariableW(L"LOCALAPPDATA", nullptr);
+        found = codex_monitor::codex::FindCodexExecutable();
+        Expect(!found, "an explicit candidate reached through reparse must be rejected");
+        SetEnvironmentVariableW(L"CODEX_CLI_PATH", nullptr);
+    } else {
+        const DWORD error = GetLastError();
+        std::cout << "codex_reparse_test=skipped error=" << error << '\n';
+    }
 
     if (oldCurrentLength > 0 && oldCurrentLength < 32768) {
         SetCurrentDirectoryW(oldCurrentDirectory);
     }
     RestoreEnvironment(L"CODEX_CLI_PATH", oldConfigured);
     RestoreEnvironment(L"PATH", oldPath);
+    RestoreEnvironment(L"LOCALAPPDATA", oldLocalAppData);
+    RestoreEnvironment(L"USERPROFILE", oldUserProfile);
+    RestoreEnvironment(L"APPDATA", oldAppData);
 }
 
 void TestFragmentedAndMultipleLines(const std::filesystem::path& executable) {

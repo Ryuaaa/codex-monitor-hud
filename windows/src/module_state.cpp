@@ -8,10 +8,78 @@ namespace codex_monitor {
 namespace {
 
 constexpr std::array<ModuleDefinition, kModuleCount> kRegistry{{
-    {ModuleId::kTargetProcessTree, "target-process-tree", L"Codex / ChatGPT process tree", true},
-    {ModuleId::kSystemResources, "system-resources", L"System CPU & physical memory", true},
-    {ModuleId::kCommitAndPageFile, "commit-page-file", L"Commit & page file", true},
-    {ModuleId::kTopMemoryProcesses, "top-memory-processes", L"Top processes by memory", true},
+    {ModuleId::kTargetProcessTree,
+     "target-process-tree",
+     L"Codex / ChatGPT process tree",
+     Page::kComputer,
+     true,
+     false,
+     true,
+     true},
+    {ModuleId::kSystemResources,
+     "system-resources",
+     L"System CPU & physical memory",
+     Page::kComputer,
+     true,
+     false,
+     true,
+     true},
+    {ModuleId::kCommitAndPageFile,
+     "commit-page-file",
+     L"Commit & page file",
+     Page::kComputer,
+     true,
+     false,
+     true,
+     true},
+    {ModuleId::kTopMemoryProcesses,
+     "top-memory-processes",
+     L"Top processes by memory",
+     Page::kComputer,
+     true,
+     false,
+     true,
+     true},
+    {ModuleId::kCodexFiveHourQuota,
+     "codex-five-hour-quota",
+     L"Codex 5-hour quota",
+     Page::kCodex,
+     false,
+     true,
+     false,
+     true},
+    {ModuleId::kCodexWeeklyQuota,
+     "codex-weekly-quota",
+     L"Codex weekly quota",
+     Page::kCodex,
+     false,
+     true,
+     false,
+     true},
+    {ModuleId::kCodexSubscriptionType,
+     "codex-subscription-type",
+     L"Codex subscription type",
+     Page::kCodex,
+     false,
+     true,
+     false,
+     true},
+    {ModuleId::kCodexAccountTokenUsage,
+     "codex-account-token-usage",
+     L"Codex account Token usage",
+     Page::kCodex,
+     false,
+     true,
+     false,
+     false},
+    {ModuleId::kCodexRecentTasks,
+     "codex-recent-tasks",
+     L"Codex recent tasks (history)",
+     Page::kCodex,
+     false,
+     true,
+     false,
+     true},
 }};
 
 std::string_view PageKey(Page page) {
@@ -78,9 +146,11 @@ const std::array<ModuleDefinition, kModuleCount>& ModuleRegistry() {
 
 SettingsState DefaultSettings() {
     SettingsState settings;
-    settings.homeVisible.fill(true);
-    for (const ModuleDefinition& definition : kRegistry) {
+    for (std::size_t index = 0; index < kRegistry.size(); ++index) {
+        const ModuleDefinition& definition = kRegistry[index];
         settings.homeOrder.push_back(definition.id);
+        settings.homeVisible[index] = definition.defaultHomeVisible;
+        settings.nativePageVisible[index] = definition.defaultNativePageVisible;
     }
     return settings;
 }
@@ -128,6 +198,35 @@ std::vector<ModuleId> VisibleHomeModules(const SettingsState& settings) {
     return result;
 }
 
+std::vector<ModuleId> VisibleModulesForNativePage(
+    const SettingsState& settings,
+    Page page) {
+    std::vector<ModuleId> result;
+    if (page == Page::kHome) return result;
+
+    for (const ModuleDefinition& definition : kRegistry) {
+        const std::size_t index = ModuleIndex(definition.id);
+        if (definition.nativePage == page && settings.nativePageVisible[index]) {
+            result.push_back(definition.id);
+        }
+    }
+    return result;
+}
+
+bool HomeNeedsPerformanceData(const SettingsState& settings) {
+    for (ModuleId id : VisibleHomeModules(settings)) {
+        if (kRegistry[ModuleIndex(id)].requiresPerformanceSampling) return true;
+    }
+    return false;
+}
+
+bool HomeNeedsCodexData(const SettingsState& settings) {
+    for (ModuleId id : VisibleHomeModules(settings)) {
+        if (kRegistry[ModuleIndex(id)].requiresCodexData) return true;
+    }
+    return false;
+}
+
 bool MoveHomeModule(SettingsState& settings, ModuleId id, int direction) {
     settings.homeOrder = SanitizeHomeOrder(settings.homeOrder);
     const auto current = std::find(settings.homeOrder.begin(), settings.homeOrder.end(), id);
@@ -145,7 +244,7 @@ bool MoveHomeModule(SettingsState& settings, ModuleId id, int direction) {
 std::string SerializeSettings(const SettingsState& settings) {
     const std::vector<ModuleId> order = SanitizeHomeOrder(settings.homeOrder);
     std::ostringstream output;
-    output << "version=1\n";
+    output << "version=2\n";
     output << "page=" << PageKey(settings.currentPage) << '\n';
     output << "always_on_top=" << (settings.alwaysOnTop ? 1 : 0) << '\n';
     output << "home_order=";
@@ -161,6 +260,14 @@ std::string SerializeSettings(const SettingsState& settings) {
         output << ModuleKey(id);
         wroteVisible = true;
     }
+    output << "\nnative_visible=";
+    bool wroteNativeVisible = false;
+    for (const ModuleDefinition& definition : kRegistry) {
+        if (!settings.nativePageVisible[ModuleIndex(definition.id)]) continue;
+        if (wroteNativeVisible) output << ',';
+        output << definition.key;
+        wroteNativeVisible = true;
+    }
     output << '\n';
     if (settings.windowPlacement) {
         const WindowPlacement& placement = *settings.windowPlacement;
@@ -172,7 +279,8 @@ std::string SerializeSettings(const SettingsState& settings) {
 
 SettingsState ParseSettings(std::string_view text) {
     SettingsState settings = DefaultSettings();
-    bool visibleKeyFound = false;
+    bool homeVisibleKeyFound = false;
+    bool nativeVisibleKeyFound = false;
     std::vector<ModuleId> requestedOrder;
 
     for (std::string_view line : Split(text, '\n')) {
@@ -202,8 +310,21 @@ SettingsState ParseSettings(std::string_view text) {
                 }
             }
             if (value.empty() || recognizedVisibleModule) {
-                visibleKeyFound = true;
+                homeVisibleKeyFound = true;
                 settings.homeVisible = requestedVisibility;
+            }
+        } else if (key == "native_visible") {
+            std::array<bool, kModuleCount> requestedVisibility{};
+            bool recognizedVisibleModule = false;
+            for (std::string_view token : Split(value, ',')) {
+                if (const auto id = ModuleIdFromKey(token)) {
+                    requestedVisibility[ModuleIndex(*id)] = true;
+                    recognizedVisibleModule = true;
+                }
+            }
+            if (value.empty() || recognizedVisibleModule) {
+                nativeVisibleKeyFound = true;
+                settings.nativePageVisible = requestedVisibility;
             }
         } else if (key == "window") {
             const std::vector<std::string_view> parts = Split(value, ',');
@@ -219,7 +340,20 @@ SettingsState ParseSettings(std::string_view text) {
     }
 
     settings.homeOrder = SanitizeHomeOrder(requestedOrder);
-    if (!visibleKeyFound) settings.homeVisible.fill(true);
+    // Missing visibility keys mean an older settings file. The registry defaults
+    // preserve the original four Home cards, keep newly added Codex Home cards
+    // off, and establish independent defaults for the native pages.
+    if (!homeVisibleKeyFound) {
+        for (std::size_t index = 0; index < kRegistry.size(); ++index) {
+            settings.homeVisible[index] = kRegistry[index].defaultHomeVisible;
+        }
+    }
+    if (!nativeVisibleKeyFound) {
+        for (std::size_t index = 0; index < kRegistry.size(); ++index) {
+            settings.nativePageVisible[index] =
+                kRegistry[index].defaultNativePageVisible;
+        }
+    }
     return settings;
 }
 

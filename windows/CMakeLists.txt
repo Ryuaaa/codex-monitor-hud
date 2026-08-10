@@ -4,15 +4,31 @@ project(CodexMonitorHUDWindows VERSION 0.3.0 LANGUAGES CXX)
 
 include(CTest)
 
+if(WIN32)
+    enable_language(RC)
+endif()
+
 function(configure_codex_monitor_target target)
     target_compile_features(${target} PRIVATE cxx_std_17)
-    target_include_directories(${target} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_include_directories(${target} PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/resources
+    )
     if(MSVC)
-        target_compile_options(${target} PRIVATE /W4 /permissive- /utf-8 /EHsc)
+        target_compile_options(${target} PRIVATE
+            $<$<COMPILE_LANGUAGE:CXX>:/W4>
+            $<$<COMPILE_LANGUAGE:CXX>:/permissive->
+            $<$<COMPILE_LANGUAGE:CXX>:/utf-8>
+            $<$<COMPILE_LANGUAGE:CXX>:/EHsc>
+        )
         set_property(TARGET ${target} PROPERTY
             MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
     else()
-        target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic)
+        target_compile_options(${target} PRIVATE
+            $<$<COMPILE_LANGUAGE:CXX>:-Wall>
+            $<$<COMPILE_LANGUAGE:CXX>:-Wextra>
+            $<$<COMPILE_LANGUAGE:CXX>:-Wpedantic>
+        )
     endif()
 endfunction()
 
@@ -44,6 +60,13 @@ if(BUILD_TESTING)
     configure_codex_monitor_target(CodexMonitorCodexRefreshScheduleTests)
     add_test(NAME windows_codex_refresh_schedule
         COMMAND CodexMonitorCodexRefreshScheduleTests)
+
+    add_executable(CodexMonitorCodexUsageMathTests
+        src/codex/codex_usage_math.cpp
+        tests/codex_usage_math_test.cpp
+    )
+    configure_codex_monitor_target(CodexMonitorCodexUsageMathTests)
+    add_test(NAME windows_codex_usage_math COMMAND CodexMonitorCodexUsageMathTests)
 endif()
 
 if(WIN32)
@@ -85,9 +108,61 @@ if(WIN32)
         )
         target_link_libraries(CodexMonitorCodexJsonTests PRIVATE windowsapp)
         add_test(NAME windows_codex_json COMMAND CodexMonitorCodexJsonTests)
+
+        add_executable(CodexMonitorCodexAppServerClientTests
+            src/codex/codex_app_server_client.cpp
+            src/codex/codex_executable.cpp
+            src/codex/codex_json_win32.cpp
+            src/codex/codex_process.cpp
+            tests/codex_app_server_client_test.cpp
+        )
+        configure_codex_monitor_target(CodexMonitorCodexAppServerClientTests)
+        target_compile_definitions(CodexMonitorCodexAppServerClientTests PRIVATE
+            UNICODE
+            _UNICODE
+            NOMINMAX
+            _SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS
+            WINVER=0x0A00
+            _WIN32_WINNT=0x0A00
+        )
+        target_link_libraries(CodexMonitorCodexAppServerClientTests PRIVATE windowsapp)
+        add_test(NAME windows_codex_app_server_client
+            COMMAND CodexMonitorCodexAppServerClientTests
+                    $<TARGET_FILE:CodexMonitorFakeCodexAppServer>)
+
+        add_executable(CodexMonitorCodexWorkerTests
+            src/codex/codex_app_server_client.cpp
+            src/codex/codex_executable.cpp
+            src/codex/codex_json_win32.cpp
+            src/codex/codex_process.cpp
+            src/codex/codex_refresh_schedule.cpp
+            src/codex/codex_worker.cpp
+            tests/codex_worker_test.cpp
+        )
+        configure_codex_monitor_target(CodexMonitorCodexWorkerTests)
+        target_compile_definitions(CodexMonitorCodexWorkerTests PRIVATE
+            UNICODE
+            _UNICODE
+            NOMINMAX
+            _SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS
+            WINVER=0x0A00
+            _WIN32_WINNT=0x0A00
+        )
+        target_link_libraries(CodexMonitorCodexWorkerTests PRIVATE user32 windowsapp)
+        add_test(NAME windows_codex_worker
+            COMMAND CodexMonitorCodexWorkerTests
+                    $<TARGET_FILE:CodexMonitorFakeCodexAppServer>)
     endif()
 
     add_executable(CodexMonitorHUD WIN32
+        resources/CodexMonitorHUD.rc
+        src/codex/codex_app_server_client.cpp
+        src/codex/codex_executable.cpp
+        src/codex/codex_json_win32.cpp
+        src/codex/codex_process.cpp
+        src/codex/codex_refresh_schedule.cpp
+        src/codex/codex_usage_math.cpp
+        src/codex/codex_worker.cpp
         src/main.cpp
         src/module_state.cpp
         src/performance_worker.cpp
@@ -101,10 +176,12 @@ if(WIN32)
         _UNICODE
         NOMINMAX
         PSAPI_VERSION=1
+        _SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS
         WINVER=0x0A00
         _WIN32_WINNT=0x0A00
     )
-    target_link_libraries(CodexMonitorHUD PRIVATE user32 gdi32 psapi shell32 ole32)
+    target_link_libraries(CodexMonitorHUD PRIVATE
+        user32 gdi32 psapi shell32 ole32 windowsapp)
 else()
     message(STATUS "Non-Windows host: configuring portable snapshot and state tests only.")
 endif()

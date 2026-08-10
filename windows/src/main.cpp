@@ -10,6 +10,9 @@
 
 #include <windows.h>
 
+#include "../resources/resource.h"
+#include "codex/codex_usage_math.h"
+#include "codex/codex_worker.h"
 #include "module_state.h"
 #include "performance_worker.h"
 #include "performance_snapshot.h"
@@ -17,12 +20,18 @@
 #include "snapshot_math.h"
 
 #include <algorithm>
+#include <chrono>
+#include <cstddef>
 #include <cstdint>
+#include <ctime>
+#include <cwchar>
+#include <cwctype>
 #include <filesystem>
 #include <iomanip>
 #include <optional>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -30,7 +39,7 @@ namespace {
 
 constexpr wchar_t kWindowClassName[] = L"CodexMonitorHUDWindowsWindow";
 constexpr wchar_t kSettingsWindowClassName[] = L"CodexMonitorHUDWindowsSettingsWindow";
-constexpr wchar_t kWindowTitle[] = L"Codex Monitor HUD - Windows shell preview";
+constexpr wchar_t kWindowTitle[] = L"Codex Monitor HUD";
 constexpr wchar_t kSingletonName[] = L"Local\\CodexMonitorHUDWindowsFoundation";
 
 constexpr int kPinButtonId = 1001;
@@ -44,22 +53,26 @@ constexpr int kSettingsMoveUpBaseId = 3100;
 constexpr int kSettingsMoveDownBaseId = 3200;
 constexpr int kSettingsTopmostId = 3300;
 constexpr int kSettingsCloseId = 3301;
+constexpr int kSettingsNativeVisibleBaseId = 3400;
 constexpr UINT_PTR kSampleTimerId = 2001;
 constexpr UINT kSampleReadyMessage = WM_APP + 1;
+constexpr UINT kCodexReadyMessage = WM_APP + 2;
 constexpr UINT kFastSampleIntervalMs = 5000;
 constexpr ULONGLONG kSlowSampleIntervalMs = 20000;
 constexpr int kMinimumWidth = 390;
-constexpr int kMinimumHeight = 600;
+constexpr int kMinimumHeight = 360;
 
 struct ModuleViews {
     codex_monitor::ModuleId id;
     HWND homeCard = nullptr;
-    HWND computerCard = nullptr;
+    HWND nativeCard = nullptr;
 };
 
 struct SettingsRow {
     codex_monitor::ModuleId id;
-    HWND visibleCheck = nullptr;
+    HWND nameLabel = nullptr;
+    HWND homeVisibleCheck = nullptr;
+    HWND nativeVisibleCheck = nullptr;
     HWND moveUpButton = nullptr;
     HWND moveDownButton = nullptr;
 };
@@ -94,16 +107,33 @@ struct AppState {
     bool timerActive = false;
     bool windowMinimized = false;
     bool hasPerformanceSnapshot = false;
+    bool codexPaused = true;
+    bool codexWorkerAvailable = false;
+    bool hasCodexRefresh = false;
+    bool codexDataAvailable = false;
+    bool codexLastRefreshSucceeded = false;
+    int contentScrollRow = 0;
+    int contentScrollMaximumRow = 0;
+    int contentVisibleRows = 1;
+    int wheelDeltaRemainder = 0;
+    int settingsScrollOffset = 0;
+    int settingsScrollMaximum = 0;
+    int settingsWheelDeltaRemainder = 0;
     ULONGLONG nextSlowSampleTick = 0;
     std::filesystem::path settingsPath;
     codex_monitor::SettingsState settings = codex_monitor::DefaultSettings();
     codex_monitor::PerformanceWorker performanceWorker;
     codex_monitor::PerformanceSnapshot latestSnapshot;
+    codex_monitor::codex::CodexWorker codexWorker;
+    codex_monitor::codex::CodexDataState latestCodexData;
+    codex_monitor::codex::AppServerRefreshReport latestCodexReport;
+    std::chrono::seconds codexNextRefreshDelay{60};
 };
 
 void LayoutControls(HWND window, AppState& state);
 void LayoutSettingsControls(HWND window, AppState& state);
 void UpdateSamplingDemand(HWND window, AppState& state);
+void UpdateCodexDemand(HWND window, AppState& state);
 void PersistSettings(AppState& state);
 void RefreshSettingsControls(AppState& state);
 
@@ -157,7 +187,7 @@ void RecreateFonts(HWND window, AppState& state) {
     ApplyFont(state.emptyHomeNotice, state.bodyFont);
     for (const ModuleViews& views : state.moduleViews) {
         ApplyFont(views.homeCard, state.bodyFont);
-        ApplyFont(views.computerCard, state.bodyFont);
+        ApplyFont(views.nativeCard, state.bodyFont);
     }
     if (oldHeadingFont) DeleteObject(oldHeadingFont);
     if (oldBodyFont) DeleteObject(oldBodyFont);
@@ -174,7 +204,9 @@ void RecreateSettingsFonts(HWND window, AppState& state) {
     ApplyFont(state.settingsTopmostCheck, state.settingsSmallFont);
     ApplyFont(state.settingsCloseButton, state.settingsSmallFont);
     for (const SettingsRow& row : state.settingsRows) {
-        ApplyFont(row.visibleCheck, state.settingsSmallFont);
+        ApplyFont(row.nameLabel, state.settingsSmallFont);
+        ApplyFont(row.homeVisibleCheck, state.settingsSmallFont);
+        ApplyFont(row.nativeVisibleCheck, state.settingsSmallFont);
         ApplyFont(row.moveUpButton, state.settingsSmallFont);
         ApplyFont(row.moveDownButton, state.settingsSmallFont);
     }
@@ -226,6 +258,120 @@ std::wstring TruncatedProcessName(const std::wstring& rawName) {
         name += L"...";
     }
     return name;
+}
+
+std::wstring SanitizeDisplayText(std::wstring_view raw, std::size_t maximumCharacters) {
+    std::wstring result;
+    result.reserve(std::min(raw.size(), maximumCharacters));
+    bool pendingSpace = false;
+    bool truncated = false;
+    for (wchar_t character : raw) {
+        const bool whitespace = std::iswspace(static_cast<wint_t>(character)) != 0;
+        const bool control = character < 0x20 || character == 0x7f;
+        if (whitespace || control) {
+            pendingSpace = !result.empty();
+            continue;
+        }
+        if (pendingSpace) {
+            if (result.size() >= maximumCharacters) {
+                truncated = true;
+                break;
+            }
+            result.push_back(L' ');
+            pendingSpace = false;
+        }
+        if (result.size() >= maximumCharacters) {
+            truncated = true;
+            break;
+        }
+        result.push_back(character);
+    }
+
+    while (!result.empty() && result.back() == L' ') result.pop_back();
+    if (truncated && maximumCharacters >= 4) {
+        result.resize(std::min(result.size(), maximumCharacters - 3));
+        if (!result.empty() && result.back() >= 0xd800 && result.back() <= 0xdbff) {
+            result.pop_back();
+        }
+        result += L"...";
+    }
+    return result;
+}
+
+std::wstring FormatTokenCount(std::int64_t value) {
+    if (value < 0) return L"当前未返回";
+    std::wstring digits = std::to_wstring(value);
+    for (std::ptrdiff_t position = static_cast<std::ptrdiff_t>(digits.size()) - 3;
+         position > 0; position -= 3) {
+        digits.insert(static_cast<std::size_t>(position), 1, L',');
+    }
+    return digits;
+}
+
+std::wstring CurrentLocalDate() {
+    SYSTEMTIME local{};
+    GetLocalTime(&local);
+    wchar_t buffer[11]{};
+    swprintf_s(buffer, _countof(buffer), L"%04u-%02u-%02u",
+               static_cast<unsigned int>(local.wYear),
+               static_cast<unsigned int>(local.wMonth),
+               static_cast<unsigned int>(local.wDay));
+    return buffer;
+}
+
+std::optional<std::wstring> FormatUnixLocalTime(std::int64_t seconds) {
+    const __time64_t raw = static_cast<__time64_t>(seconds);
+    if (static_cast<std::int64_t>(raw) != seconds) return std::nullopt;
+    std::tm local{};
+    if (_localtime64_s(&local, &raw) != 0) return std::nullopt;
+    wchar_t buffer[32]{};
+    if (std::wcsftime(buffer, _countof(buffer), L"%Y-%m-%d %H:%M", &local) == 0) {
+        return std::nullopt;
+    }
+    return std::wstring(buffer);
+}
+
+std::wstring FriendlyPlanType(std::wstring_view rawPlan) {
+    const std::wstring cleaned = SanitizeDisplayText(rawPlan, 32);
+    std::wstring normalized = cleaned;
+    std::transform(normalized.begin(), normalized.end(), normalized.begin(),
+                   [](wchar_t character) {
+                       return character >= L'A' && character <= L'Z'
+                           ? static_cast<wchar_t>(character - L'A' + L'a')
+                           : character;
+                   });
+    if (normalized == L"free") return L"Free";
+    if (normalized == L"plus") return L"Plus";
+    if (normalized == L"pro") return L"Pro";
+    if (normalized == L"team") return L"Team";
+    if (normalized == L"business") return L"Business";
+    if (normalized == L"enterprise") return L"Enterprise";
+    if (normalized == L"edu" || normalized == L"education") return L"Education";
+    return cleaned.empty() ? L"当前未返回" : cleaned;
+}
+
+std::wstring CodexFailureReason(const AppState& state) {
+    using Failure = codex_monitor::codex::AppServerClientFailureKind;
+    if (!state.codexWorkerAvailable) return L"Codex 读取组件未能启动";
+    if (state.latestCodexReport.failure) {
+        switch (*state.latestCodexReport.failure) {
+            case Failure::kStartFailed:
+                return L"未找到或无法启动 codex.exe";
+            case Failure::kInitializeRejected:
+                return L"Codex 接口初始化失败";
+            case Failure::kWriteFailed:
+                return L"Codex 接口请求发送失败";
+            case Failure::kTransportFailed:
+                return L"Codex 接口连接失败";
+            case Failure::kTimedOut:
+                return L"Codex 接口读取超时";
+            case Failure::kCancelled:
+                return L"Codex 读取已暂停";
+        }
+    }
+    if (state.codexPaused) return L"Codex 读取已暂停";
+    if (state.codexWorker.IsBusy()) return L"正在连接本机 Codex 只读接口";
+    return L"Codex 接口当前未返回有效数据";
 }
 
 std::wstring BuildTargetCardText(const codex_monitor::PerformanceSnapshot& snapshot) {
@@ -322,6 +468,216 @@ std::wstring BuildRankingCardText(const codex_monitor::PerformanceSnapshot& snap
     return output.str();
 }
 
+std::wstring_view CodexModuleHeading(codex_monitor::ModuleId id) {
+    switch (id) {
+        case codex_monitor::ModuleId::kCodexFiveHourQuota:
+            return L"CODEX 5-HOUR QUOTA";
+        case codex_monitor::ModuleId::kCodexWeeklyQuota:
+            return L"CODEX WEEKLY QUOTA";
+        case codex_monitor::ModuleId::kCodexSubscriptionType:
+            return L"CODEX SUBSCRIPTION TYPE";
+        case codex_monitor::ModuleId::kCodexAccountTokenUsage:
+            return L"CODEX ACCOUNT TOKEN USAGE";
+        case codex_monitor::ModuleId::kCodexRecentTasks:
+            return L"CODEX RECENT TASKS (HISTORY)";
+        case codex_monitor::ModuleId::kTargetProcessTree:
+        case codex_monitor::ModuleId::kSystemResources:
+        case codex_monitor::ModuleId::kCommitAndPageFile:
+        case codex_monitor::ModuleId::kTopMemoryProcesses:
+            return L"CODEX";
+    }
+    return L"CODEX";
+}
+
+std::wstring BuildCodexUnavailableText(codex_monitor::ModuleId id) {
+    std::wstring detail = L"正在连接本机 Codex 只读接口\r\n当前未返回；不会模拟数值";
+    if (id == codex_monitor::ModuleId::kCodexRecentTasks) {
+        detail = L"正在连接本机 Codex 只读接口\r\n"
+                 L"当前未返回；状态只表示 app-server 进程范围，"
+                 L"不代表桌面版全局";
+    }
+    return std::wstring(CodexModuleHeading(id)) + L"\r\n" + detail;
+}
+
+const codex_monitor::codex::RateLimitWindow* SelectQuotaWindow(
+    const codex_monitor::codex::RateLimitsData& limits,
+    bool weekly) {
+    const codex_monitor::codex::RateLimitWindow* primary =
+        limits.primary ? &*limits.primary : nullptr;
+    const codex_monitor::codex::RateLimitWindow* secondary =
+        limits.secondary ? &*limits.secondary : nullptr;
+
+    for (const codex_monitor::codex::RateLimitWindow* candidate :
+         {primary, secondary}) {
+        if (!candidate || !candidate->windowDurationMinutes) continue;
+        const bool candidateIsWeekly = *candidate->windowDurationMinutes > 1440;
+        if (candidateIsWeekly == weekly) return candidate;
+    }
+
+    // Older responses may omit duration. In that case the documented primary
+    // slot is treated as the short window and secondary as the weekly window.
+    const codex_monitor::codex::RateLimitWindow* fallback = weekly ? secondary : primary;
+    return fallback && !fallback->windowDurationMinutes ? fallback : nullptr;
+}
+
+template <typename T>
+void AppendMethodRefreshWarning(
+    const codex_monitor::codex::MethodState<T>& method,
+    std::wostringstream& output) {
+    if (method.lastFailure && method.lastValue) {
+        output << L"\r\n更新失败，显示上次数据";
+    }
+}
+
+std::wstring BuildQuotaCardText(const AppState& state, bool weekly) {
+    const auto& method = state.latestCodexData.rateLimits;
+    std::wostringstream output;
+    output << CodexModuleHeading(
+        weekly ? codex_monitor::ModuleId::kCodexWeeklyQuota
+               : codex_monitor::ModuleId::kCodexFiveHourQuota);
+    if (!method.lastValue) {
+        output << L"\r\n" << CodexFailureReason(state);
+        return output.str();
+    }
+
+    const codex_monitor::codex::RateLimitWindow* window =
+        SelectQuotaWindow(*method.lastValue, weekly);
+    if (!window) {
+        output << L"\r\n当前未返回";
+        if (method.lastFailure) output << L"；本次更新失败";
+        return output.str();
+    }
+
+    const int used = std::clamp(static_cast<int>(window->usedPercent), 0, 100);
+    output << L"\r\n剩余 " << 100 - used << L"%";
+    if (window->resetsAtUnixSeconds) {
+        if (const auto reset = FormatUnixLocalTime(*window->resetsAtUnixSeconds)) {
+            output << L"\r\n恢复：" << *reset;
+        } else {
+            output << L"\r\n恢复时间：当前未返回";
+        }
+    } else {
+        output << L"\r\n恢复时间：当前未返回";
+    }
+    AppendMethodRefreshWarning(method, output);
+    return output.str();
+}
+
+std::wstring BuildSubscriptionCardText(const AppState& state) {
+    std::optional<std::wstring> plan;
+    bool displayingStaleData = false;
+    if (state.latestCodexData.account.lastValue &&
+        state.latestCodexData.account.lastValue->planType) {
+        plan = state.latestCodexData.account.lastValue->planType;
+        displayingStaleData = state.latestCodexData.account.lastFailure.has_value();
+    } else if (state.latestCodexData.rateLimits.lastValue &&
+               state.latestCodexData.rateLimits.lastValue->planType) {
+        plan = state.latestCodexData.rateLimits.lastValue->planType;
+        displayingStaleData = state.latestCodexData.rateLimits.lastFailure.has_value();
+    }
+
+    std::wostringstream output;
+    output << CodexModuleHeading(codex_monitor::ModuleId::kCodexSubscriptionType);
+    if (!plan) {
+        output << L"\r\n" << CodexFailureReason(state);
+        return output.str();
+    }
+    output << L"\r\n订阅：" << FriendlyPlanType(*plan);
+    if (displayingStaleData) output << L"\r\n更新失败，显示上次数据";
+    return output.str();
+}
+
+std::wstring BuildTokenUsageCardText(const AppState& state) {
+    const auto& method = state.latestCodexData.usage;
+    std::wostringstream output;
+    output << CodexModuleHeading(codex_monitor::ModuleId::kCodexAccountTokenUsage);
+    if (!method.lastValue) {
+        output << L"\r\n" << CodexFailureReason(state);
+        return output.str();
+    }
+
+    const auto totals = codex_monitor::codex::CalculateUsageCalendarTotals(
+        *method.lastValue, CurrentLocalDate());
+    if (!totals || !totals->sourceAvailable) {
+        output << L"\r\n当前未返回每日 Token 记录";
+        AppendMethodRefreshWarning(method, output);
+        return output.str();
+    }
+    if (!totals->latestDate || !totals->latestTokens) {
+        output << L"\r\n当前没有可显示的每日 Token 记录";
+        AppendMethodRefreshWarning(method, output);
+        return output.str();
+    }
+
+    if (totals->todayAvailable && totals->todayTokens) {
+        output << L"\r\n今日：" << FormatTokenCount(*totals->todayTokens);
+    } else {
+        output << L"\r\n最新 " << *totals->latestDate << L"："
+               << FormatTokenCount(*totals->latestTokens);
+    }
+    output << L"\r\n近7日：" << FormatTokenCount(totals->last7DaysTokens)
+           << L"  |  近30日：" << FormatTokenCount(totals->thirtyDayTokens);
+    if (totals->saturated) output << L"（达到上限，非精确）";
+    AppendMethodRefreshWarning(method, output);
+    return output.str();
+}
+
+std::wstring BuildRecentTasksCardText(const AppState& state) {
+    const auto& method = state.latestCodexData.threadList;
+    std::wostringstream output;
+    output << CodexModuleHeading(codex_monitor::ModuleId::kCodexRecentTasks);
+    if (!method.lastValue) {
+        output << L"\r\n" << CodexFailureReason(state);
+        output << L"\r\n状态口径：仅本次 app-server 进程范围";
+        return output.str();
+    }
+
+    const std::size_t count = std::min<std::size_t>(3, method.lastValue->threads.size());
+    if (count == 0) {
+        output << L"\r\n暂无历史任务";
+    } else {
+        for (std::size_t index = 0; index < count; ++index) {
+            const codex_monitor::codex::ProcessLocalThread& task =
+                method.lastValue->threads[index];
+            std::wstring name = task.name
+                ? SanitizeDisplayText(*task.name, 42)
+                : std::wstring{};
+            if (name.empty()) name = L"未命名任务";
+            output << L"\r\n" << index + 1 << L". " << name;
+            if (task.recencyAtUnixSeconds) {
+                if (const auto updated = FormatUnixLocalTime(*task.recencyAtUnixSeconds)) {
+                    output << L" · " << *updated;
+                }
+            }
+        }
+    }
+    output << L"\r\n状态口径：仅本次 app-server 进程范围";
+    AppendMethodRefreshWarning(method, output);
+    return output.str();
+}
+
+std::wstring BuildCodexCardText(codex_monitor::ModuleId id,
+                                const AppState& state) {
+    switch (id) {
+        case codex_monitor::ModuleId::kCodexFiveHourQuota:
+            return BuildQuotaCardText(state, false);
+        case codex_monitor::ModuleId::kCodexWeeklyQuota:
+            return BuildQuotaCardText(state, true);
+        case codex_monitor::ModuleId::kCodexSubscriptionType:
+            return BuildSubscriptionCardText(state);
+        case codex_monitor::ModuleId::kCodexAccountTokenUsage:
+            return BuildTokenUsageCardText(state);
+        case codex_monitor::ModuleId::kCodexRecentTasks:
+            return BuildRecentTasksCardText(state);
+        case codex_monitor::ModuleId::kTargetProcessTree:
+        case codex_monitor::ModuleId::kSystemResources:
+        case codex_monitor::ModuleId::kCommitAndPageFile:
+        case codex_monitor::ModuleId::kTopMemoryProcesses:
+            return L"Unavailable module";
+    }
+    return L"Unavailable module";
+}
+
 std::wstring BuildModuleCardText(codex_monitor::ModuleId id,
                                  const codex_monitor::PerformanceSnapshot& snapshot) {
     switch (id) {
@@ -333,29 +689,61 @@ std::wstring BuildModuleCardText(codex_monitor::ModuleId id,
             return BuildCommitCardText(snapshot);
         case codex_monitor::ModuleId::kTopMemoryProcesses:
             return BuildRankingCardText(snapshot);
+        case codex_monitor::ModuleId::kCodexFiveHourQuota:
+        case codex_monitor::ModuleId::kCodexWeeklyQuota:
+        case codex_monitor::ModuleId::kCodexSubscriptionType:
+        case codex_monitor::ModuleId::kCodexAccountTokenUsage:
+        case codex_monitor::ModuleId::kCodexRecentTasks:
+            return BuildCodexUnavailableText(id);
     }
     return L"Unavailable module";
 }
 
 void UpdateModuleCards(AppState& state) {
     for (const ModuleViews& views : state.moduleViews) {
+        const std::size_t index = codex_monitor::ModuleIndex(views.id);
+        const codex_monitor::ModuleDefinition& definition =
+            codex_monitor::ModuleRegistry()[index];
+        if (!definition.requiresPerformanceSampling) continue;
         const std::wstring text = BuildModuleCardText(views.id, state.latestSnapshot);
         if (state.settings.currentPage == codex_monitor::Page::kHome &&
-            state.settings.homeVisible[codex_monitor::ModuleIndex(views.id)]) {
+            state.settings.homeVisible[index]) {
             SetWindowTextW(views.homeCard, text.c_str());
         }
-        if (state.settings.currentPage == codex_monitor::Page::kComputer) {
-            SetWindowTextW(views.computerCard, text.c_str());
+        if (state.settings.currentPage == definition.nativePage &&
+            state.settings.nativePageVisible[index]) {
+            SetWindowTextW(views.nativeCard, text.c_str());
         }
     }
 }
 
-bool HomeNeedsPerformance(const codex_monitor::SettingsState& settings) {
-    for (codex_monitor::ModuleId id : codex_monitor::VisibleHomeModules(settings)) {
+void UpdateCodexCards(AppState& state) {
+    for (const ModuleViews& views : state.moduleViews) {
+        const codex_monitor::ModuleDefinition& definition =
+            codex_monitor::ModuleRegistry()[codex_monitor::ModuleIndex(views.id)];
+        if (!definition.requiresCodexData) continue;
+        const std::wstring text = BuildCodexCardText(views.id, state);
+        SetWindowTextW(views.homeCard, text.c_str());
+        SetWindowTextW(views.nativeCard, text.c_str());
+    }
+}
+
+bool NativePageNeedsPerformanceData(const codex_monitor::SettingsState& settings,
+                                    codex_monitor::Page page) {
+    for (codex_monitor::ModuleId id :
+         codex_monitor::VisibleModulesForNativePage(settings, page)) {
         if (codex_monitor::ModuleRegistry()[codex_monitor::ModuleIndex(id)]
-                .requiresPerformanceSampling) {
-            return true;
-        }
+                .requiresPerformanceSampling) return true;
+    }
+    return false;
+}
+
+bool NativePageNeedsCodexData(const codex_monitor::SettingsState& settings,
+                              codex_monitor::Page page) {
+    for (codex_monitor::ModuleId id :
+         codex_monitor::VisibleModulesForNativePage(settings, page)) {
+        if (codex_monitor::ModuleRegistry()[codex_monitor::ModuleIndex(id)]
+                .requiresCodexData) return true;
     }
     return false;
 }
@@ -363,11 +751,24 @@ bool HomeNeedsPerformance(const codex_monitor::SettingsState& settings) {
 bool CurrentPageNeedsPerformance(const AppState& state) {
     switch (state.settings.currentPage) {
         case codex_monitor::Page::kHome:
-            return HomeNeedsPerformance(state.settings);
+            return codex_monitor::HomeNeedsPerformanceData(state.settings);
         case codex_monitor::Page::kCodex:
             return false;
         case codex_monitor::Page::kComputer:
-            return true;
+            return NativePageNeedsPerformanceData(
+                state.settings, codex_monitor::Page::kComputer);
+    }
+    return false;
+}
+
+bool CurrentPageNeedsCodexData(const AppState& state) {
+    switch (state.settings.currentPage) {
+        case codex_monitor::Page::kHome:
+            return codex_monitor::HomeNeedsCodexData(state.settings);
+        case codex_monitor::Page::kCodex:
+            return NativePageNeedsCodexData(state.settings, codex_monitor::Page::kCodex);
+        case codex_monitor::Page::kComputer:
+            return false;
     }
     return false;
 }
@@ -390,6 +791,24 @@ void UpdateStatusText(AppState& state) {
     }
     if (state.hasPerformanceSnapshot && state.latestSnapshot.unreadableProcessMetricCount > 0) {
         output << L"  |  Metric gaps: " << state.latestSnapshot.unreadableProcessMetricCount;
+    }
+    output << L"  |  Codex: ";
+    if (state.windowMinimized || state.codexPaused ||
+        !CurrentPageNeedsCodexData(state)) {
+        output << L"paused";
+    } else if (!state.codexWorkerAvailable) {
+        output << L"unavailable";
+    } else if (state.codexWorker.IsBusy()) {
+        output << L"refreshing";
+    } else if (!state.hasCodexRefresh) {
+        output << L"waiting for first refresh";
+    } else if (!state.codexLastRefreshSucceeded) {
+        const auto retryMinutes = std::max<std::int64_t>(
+            1, std::chrono::duration_cast<std::chrono::minutes>(
+                   state.codexNextRefreshDelay).count());
+        output << retryMinutes << L" min retry";
+    } else {
+        output << L"5 min normal";
     }
     SetWindowTextW(state.status, output.str().c_str());
 }
@@ -426,12 +845,17 @@ void ShowSamplingRefreshState(AppState& state) {
     constexpr wchar_t message[] =
         L"REFRESHING PERFORMANCE DATA\r\nWaiting for background sample";
     for (const ModuleViews& views : state.moduleViews) {
+        const std::size_t index = codex_monitor::ModuleIndex(views.id);
+        const codex_monitor::ModuleDefinition& definition =
+            codex_monitor::ModuleRegistry()[index];
+        if (!definition.requiresPerformanceSampling) continue;
         if (state.settings.currentPage == codex_monitor::Page::kHome &&
-            state.settings.homeVisible[codex_monitor::ModuleIndex(views.id)]) {
+            state.settings.homeVisible[index]) {
             SetWindowTextW(views.homeCard, message);
         }
-        if (state.settings.currentPage == codex_monitor::Page::kComputer) {
-            SetWindowTextW(views.computerCard, message);
+        if (state.settings.currentPage == definition.nativePage &&
+            state.settings.nativePageVisible[index]) {
+            SetWindowTextW(views.nativeCard, message);
         }
     }
 }
@@ -443,6 +867,23 @@ void ApplyPerformanceSnapshot(AppState& state, codex_monitor::CompletedSample co
         state.nextSlowSampleTick = GetTickCount64() + kSlowSampleIntervalMs;
     }
     UpdateModuleCards(state);
+    UpdateStatusText(state);
+}
+
+void ApplyCodexRefresh(
+    AppState& state,
+    codex_monitor::codex::CompletedCodexRefresh completed) {
+    state.latestCodexData = std::move(completed.data);
+    state.latestCodexReport = std::move(completed.report);
+    state.codexLastRefreshSucceeded = completed.succeeded;
+    state.codexNextRefreshDelay = completed.nextRefreshDelay;
+    state.hasCodexRefresh = true;
+    state.codexDataAvailable =
+        state.latestCodexData.rateLimits.lastValue.has_value() ||
+        state.latestCodexData.account.lastValue.has_value() ||
+        state.latestCodexData.usage.lastValue.has_value() ||
+        state.latestCodexData.threadList.lastValue.has_value();
+    UpdateCodexCards(state);
     UpdateStatusText(state);
 }
 
@@ -470,6 +911,35 @@ void UpdateSamplingDemand(HWND window, AppState& state) {
     ShowSamplingRefreshState(state);
     state.performanceWorker.ActivateAndRequestFullSample();
     StartSamplingTimer(window, state);
+}
+
+void UpdateCodexDemand(HWND, AppState& state) {
+    const bool shouldRefresh =
+        !state.windowMinimized && CurrentPageNeedsCodexData(state);
+    if (!shouldRefresh) {
+        if (!state.codexPaused && state.codexWorkerAvailable) {
+            state.codexWorker.PauseAndInvalidate();
+        }
+        state.codexPaused = true;
+        UpdateStatusText(state);
+        return;
+    }
+
+    if (!state.codexWorkerAvailable) {
+        state.codexPaused = false;
+        UpdateCodexCards(state);
+        UpdateStatusText(state);
+        return;
+    }
+    if (!state.codexPaused) {
+        UpdateStatusText(state);
+        return;
+    }
+
+    state.codexPaused = false;
+    state.codexWorker.ActivateAndRefresh();
+    if (!state.codexDataAvailable) UpdateCodexCards(state);
+    UpdateStatusText(state);
 }
 
 HWND CreateLabel(HWND parent, const wchar_t* text, DWORD style) {
@@ -505,11 +975,11 @@ std::vector<HWND> VisiblePageCards(AppState& state) {
         for (codex_monitor::ModuleId id : codex_monitor::VisibleHomeModules(state.settings)) {
             if (ModuleViews* views = FindModuleViews(state, id)) cards.push_back(views->homeCard);
         }
-    } else if (state.settings.currentPage == codex_monitor::Page::kComputer) {
-        for (const codex_monitor::ModuleDefinition& definition :
-             codex_monitor::ModuleRegistry()) {
-            if (ModuleViews* views = FindModuleViews(state, definition.id)) {
-                cards.push_back(views->computerCard);
+    } else {
+        for (codex_monitor::ModuleId id : codex_monitor::VisibleModulesForNativePage(
+                 state.settings, state.settings.currentPage)) {
+            if (ModuleViews* views = FindModuleViews(state, id)) {
+                cards.push_back(views->nativeCard);
             }
         }
     }
@@ -519,17 +989,35 @@ std::vector<HWND> VisiblePageCards(AppState& state) {
 void UpdatePageVisibility(AppState& state) {
     const bool isHome = state.settings.currentPage == codex_monitor::Page::kHome;
     const bool isCodex = state.settings.currentPage == codex_monitor::Page::kCodex;
-    const bool isComputer = state.settings.currentPage == codex_monitor::Page::kComputer;
+    const std::vector<codex_monitor::ModuleId> visibleHome =
+        codex_monitor::VisibleHomeModules(state.settings);
+    const std::vector<codex_monitor::ModuleId> visibleNative =
+        codex_monitor::VisibleModulesForNativePage(
+            state.settings, state.settings.currentPage);
 
     for (ModuleViews& views : state.moduleViews) {
-        const bool homeVisible =
-            isHome && state.settings.homeVisible[codex_monitor::ModuleIndex(views.id)];
+        const bool homeVisible = isHome &&
+            std::find(visibleHome.begin(), visibleHome.end(), views.id) != visibleHome.end();
+        const bool nativeVisible = !isHome &&
+            std::find(visibleNative.begin(), visibleNative.end(), views.id) !=
+                visibleNative.end();
         ShowWindow(views.homeCard, homeVisible ? SW_SHOW : SW_HIDE);
-        ShowWindow(views.computerCard, isComputer ? SW_SHOW : SW_HIDE);
+        ShowWindow(views.nativeCard, nativeVisible ? SW_SHOW : SW_HIDE);
     }
 
-    ShowWindow(state.codexNotice, isCodex ? SW_SHOW : SW_HIDE);
-    const bool homeEmpty = isHome && codex_monitor::VisibleHomeModules(state.settings).empty();
+    const bool nativeEmpty = !isHome && visibleNative.empty();
+    if (nativeEmpty && isCodex) {
+        SetWindowTextW(
+            state.codexNotice,
+            L"Codex 页面当前未选择任何模块。\r\n\r\n"
+            L"请打开设置，启用一个或多个 Codex 模块。");
+    } else if (nativeEmpty) {
+        SetWindowTextW(state.codexNotice,
+                       L"No modules are shown on Computer.\r\n\r\n"
+                       L"Open Settings and enable one or more modules for its own page.");
+    }
+    ShowWindow(state.codexNotice, nativeEmpty ? SW_SHOW : SW_HIDE);
+    const bool homeEmpty = isHome && visibleHome.empty();
     ShowWindow(state.emptyHomeNotice, homeEmpty ? SW_SHOW : SW_HIDE);
 
     CheckRadioButton(state.mainWindow, kHomePageButtonId, kComputerPageButtonId,
@@ -537,29 +1025,57 @@ void UpdatePageVisibility(AppState& state) {
                             : (isCodex ? kCodexPageButtonId : kComputerPageButtonId));
 
     if (isHome) {
-        SetWindowTextW(state.subtitle, L"Home - selected local performance modules");
+        SetWindowTextW(state.subtitle, L"Home - selected performance and Codex modules");
     } else if (isCodex) {
-        SetWindowTextW(state.subtitle, L"Codex - local account data is outside this milestone");
+        SetWindowTextW(state.subtitle, L"Codex - local read-only data modules");
     } else {
         SetWindowTextW(state.subtitle, L"Computer performance - Windows native metrics");
     }
 }
 
-void LayoutCardGrid(HWND window, const std::vector<HWND>& cards,
+void UpdateContentScrollBar(HWND window, AppState& state,
+                            int totalRows, int visibleRows) {
+    state.contentVisibleRows = std::max(1, visibleRows);
+    state.contentScrollMaximumRow = std::max(0, totalRows - state.contentVisibleRows);
+    state.contentScrollRow =
+        std::clamp(state.contentScrollRow, 0, state.contentScrollMaximumRow);
+
+    SCROLLINFO info{};
+    info.cbSize = sizeof(info);
+    info.fMask = SIF_RANGE | SIF_PAGE | SIF_POS;
+    info.nMin = 0;
+    info.nMax = std::max(0, totalRows - 1);
+    info.nPage = static_cast<UINT>(state.contentVisibleRows);
+    info.nPos = state.contentScrollRow;
+    SetScrollInfo(window, SB_VERT, &info, TRUE);
+    ShowScrollBar(window, SB_VERT, totalRows > state.contentVisibleRows);
+}
+
+void LayoutCardGrid(HWND window, AppState& state, const std::vector<HWND>& cards,
                     int y, int width, int height, int margin, int gap) {
-    if (cards.empty()) return;
+    if (cards.empty()) {
+        UpdateContentScrollBar(window, state, 0, 1);
+        return;
+    }
     const bool useTwoColumns = width >= ScaleForDpi(window, 700) && cards.size() > 1;
     const int columns = useTwoColumns ? 2 : 1;
     const int rows = (static_cast<int>(cards.size()) + columns - 1) / columns;
     const int cardWidth = (width - margin * 2 - gap * (columns - 1)) / columns;
-    const int availableHeight = std::max(ScaleForDpi(window, 120), height - y - margin);
-    const int cardHeight = std::max(ScaleForDpi(window, 92),
-                                    (availableHeight - gap * (rows - 1)) / rows);
+    const int cardHeight = ScaleForDpi(window, 112);
+    const int rowStride = cardHeight + gap;
+    const int availableHeight = std::max(0, height - y - margin);
+    const int visibleRows = std::max(1, (availableHeight + gap) / rowStride);
+    UpdateContentScrollBar(window, state, rows, visibleRows);
+
     for (std::size_t index = 0; index < cards.size(); ++index) {
         const int row = static_cast<int>(index) / columns;
         const int column = static_cast<int>(index) % columns;
+        const bool rowVisible = row >= state.contentScrollRow &&
+            row < state.contentScrollRow + state.contentVisibleRows;
+        ShowWindow(cards[index], rowVisible ? SW_SHOW : SW_HIDE);
+        if (!rowVisible) continue;
         const int x = margin + column * (cardWidth + gap);
-        const int cardY = y + row * (cardHeight + gap);
+        const int cardY = y + (row - state.contentScrollRow) * rowStride;
         MoveWindow(cards[index], x, cardY, cardWidth, cardHeight, TRUE);
     }
 }
@@ -604,7 +1120,8 @@ void LayoutControls(HWND window, AppState& state) {
     y += ScaleForDpi(window, 30);
 
     const std::vector<HWND> cards = VisiblePageCards(state);
-    LayoutCardGrid(window, cards, y, width, height, margin, ScaleForDpi(window, 10));
+    LayoutCardGrid(window, state, cards, y, width, height,
+                   margin, ScaleForDpi(window, 10));
     MoveWindow(state.codexNotice, margin, y, width - margin * 2,
                std::max(ScaleForDpi(window, 130), height - y - margin), TRUE);
     MoveWindow(state.emptyHomeNotice, margin, y, width - margin * 2,
@@ -630,22 +1147,26 @@ bool CreateControls(HWND window, AppState& state) {
     state.settingsButton = CreateButton(window, L"Settings", kSettingsButtonId);
     state.codexNotice = CreateLabel(
         window,
-        L"本机 Codex 数据尚未连接\r\n\r\n"
-        L"This Windows milestone does not simulate account, usage, task, token, "
-        L"service-status, or cost data.",
+        L"Codex 页面当前未选择任何模块。\r\n\r\n"
+        L"请打开设置，启用一个或多个 Codex 模块。",
         SS_LEFT | WS_BORDER);
     state.emptyHomeNotice = CreateLabel(
         window,
         L"No modules are shown on Home.\r\n\r\nOpen Settings to choose one or more "
-        L"local performance modules.",
+        L"performance or Codex modules.",
         SS_LEFT | WS_BORDER);
 
     for (const codex_monitor::ModuleDefinition& definition :
          codex_monitor::ModuleRegistry()) {
         ModuleViews views;
         views.id = definition.id;
-        views.homeCard = CreateLabel(window, L"Starting sampler", SS_LEFT | WS_BORDER);
-        views.computerCard = CreateLabel(window, L"Starting sampler", SS_LEFT | WS_BORDER);
+        const std::wstring initialText = definition.requiresPerformanceSampling
+            ? L"Starting sampler"
+            : BuildCodexUnavailableText(definition.id);
+        views.homeCard =
+            CreateLabel(window, initialText.c_str(), SS_LEFT | WS_BORDER);
+        views.nativeCard =
+            CreateLabel(window, initialText.c_str(), SS_LEFT | WS_BORDER);
         state.moduleViews.push_back(views);
     }
 
@@ -656,7 +1177,7 @@ bool CreateControls(HWND window, AppState& state) {
         return false;
     }
     for (const ModuleViews& views : state.moduleViews) {
-        if (!views.homeCard || !views.computerCard) return false;
+        if (!views.homeCard || !views.nativeCard) return false;
     }
 
     RecreateFonts(window, state);
@@ -669,7 +1190,7 @@ bool CreateControls(HWND window, AppState& state) {
 bool IsCardControl(const AppState& state, HWND control) {
     if (control == state.codexNotice || control == state.emptyHomeNotice) return true;
     for (const ModuleViews& views : state.moduleViews) {
-        if (control == views.homeCard || control == views.computerCard) return true;
+        if (control == views.homeCard || control == views.nativeCard) return true;
     }
     return false;
 }
@@ -727,13 +1248,25 @@ void ClampWindowToVisibleScreens(HWND window, AppState& state) {
     state.settings.windowPlacement = clamped;
 }
 
+bool SetContentScrollRow(HWND window, AppState& state, int requestedRow) {
+    const int clamped =
+        std::clamp(requestedRow, 0, state.contentScrollMaximumRow);
+    if (clamped == state.contentScrollRow) return false;
+    state.contentScrollRow = clamped;
+    LayoutControls(window, state);
+    return true;
+}
+
 void SwitchPage(HWND window, AppState& state, codex_monitor::Page page) {
     if (state.settings.currentPage == page) return;
     state.settings.currentPage = page;
+    state.contentScrollRow = 0;
+    state.wheelDeltaRemainder = 0;
     UpdatePageVisibility(state);
     if (state.hasPerformanceSnapshot) UpdateModuleCards(state);
     LayoutControls(window, state);
     UpdateSamplingDemand(window, state);
+    UpdateCodexDemand(window, state);
     PersistSettings(state);
 }
 
@@ -744,8 +1277,14 @@ void RefreshSettingsControls(AppState& state) {
         const codex_monitor::ModuleId id = state.settings.homeOrder[position];
         SettingsRow* row = FindSettingsRow(state, id);
         if (!row) continue;
-        SendMessageW(row->visibleCheck, BM_SETCHECK,
+        const std::size_t index = codex_monitor::ModuleIndex(id);
+        SendMessageW(row->homeVisibleCheck, BM_SETCHECK,
                      state.settings.homeVisible[codex_monitor::ModuleIndex(id)]
+                         ? BST_CHECKED
+                         : BST_UNCHECKED,
+                     0);
+        SendMessageW(row->nativeVisibleCheck, BM_SETCHECK,
+                     state.settings.nativePageVisible[index]
                          ? BST_CHECKED
                          : BST_UNCHECKED,
                      0);
@@ -761,26 +1300,55 @@ void LayoutSettingsControls(HWND window, AppState& state) {
     RECT client{};
     GetClientRect(window, &client);
     const int width = client.right - client.left;
+    const int height = client.bottom - client.top;
     const int margin = ScaleForDpi(window, 16);
-    const int gap = ScaleForDpi(window, 8);
+    const int gap = ScaleForDpi(window, 6);
     const int rowHeight = ScaleForDpi(window, 30);
-    const int smallButtonWidth = ScaleForDpi(window, 58);
-    const int controlsWidth = smallButtonWidth * 2 + gap;
-    const int checkboxWidth = std::max(ScaleForDpi(window, 130),
-                                       width - margin * 2 - controlsWidth - gap);
+    const int homeCheckWidth = ScaleForDpi(window, 72);
+    const int nativeCheckWidth = ScaleForDpi(window, 102);
+    const int smallButtonWidth = ScaleForDpi(window, 48);
+    const int fixedControlsWidth = homeCheckWidth + nativeCheckWidth +
+                                   smallButtonWidth * 2 + gap * 4;
+    const int nameWidth = std::max(ScaleForDpi(window, 180),
+                                   width - margin * 2 - fixedControlsWidth);
 
-    int y = margin;
+    const int headingHeight = ScaleForDpi(window, 28);
+    const int headingAdvance = ScaleForDpi(window, 40);
+    const int rowCount = static_cast<int>(state.settings.homeOrder.size());
+    const int contentHeight = margin + headingAdvance +
+        rowCount * (rowHeight + gap) + ScaleForDpi(window, 4) +
+        rowHeight + ScaleForDpi(window, 12) + rowHeight + margin;
+    state.settingsScrollMaximum = std::max(0, contentHeight - height);
+    state.settingsScrollOffset =
+        std::clamp(state.settingsScrollOffset, 0, state.settingsScrollMaximum);
+
+    SCROLLINFO scroll{};
+    scroll.cbSize = sizeof(scroll);
+    scroll.fMask = SIF_RANGE | SIF_PAGE | SIF_POS;
+    scroll.nMin = 0;
+    scroll.nMax = std::max(0, contentHeight - 1);
+    scroll.nPage = static_cast<UINT>(std::max(1, height));
+    scroll.nPos = state.settingsScrollOffset;
+    SetScrollInfo(window, SB_VERT, &scroll, TRUE);
+    ShowScrollBar(window, SB_VERT, state.settingsScrollMaximum > 0);
+
+    int y = margin - state.settingsScrollOffset;
     MoveWindow(state.settingsHeading, margin, y, width - margin * 2,
-               ScaleForDpi(window, 24), TRUE);
-    y += ScaleForDpi(window, 34);
+               headingHeight, TRUE);
+    y += headingAdvance;
     for (codex_monitor::ModuleId id : state.settings.homeOrder) {
         SettingsRow* row = FindSettingsRow(state, id);
         if (!row) continue;
-        MoveWindow(row->visibleCheck, margin, y, checkboxWidth, rowHeight, TRUE);
-        MoveWindow(row->moveUpButton, width - margin - controlsWidth, y,
-                   smallButtonWidth, rowHeight, TRUE);
-        MoveWindow(row->moveDownButton, width - margin - smallButtonWidth, y,
-                   smallButtonWidth, rowHeight, TRUE);
+        int x = margin;
+        MoveWindow(row->nameLabel, x, y, nameWidth, rowHeight, TRUE);
+        x += nameWidth + gap;
+        MoveWindow(row->homeVisibleCheck, x, y, homeCheckWidth, rowHeight, TRUE);
+        x += homeCheckWidth + gap;
+        MoveWindow(row->nativeVisibleCheck, x, y, nativeCheckWidth, rowHeight, TRUE);
+        x += nativeCheckWidth + gap;
+        MoveWindow(row->moveUpButton, x, y, smallButtonWidth, rowHeight, TRUE);
+        x += smallButtonWidth + gap;
+        MoveWindow(row->moveDownButton, x, y, smallButtonWidth, rowHeight, TRUE);
         y += rowHeight + gap;
     }
     y += ScaleForDpi(window, 4);
@@ -791,20 +1359,43 @@ void LayoutSettingsControls(HWND window, AppState& state) {
                ScaleForDpi(window, 82), rowHeight, TRUE);
 }
 
+bool SetSettingsScrollOffset(HWND window, AppState& state, int requestedOffset) {
+    const int clamped =
+        std::clamp(requestedOffset, 0, state.settingsScrollMaximum);
+    if (clamped == state.settingsScrollOffset) return false;
+    state.settingsScrollOffset = clamped;
+    LayoutSettingsControls(window, state);
+    return true;
+}
+
 bool CreateSettingsControls(HWND window, AppState& state) {
     state.settingsHeading = CreateLabel(
-        window, L"Home modules - visibility and order", SS_LEFT | SS_CENTERIMAGE);
+        window,
+        L"Columns: module | Home visibility | own-page visibility | Home order",
+        SS_LEFT | SS_CENTERIMAGE);
     state.settingsRows.clear();
     for (const codex_monitor::ModuleDefinition& definition :
          codex_monitor::ModuleRegistry()) {
         const int index = static_cast<int>(codex_monitor::ModuleIndex(definition.id));
         SettingsRow row;
         row.id = definition.id;
-        row.visibleCheck = CreateWindowExW(
-            0, L"BUTTON", std::wstring(definition.displayName).c_str(),
+        row.nameLabel = CreateLabel(
+            window, std::wstring(definition.displayName).c_str(),
+            SS_LEFT | SS_CENTERIMAGE);
+        row.homeVisibleCheck = CreateWindowExW(
+            0, L"BUTTON", L"Home",
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
             0, 0, 0, 0, window,
             reinterpret_cast<HMENU>(static_cast<INT_PTR>(kSettingsVisibleBaseId + index)),
+            GetModuleHandleW(nullptr), nullptr);
+        const wchar_t* nativePageLabel =
+            definition.nativePage == codex_monitor::Page::kCodex ? L"Codex" : L"Computer";
+        row.nativeVisibleCheck = CreateWindowExW(
+            0, L"BUTTON", nativePageLabel,
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
+            0, 0, 0, 0, window,
+            reinterpret_cast<HMENU>(
+                static_cast<INT_PTR>(kSettingsNativeVisibleBaseId + index)),
             GetModuleHandleW(nullptr), nullptr);
         row.moveUpButton = CreateButton(window, L"Up", kSettingsMoveUpBaseId + index);
         row.moveDownButton = CreateButton(window, L"Down", kSettingsMoveDownBaseId + index);
@@ -822,7 +1413,8 @@ bool CreateSettingsControls(HWND window, AppState& state) {
         return false;
     }
     for (const SettingsRow& row : state.settingsRows) {
-        if (!row.visibleCheck || !row.moveUpButton || !row.moveDownButton) return false;
+        if (!row.nameLabel || !row.homeVisibleCheck || !row.nativeVisibleCheck ||
+            !row.moveUpButton || !row.moveDownButton) return false;
     }
 
     RecreateSettingsFonts(window, state);
@@ -837,17 +1429,31 @@ void OpenSettingsWindow(HWND owner, AppState& state) {
         return;
     }
 
-    RECT ownerRect{};
-    GetWindowRect(owner, &ownerRect);
-    const int width = ScaleForDpi(owner, 500);
-    const int height = ScaleForDpi(owner, 390);
-    const int ownerWidth = static_cast<int>(ownerRect.right - ownerRect.left);
-    const int x = static_cast<int>(ownerRect.left) +
-                  std::max(0, (ownerWidth - width) / 2);
-    const int y = static_cast<int>(ownerRect.top) + ScaleForDpi(owner, 48);
+    MONITORINFO monitorInfo{};
+    monitorInfo.cbSize = sizeof(monitorInfo);
+    const HMONITOR monitor = MonitorFromWindow(owner, MONITOR_DEFAULTTONEAREST);
+    if (!GetMonitorInfoW(monitor, &monitorInfo)) {
+        if (!SystemParametersInfoW(SPI_GETWORKAREA, 0, &monitorInfo.rcWork, 0)) {
+            monitorInfo.rcWork =
+                RECT{0, 0, GetSystemMetrics(SM_CXSCREEN),
+                     GetSystemMetrics(SM_CYSCREEN)};
+        }
+    }
+    const int workWidth = monitorInfo.rcWork.right - monitorInfo.rcWork.left;
+    const int workHeight = monitorInfo.rcWork.bottom - monitorInfo.rcWork.top;
+    const int edge = ScaleForDpi(owner, 12);
+    const int width = std::min(ScaleForDpi(owner, 760),
+                               std::max(1, workWidth - edge * 2));
+    const int height = std::min(ScaleForDpi(owner, 560),
+                                std::max(1, workHeight - edge * 2));
+    const int x = monitorInfo.rcWork.left + (workWidth - width) / 2;
+    const int y = monitorInfo.rcWork.top + (workHeight - height) / 2;
+    state.settingsScrollOffset = 0;
+    state.settingsScrollMaximum = 0;
+    state.settingsWheelDeltaRemainder = 0;
     state.settingsWindow = CreateWindowExW(
         WS_EX_TOOLWINDOW, kSettingsWindowClassName, L"Codex Monitor HUD Settings",
-        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME,
+        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_VSCROLL,
         x, y, width, height, owner, nullptr, GetModuleHandleW(nullptr), &state);
     if (state.settingsWindow) {
         RefreshSettingsControls(state);
@@ -880,11 +1486,33 @@ LRESULT CALLBACK SettingsWindowProcedure(HWND window, UINT message,
                 SettingsRow* row = FindSettingsRow(*state, id);
                 if (row) {
                     state->settings.homeVisible[index] =
-                        SendMessageW(row->visibleCheck, BM_GETCHECK, 0, 0) == BST_CHECKED;
+                        SendMessageW(row->homeVisibleCheck, BM_GETCHECK, 0, 0) == BST_CHECKED;
                     UpdatePageVisibility(*state);
                     if (state->hasPerformanceSnapshot) UpdateModuleCards(*state);
                     LayoutControls(state->mainWindow, *state);
                     UpdateSamplingDemand(state->mainWindow, *state);
+                    UpdateCodexDemand(state->mainWindow, *state);
+                    PersistSettings(*state);
+                }
+                return 0;
+            }
+            if (controlId >= kSettingsNativeVisibleBaseId &&
+                controlId < kSettingsNativeVisibleBaseId +
+                                static_cast<int>(codex_monitor::kModuleCount)) {
+                const std::size_t index = static_cast<std::size_t>(
+                    controlId - kSettingsNativeVisibleBaseId);
+                const codex_monitor::ModuleId id =
+                    codex_monitor::ModuleRegistry()[index].id;
+                SettingsRow* row = FindSettingsRow(*state, id);
+                if (row) {
+                    state->settings.nativePageVisible[index] =
+                        SendMessageW(row->nativeVisibleCheck, BM_GETCHECK, 0, 0) ==
+                        BST_CHECKED;
+                    UpdatePageVisibility(*state);
+                    if (state->hasPerformanceSnapshot) UpdateModuleCards(*state);
+                    LayoutControls(state->mainWindow, *state);
+                    UpdateSamplingDemand(state->mainWindow, *state);
+                    UpdateCodexDemand(state->mainWindow, *state);
                     PersistSettings(*state);
                 }
                 return 0;
@@ -928,10 +1556,81 @@ LRESULT CALLBACK SettingsWindowProcedure(HWND window, UINT message,
             if (state && wParam != SIZE_MINIMIZED) LayoutSettingsControls(window, *state);
             return 0;
 
+        case WM_VSCROLL:
+            if (state) {
+                int requested = state->settingsScrollOffset;
+                const int line = ScaleForDpi(window, 30);
+                RECT client{};
+                GetClientRect(window, &client);
+                const int page = std::max(line, client.bottom - client.top - line);
+                switch (LOWORD(wParam)) {
+                    case SB_LINEUP:
+                        requested -= line;
+                        break;
+                    case SB_LINEDOWN:
+                        requested += line;
+                        break;
+                    case SB_PAGEUP:
+                        requested -= page;
+                        break;
+                    case SB_PAGEDOWN:
+                        requested += page;
+                        break;
+                    case SB_TOP:
+                        requested = 0;
+                        break;
+                    case SB_BOTTOM:
+                        requested = state->settingsScrollMaximum;
+                        break;
+                    case SB_THUMBPOSITION:
+                    case SB_THUMBTRACK: {
+                        SCROLLINFO info{};
+                        info.cbSize = sizeof(info);
+                        info.fMask = SIF_TRACKPOS;
+                        if (GetScrollInfo(window, SB_VERT, &info)) {
+                            requested = info.nTrackPos;
+                        }
+                        break;
+                    }
+                    default:
+                        return 0;
+                }
+                SetSettingsScrollOffset(window, *state, requested);
+            }
+            return 0;
+
+        case WM_MOUSEWHEEL:
+            if (state) {
+                state->settingsWheelDeltaRemainder += GET_WHEEL_DELTA_WPARAM(wParam);
+                const int steps = state->settingsWheelDeltaRemainder / WHEEL_DELTA;
+                state->settingsWheelDeltaRemainder -= steps * WHEEL_DELTA;
+                if (steps != 0) {
+                    SetSettingsScrollOffset(
+                        window, *state,
+                        state->settingsScrollOffset -
+                            steps * ScaleForDpi(window, 30));
+                }
+            }
+            return 0;
+
         case WM_GETMINMAXINFO:
             if (auto* limits = reinterpret_cast<MINMAXINFO*>(lParam)) {
-                limits->ptMinTrackSize.x = ScaleForDpi(window, 430);
-                limits->ptMinTrackSize.y = ScaleForDpi(window, 360);
+                MONITORINFO monitorInfo{};
+                monitorInfo.cbSize = sizeof(monitorInfo);
+                const HMONITOR monitor =
+                    MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST);
+                if (GetMonitorInfoW(monitor, &monitorInfo)) {
+                    const int workWidth =
+                        monitorInfo.rcWork.right - monitorInfo.rcWork.left;
+                    const int workHeight =
+                        monitorInfo.rcWork.bottom - monitorInfo.rcWork.top;
+                    limits->ptMinTrackSize.x =
+                        std::min(ScaleForDpi(window, 520), workWidth);
+                    limits->ptMinTrackSize.y =
+                        std::min(ScaleForDpi(window, 300), workHeight);
+                    limits->ptMaxTrackSize.x = workWidth;
+                    limits->ptMaxTrackSize.y = workHeight;
+                }
             }
             return 0;
 
@@ -962,6 +1661,9 @@ LRESULT CALLBACK SettingsWindowProcedure(HWND window, UINT message,
                 state->settingsTopmostCheck = nullptr;
                 state->settingsCloseButton = nullptr;
                 state->settingsRows.clear();
+                state->settingsScrollOffset = 0;
+                state->settingsScrollMaximum = 0;
+                state->settingsWheelDeltaRemainder = 0;
             }
             return 0;
     }
@@ -980,7 +1682,10 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         case WM_CREATE:
             if (!state || !CreateControls(window, *state)) return -1;
             if (!state->performanceWorker.Start(window, kSampleReadyMessage)) return -1;
+            state->codexWorkerAvailable =
+                state->codexWorker.Start(window, kCodexReadyMessage, "0.3.0");
             UpdateSamplingDemand(window, *state);
+            UpdateCodexDemand(window, *state);
             return 0;
 
         case WM_COMMAND:
@@ -1033,6 +1738,69 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             }
             return 0;
 
+        case kCodexReadyMessage:
+            if (state) {
+                std::optional<codex_monitor::codex::CompletedCodexRefresh> completed =
+                    state->codexWorker.TakeLatest();
+                if (completed && !state->codexPaused) {
+                    ApplyCodexRefresh(*state, std::move(*completed));
+                } else {
+                    UpdateStatusText(*state);
+                }
+            }
+            return 0;
+
+        case WM_VSCROLL:
+            if (state) {
+                int requestedRow = state->contentScrollRow;
+                switch (LOWORD(wParam)) {
+                    case SB_LINEUP:
+                        --requestedRow;
+                        break;
+                    case SB_LINEDOWN:
+                        ++requestedRow;
+                        break;
+                    case SB_PAGEUP:
+                        requestedRow -= state->contentVisibleRows;
+                        break;
+                    case SB_PAGEDOWN:
+                        requestedRow += state->contentVisibleRows;
+                        break;
+                    case SB_TOP:
+                        requestedRow = 0;
+                        break;
+                    case SB_BOTTOM:
+                        requestedRow = state->contentScrollMaximumRow;
+                        break;
+                    case SB_THUMBPOSITION:
+                    case SB_THUMBTRACK: {
+                        SCROLLINFO info{};
+                        info.cbSize = sizeof(info);
+                        info.fMask = SIF_TRACKPOS;
+                        if (GetScrollInfo(window, SB_VERT, &info)) {
+                            requestedRow = info.nTrackPos;
+                        }
+                        break;
+                    }
+                    default:
+                        return 0;
+                }
+                SetContentScrollRow(window, *state, requestedRow);
+            }
+            return 0;
+
+        case WM_MOUSEWHEEL:
+            if (state) {
+                state->wheelDeltaRemainder += GET_WHEEL_DELTA_WPARAM(wParam);
+                const int steps = state->wheelDeltaRemainder / WHEEL_DELTA;
+                state->wheelDeltaRemainder -= steps * WHEEL_DELTA;
+                if (steps != 0) {
+                    SetContentScrollRow(
+                        window, *state, state->contentScrollRow - steps);
+                }
+            }
+            return 0;
+
         case WM_SIZE:
             if (!state) return 0;
             {
@@ -1048,6 +1816,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
                 }
             }
             UpdateSamplingDemand(window, *state);
+            UpdateCodexDemand(window, *state);
             return 0;
 
         case WM_EXITSIZEMOVE:
@@ -1067,8 +1836,22 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
 
         case WM_GETMINMAXINFO:
             if (auto* limits = reinterpret_cast<MINMAXINFO*>(lParam)) {
-                limits->ptMinTrackSize.x = ScaleForDpi(window, kMinimumWidth);
-                limits->ptMinTrackSize.y = ScaleForDpi(window, kMinimumHeight);
+                MONITORINFO monitorInfo{};
+                monitorInfo.cbSize = sizeof(monitorInfo);
+                const HMONITOR monitor =
+                    MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST);
+                if (GetMonitorInfoW(monitor, &monitorInfo)) {
+                    const int workWidth =
+                        monitorInfo.rcWork.right - monitorInfo.rcWork.left;
+                    const int workHeight =
+                        monitorInfo.rcWork.bottom - monitorInfo.rcWork.top;
+                    limits->ptMinTrackSize.x =
+                        std::min(ScaleForDpi(window, kMinimumWidth), workWidth);
+                    limits->ptMinTrackSize.y =
+                        std::min(ScaleForDpi(window, kMinimumHeight), workHeight);
+                    limits->ptMaxTrackSize.x = workWidth;
+                    limits->ptMaxTrackSize.y = workHeight;
+                }
             }
             return 0;
 
@@ -1114,6 +1897,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
                 PersistSettings(*state);
                 StopSamplingTimer(window, *state);
                 state->performanceWorker.StopAndJoin();
+                state->codexWorker.StopAndJoin();
                 if (state->settingsWindow) DestroyWindow(state->settingsWindow);
                 DeleteFonts(*state);
                 if (state->backgroundBrush) DeleteObject(state->backgroundBrush);
@@ -1128,13 +1912,22 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
 }
 
 bool RegisterWindowClasses(HINSTANCE instance) {
+    HICON applicationIcon = static_cast<HICON>(LoadImageW(
+        instance, MAKEINTRESOURCEW(IDI_CODEX_MONITOR_HUD), IMAGE_ICON,
+        GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON), LR_DEFAULTCOLOR));
+    HICON smallApplicationIcon = static_cast<HICON>(LoadImageW(
+        instance, MAKEINTRESOURCEW(IDI_CODEX_MONITOR_HUD), IMAGE_ICON,
+        GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), LR_DEFAULTCOLOR));
+    if (!applicationIcon) applicationIcon = LoadIconW(nullptr, IDI_APPLICATION);
+    if (!smallApplicationIcon) smallApplicationIcon = LoadIconW(nullptr, IDI_APPLICATION);
+
     WNDCLASSEXW mainClass{};
     mainClass.cbSize = sizeof(mainClass);
     mainClass.style = CS_HREDRAW | CS_VREDRAW;
     mainClass.lpfnWndProc = WindowProcedure;
     mainClass.hInstance = instance;
-    mainClass.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
-    mainClass.hIconSm = LoadIconW(nullptr, IDI_APPLICATION);
+    mainClass.hIcon = applicationIcon;
+    mainClass.hIconSm = smallApplicationIcon;
     mainClass.hCursor = LoadCursorW(nullptr, IDC_ARROW);
     mainClass.lpszClassName = kWindowClassName;
     if (!RegisterClassExW(&mainClass)) return false;
@@ -1205,7 +1998,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand) {
     state.settings.windowPlacement = placement;
 
     const DWORD windowStyle = WS_CAPTION | WS_SYSMENU | WS_THICKFRAME |
-                              WS_MINIMIZEBOX | WS_CLIPCHILDREN;
+                              WS_MINIMIZEBOX | WS_CLIPCHILDREN | WS_VSCROLL;
     const DWORD extendedStyle = WS_EX_APPWINDOW |
                                 (state.settings.alwaysOnTop ? WS_EX_TOPMOST : 0);
     HWND window = CreateWindowExW(

@@ -19,16 +19,25 @@ enum class ModuleId {
     kSystemResources,
     kCommitAndPageFile,
     kTopMemoryProcesses,
+    kCodexFiveHourQuota,
+    kCodexWeeklyQuota,
+    kCodexSubscriptionType,
+    kCodexAccountTokenUsage,
+    kCodexRecentTasks,
 };
 
 struct ModuleDefinition {
     ModuleId id;
     std::string_view key;
     std::wstring_view displayName;
+    Page nativePage;
     bool requiresPerformanceSampling;
+    bool requiresCodexData;
+    bool defaultHomeVisible;
+    bool defaultNativePageVisible;
 };
 
-constexpr std::size_t kModuleCount = 4;
+constexpr std::size_t kModuleCount = 9;
 
 struct WindowPlacement {
     int x = 0;
@@ -42,6 +51,7 @@ struct SettingsState {
     bool alwaysOnTop = true;
     std::vector<ModuleId> homeOrder;
     std::array<bool, kModuleCount> homeVisible{};
+    std::array<bool, kModuleCount> nativePageVisible{};
     std::optional<WindowPlacement> windowPlacement;
 };
 
@@ -54,6 +64,11 @@ std::optional<ModuleId> ModuleIdFromKey(std::string_view key);
 
 std::vector<ModuleId> SanitizeHomeOrder(const std::vector<ModuleId>& requestedOrder);
 std::vector<ModuleId> VisibleHomeModules(const SettingsState& settings);
+std::vector<ModuleId> VisibleModulesForNativePage(
+    const SettingsState& settings,
+    Page page);
+bool HomeNeedsPerformanceData(const SettingsState& settings);
+bool HomeNeedsCodexData(const SettingsState& settings);
 bool MoveHomeModule(SettingsState& settings, ModuleId id, int direction);
 
 std::string SerializeSettings(const SettingsState& settings);

@@ -1,0 +1,30 @@
+#include "resource.h"
+
+IDI_CODEX_MONITOR_HUD ICON "CodexMonitorHUD.ico"
+
+1 VERSIONINFO
+ FILEVERSION 0,3,0,0
+ PRODUCTVERSION 0,3,0,0
+ FILEFLAGSMASK 0x3fL
+ FILEFLAGS 0x0L
+ FILEOS 0x40004L
+ FILETYPE 0x1L
+ FILESUBTYPE 0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "FileDescription", "Codex Monitor HUD"
+            VALUE "FileVersion", "0.3.0"
+            VALUE "InternalName", "CodexMonitorHUD"
+            VALUE "OriginalFilename", "CodexMonitorHUD.exe"
+            VALUE "ProductName", "Codex Monitor HUD"
+            VALUE "ProductVersion", "0.3.0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 1200
+    END
+END
