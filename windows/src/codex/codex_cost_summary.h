@@ -29,6 +29,7 @@ struct CodexCostEvent {
 struct CodexCostPeriodSummary {
     std::int64_t tokens = 0;
     double estimatedUsd = 0.0;
+    std::int64_t pricedTokens = 0;
 };
 
 struct CodexCostSummary {

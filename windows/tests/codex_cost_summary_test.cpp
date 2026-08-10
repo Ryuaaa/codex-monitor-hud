@@ -169,11 +169,20 @@ void TestCachedValueValidationAndClipping() {
     const CodexCostSummary result = Require(
         CalculateCodexCostSummary({event}, "2026-08-11"),
         "cached validation result");
-    Expect(result.pricedTokens == 100 &&
-               result.pricedTokenPercent == 100.0,
-           "cached priced token count is clipped to event tokens");
+    Expect(result.pricedTokens == 0 &&
+               result.pricedTokenPercent == 0.0,
+           "an invalid cached cost also invalidates its priced-token count");
     Expect(result.today.estimatedUsd == 0.0,
            "invalid cached cost is ignored for an unknown model");
+
+    event.model = "gpt-5.6-luna";
+    const CodexCostSummary fallback = Require(
+        CalculateCodexCostSummary({event}, "2026-08-11"),
+        "cached known-model fallback result");
+    Expect(fallback.pricedTokens == 100 &&
+               fallback.pricedTokenPercent == 100.0 &&
+               fallback.today.estimatedUsd > 0.0,
+           "invalid cached pricing falls back atomically to the current known-model estimate");
 }
 
 void TestSaturation() {

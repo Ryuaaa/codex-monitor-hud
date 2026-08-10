@@ -6,6 +6,7 @@
 #include <chrono>
 #include <cctype>
 #include <cstdio>
+#include <cwchar>
 #include <ctime>
 #include <iomanip>
 #include <limits>
@@ -214,6 +215,51 @@ bool IsNetworkRoot(const std::filesystem::path& root) noexcept {
     std::array<wchar_t, 4> driveRoot = {
         native[0], L':', L'\\', L'\0'};
     return GetDriveTypeW(driveRoot.data()) == DRIVE_REMOTE;
+}
+
+std::optional<bool> FinalDirectoryIsNetwork(
+    const std::filesystem::path& path,
+    std::error_code& error) noexcept {
+    error.clear();
+    HANDLE handle = CreateFileW(
+        path.c_str(), FILE_READ_ATTRIBUTES,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+        OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+    if (handle == INVALID_HANDLE_VALUE) {
+        error = LastWindowsError();
+        return std::nullopt;
+    }
+    const DWORD required = GetFinalPathNameByHandleW(
+        handle, nullptr, 0, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+    if (required == 0) {
+        error = LastWindowsError();
+        CloseHandle(handle);
+        return std::nullopt;
+    }
+    std::wstring finalPath(static_cast<std::size_t>(required), L'\0');
+    const DWORD copied = GetFinalPathNameByHandleW(
+        handle, finalPath.data(), required,
+        FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+    const DWORD finalPathError = copied == 0 ? GetLastError() : ERROR_SUCCESS;
+    CloseHandle(handle);
+    if (copied == 0 || copied >= required) {
+        error = copied == 0
+                    ? std::error_code(static_cast<int>(finalPathError),
+                                      std::system_category())
+                    : InvalidArgumentError();
+        return std::nullopt;
+    }
+    finalPath.resize(copied);
+    if (finalPath.size() >= 8 &&
+        _wcsnicmp(finalPath.c_str(), L"\\\\?\\UNC\\", 8) == 0) {
+        return true;
+    }
+    std::array<wchar_t, 32768> volumeRoot{};
+    if (GetVolumePathNameW(finalPath.c_str(), volumeRoot.data(),
+                           static_cast<DWORD>(volumeRoot.size()))) {
+        return GetDriveTypeW(volumeRoot.data()) == DRIVE_REMOTE;
+    }
+    return false;
 }
 
 class NativeFile {
@@ -506,6 +552,7 @@ bool IsSafeOptionalDirectory(const std::filesystem::path& path,
     if (value.status == PathObjectStatus::kOk) return true;
     if (value.status == PathObjectStatus::kMissing) return false;
     if (firstCheck) {
+        result.discoveryIncomplete = true;
         result.coverageIncomplete = true;
         if (value.status == PathObjectStatus::kIoError) {
             ++result.ioErrorCount;
@@ -523,6 +570,7 @@ void RecordCandidateOpenFailure(PathObjectStatus status,
     if (status == PathObjectStatus::kMissing) return;
     result.coverageIncomplete = true;
     if (status == PathObjectStatus::kIoError) {
+        result.discoveryIncomplete = true;
         ++result.ioErrorCount;
         if (!result.error) result.error = error;
     } else {
@@ -536,11 +584,14 @@ void InspectDirectDirectory(const std::filesystem::path& root,
                             std::int64_t archivedCutoffNanoseconds,
                             std::vector<CandidateFile>& candidates,
                             std::unordered_set<std::string>& seenFileIds,
-                            CodexCostFileScanResult& result) {
+                            CodexCostFileScanResult& result,
+                            const std::function<bool()>& shouldCancel,
+                            bool& cancelled) {
     std::error_code iterationError;
     std::filesystem::directory_iterator iterator(
         directory, std::filesystem::directory_options::none, iterationError);
     if (iterationError) {
+        result.discoveryIncomplete = true;
         result.coverageIncomplete = true;
         ++result.ioErrorCount;
         if (!result.error) result.error = iterationError;
@@ -548,6 +599,10 @@ void InspectDirectDirectory(const std::filesystem::path& root,
     }
     const std::filesystem::directory_iterator end;
     while (iterator != end) {
+        if (shouldCancel && shouldCancel()) {
+            cancelled = true;
+            return;
+        }
         const std::filesystem::path filename = iterator->path().filename();
         const CandidateNameKind kind = ClassifyCandidateName(filename, archived);
         if (kind != CandidateNameKind::kIgnored) {
@@ -579,6 +634,7 @@ void InspectDirectDirectory(const std::filesystem::path& root,
 
         iterator.increment(iterationError);
         if (iterationError) {
+            result.discoveryIncomplete = true;
             result.coverageIncomplete = true;
             ++result.ioErrorCount;
             if (!result.error) result.error = iterationError;
@@ -591,13 +647,19 @@ void DiscoverCandidates(const std::filesystem::path& root,
                         const std::vector<std::filesystem::path>& datePaths,
                         std::int64_t archivedCutoffNanoseconds,
                         std::vector<CandidateFile>& candidates,
-                        CodexCostFileScanResult& result) {
+                        CodexCostFileScanResult& result,
+                        const std::function<bool()>& shouldCancel,
+                        bool& cancelled) {
     DirectoryStatusCache directories;
     std::unordered_set<std::string> seenFileIds;
 
     const std::filesystem::path sessions = root / "sessions";
     if (IsSafeOptionalDirectory(sessions, directories, result)) {
         for (const auto& relativeDate : datePaths) {
+            if (shouldCancel && shouldCancel()) {
+                cancelled = true;
+                return;
+            }
             std::filesystem::path current = sessions;
             bool safe = true;
             for (const auto& component : relativeDate) {
@@ -610,7 +672,9 @@ void DiscoverCandidates(const std::filesystem::path& root,
             if (safe) {
                 InspectDirectDirectory(root, current, false,
                                        archivedCutoffNanoseconds, candidates,
-                                       seenFileIds, result);
+                                       seenFileIds, result, shouldCancel,
+                                       cancelled);
+                if (cancelled) return;
             }
         }
     }
@@ -619,7 +683,8 @@ void DiscoverCandidates(const std::filesystem::path& root,
     if (IsSafeOptionalDirectory(archived, directories, result)) {
         InspectDirectDirectory(root, archived, true,
                                archivedCutoffNanoseconds, candidates,
-                               seenFileIds, result);
+                               seenFileIds, result, shouldCancel, cancelled);
+        if (cancelled) return;
     }
 
     std::sort(candidates.begin(), candidates.end(),
@@ -646,7 +711,13 @@ void ReadCandidate(
     std::unordered_set<std::string>& processed,
     std::uint64_t& remainingBudget,
     std::size_t maximumLineBytes,
-    CodexCostFileScanResult& result) {
+    CodexCostFileScanResult& result,
+    const std::function<bool()>& shouldCancel,
+    bool& cancelled) {
+    if (shouldCancel && shouldCancel()) {
+        cancelled = true;
+        return;
+    }
     NativeFile file;
     std::error_code openError;
     const PathObjectStatus openStatus = file.Open(candidate.path, openError);
@@ -719,6 +790,10 @@ void ReadCandidate(
     bool readFailed = false;
 
     while (remainingBudget > 0 && readPosition < metadata.sizeBytes) {
+        if (shouldCancel && shouldCancel()) {
+            cancelled = true;
+            return;
+        }
         const std::uint64_t fileRemaining = metadata.sizeBytes - readPosition;
         const std::size_t requestBytes = static_cast<std::size_t>(
             std::min<std::uint64_t>(
@@ -865,11 +940,21 @@ CodexCostFileScanResult ScanCodexCostRolloutFiles(
     const CodexCostFileScanRequest& request) noexcept {
     CodexCostFileScanResult result;
     try {
+        const auto FinishCancelled = [&result]() {
+            result.status = CodexCostFileScanStatus::kCancelled;
+            result.coverageIncomplete = true;
+            result.error =
+                std::make_error_code(std::errc::operation_canceled);
+            return result;
+        };
         if (request.codexHome.empty() || request.nowUnixSeconds < 0 ||
             request.maximumLineBytes == 0) {
             result.status = CodexCostFileScanStatus::kInvalidArgument;
             result.error = InvalidArgumentError();
             return result;
+        }
+        if (request.shouldCancel && request.shouldCancel()) {
+            return FinishCancelled();
         }
 
         std::filesystem::path root = request.codexHome.lexically_normal();
@@ -915,6 +1000,21 @@ CodexCostFileScanResult ScanCodexCostRolloutFiles(
             }
             return result;
         }
+#ifdef _WIN32
+        const std::optional<bool> finalRootIsNetwork =
+            FinalDirectoryIsNetwork(root, rootError);
+        if (!finalRootIsNetwork) {
+            result.status = CodexCostFileScanStatus::kIoError;
+            result.error = rootError;
+            return result;
+        }
+        if (*finalRootIsNetwork) {
+            result.status = CodexCostFileScanStatus::kUnsafeRoot;
+            result.error =
+                std::make_error_code(std::errc::permission_denied);
+            return result;
+        }
+#endif
 
         const auto datePaths = RecentLocalCodexSessionDatePaths(
             request.nowUnixSeconds, kCodexCostHistoryDays);
@@ -931,8 +1031,10 @@ CodexCostFileScanResult ScanCodexCostRolloutFiles(
         const std::int64_t cutoffNanoseconds =
             SaturatingUnixNanoseconds(cutoffSeconds, 0);
         std::vector<CandidateFile> candidates;
+        bool cancelled = false;
         DiscoverCandidates(root, datePaths, cutoffNanoseconds, candidates,
-                           result);
+                           result, request.shouldCancel, cancelled);
+        if (cancelled) return FinishCancelled();
 
         std::unordered_map<std::string, const CodexCostFileCursor*> previous;
         previous.reserve(request.previousFiles.size());
@@ -947,7 +1049,9 @@ CodexCostFileScanResult ScanCodexCostRolloutFiles(
         std::unordered_set<std::string> processed;
         for (const auto& candidate : candidates) {
             ReadCandidate(candidate, previous, processed, remainingBudget,
-                          maximumLineBytes, result);
+                          maximumLineBytes, result, request.shouldCancel,
+                          cancelled);
+            if (cancelled) return FinishCancelled();
         }
 
         for (const auto& file : result.files) {

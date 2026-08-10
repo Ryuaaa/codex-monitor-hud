@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -22,6 +23,7 @@ enum class CodexCostFileScanStatus {
     kRootNotFound,
     kRootNotDirectory,
     kIoError,
+    kCancelled,
 };
 
 // This is the only per-file state a caller needs to persist. The identifier is
@@ -53,6 +55,7 @@ struct CodexCostFileScanRequest {
     // callers can deliberately reduce work and tests can exercise boundaries.
     std::uint64_t byteBudgetBytes = kCodexCostMaximumScanBytes;
     std::size_t maximumLineBytes = kCodexCostMaximumLineBytes;
+    std::function<bool()> shouldCancel;
 };
 
 struct CodexCostFileScanResult {
@@ -66,6 +69,10 @@ struct CodexCostFileScanResult {
     std::size_t ioErrorCount = 0;
     std::size_t ignoredExpiredArchivedFiles = 0;
     bool budgetExhausted = false;
+    // True only when directory discovery or a transient candidate-open error
+    // means absence cannot be distinguished from a temporary read failure.
+    // Content gaps such as compressed or oversized lines do not set it.
+    bool discoveryIncomplete = false;
     bool coverageIncomplete = false;
     std::error_code error;
 

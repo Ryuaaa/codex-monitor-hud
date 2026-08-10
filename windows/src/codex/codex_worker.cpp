@@ -13,6 +13,7 @@
 #include <cstdio>
 #include <ctime>
 #include <filesystem>
+#include <functional>
 #include <limits>
 #include <system_error>
 #include <utility>
@@ -214,7 +215,8 @@ std::optional<std::string> CurrentLocalDateString() noexcept {
 
 CodexCostRefresh RefreshCostHistory(
     const std::optional<std::filesystem::path>& codexHome,
-    CodexCostHistoryState& historyState) {
+    CodexCostHistoryState& historyState,
+    const std::function<bool()>& shouldCancel) {
     CodexCostRefresh output;
     CodexCostFileScanResult scan;
     if (codexHome) {
@@ -225,6 +227,7 @@ CodexCostRefresh RefreshCostHistory(
                 std::chrono::system_clock::now().time_since_epoch())
                 .count();
         request.previousFiles = historyState.Cursors();
+        request.shouldCancel = shouldCancel;
         scan = ScanCodexCostRolloutFiles(request);
         output.status = scan.ok() ? CodexCostRefreshStatus::kNoTokenEvents
                                   : CodexCostRefreshStatus::kScanFailed;
@@ -548,7 +551,14 @@ void CodexWorker::Run() {
             cancellationEpoch_.load(std::memory_order_acquire) == refreshEpoch &&
             costHistoryEpoch_.load(std::memory_order_acquire) == costEpoch) {
             costHistoryUpdate =
-                RefreshCostHistory(refreshedCodexHome, costHistoryState);
+                RefreshCostHistory(
+                    refreshedCodexHome, costHistoryState,
+                    [this, refreshEpoch, costEpoch] {
+                        return cancellationEpoch_.load(
+                                   std::memory_order_acquire) != refreshEpoch ||
+                               costHistoryEpoch_.load(
+                                   std::memory_order_acquire) != costEpoch;
+                    });
         }
 
         const bool succeeded = RefreshSucceeded(refresh.report, refresh.data);

@@ -31,10 +31,10 @@ void ExpectNear(double actual, double expected, const char* message) {
 CodexCostSummary LocalSample() {
     CodexCostSummary local;
     local.available = true;
-    local.today = {100, 2.0};
-    local.last7Days = {1000, 10.0};
-    local.last30Days = {3000, 24.0};
-    local.monthToDate = {2000, 20.0};
+    local.today = {100, 2.0, 100};
+    local.last7Days = {1000, 10.0, 1000};
+    local.last30Days = {3000, 24.0, 3000};
+    local.monthToDate = {2000, 20.0, 2000};
     local.monthForecastEstimatedUsd = 50.0;
     local.pricedTokenPercent = 62.5;
     local.topModel = "gpt-5.6-sol";
@@ -146,6 +146,24 @@ void TestZeroLocalTokensCannotEstimate() {
            "zero local month tokens reject both forecast paths");
 }
 
+void TestPartialCoverageUsesPricedTokensAndRejectsThinSamples() {
+    CodexCostSummary local = LocalSample();
+    local.last30Days = {1000, 9.0, 900};
+    UsageCalendarTotals official = OfficialSample();
+    official.thirtyDayTokens = 2000;
+    CodexCostHybridSummary result =
+        CalculateCodexCostHybridSummary(official, local);
+    ExpectNear(*result.last30Days.estimatedUsd, 20.0,
+               "unknown-model tokens must not dilute the known-model unit price");
+    ExpectNear(result.last30Days.pricingCoveragePercent, 90.0,
+               "period price coverage is exposed");
+
+    local.last30Days = {1000, 1.0, 10};
+    result = CalculateCodexCostHybridSummary(official, local);
+    Expect(!result.last30Days.estimatedUsd,
+           "a very thin priced sample must not be extrapolated");
+}
+
 void TestMissingOfficialForecastUsesLocalForecast() {
     UsageCalendarTotals official = OfficialSample();
     official.monthForecastTokens.reset();
@@ -177,8 +195,8 @@ void TestInvalidOfficialTotalsFallBack() {
 
 void TestOverflowAndNonFiniteValues() {
     CodexCostSummary local = LocalSample();
-    local.today = {1, std::numeric_limits<double>::max()};
-    local.monthToDate = {1, std::numeric_limits<double>::max()};
+    local.today = {1, std::numeric_limits<double>::max(), 1};
+    local.monthToDate = {1, std::numeric_limits<double>::max(), 1};
     local.pricedTokenPercent = std::numeric_limits<double>::quiet_NaN();
     UsageCalendarTotals official = OfficialSample();
     official.todayTokens = std::numeric_limits<std::int64_t>::max();
@@ -216,6 +234,7 @@ int main() {
     TestAllOfficialDataMissingFallsBackLocally();
     TestOfficialTokensWithoutLocalPriceSample();
     TestZeroLocalTokensCannotEstimate();
+    TestPartialCoverageUsesPricedTokensAndRejectsThinSamples();
     TestMissingOfficialForecastUsesLocalForecast();
     TestInvalidOfficialTotalsFallBack();
     TestOverflowAndNonFiniteValues();

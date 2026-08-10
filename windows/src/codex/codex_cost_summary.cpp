@@ -116,10 +116,12 @@ struct EventTokenCount {
 
 void AddToPeriod(std::int64_t tokens,
                  double cost,
+                 std::int64_t pricedTokens,
                  CodexCostPeriodSummary& period,
                  bool& saturated) noexcept {
     SaturatingAdd(tokens, period.tokens, saturated);
     SaturatingAdd(cost, period.estimatedUsd, saturated);
+    SaturatingAdd(pricedTokens, period.pricedTokens, saturated);
 }
 
 [[nodiscard]] double LinearForecast(double monthToDate,
@@ -191,14 +193,20 @@ std::optional<CodexCostSummary> CalculateCodexCostSummary(
         const bool validCachedCost = event.cachedEstimatedUsd.has_value() &&
                                      std::isfinite(*event.cachedEstimatedUsd) &&
                                      *event.cachedEstimatedUsd >= 0.0;
-        const double cost = validCachedCost
+        // The cached amount and its priced-token denominator are one atomic
+        // estimate. Accepting only one side can turn an invalid cache entry
+        // into an apparently complete zero-dollar sample.
+        const bool validCachedPricing =
+            validCachedCost && event.cachedPricedTokens.has_value() &&
+            *event.cachedPricedTokens >= 0;
+        const double cost = validCachedPricing
                                 ? *event.cachedEstimatedUsd
                                 : (estimate.available ? estimate.estimatedUsd
                                                       : 0.0);
 
         std::int64_t eventPricedTokens = 0;
         long double exactEventPricedTokens = 0.0L;
-        if (event.cachedPricedTokens.has_value()) {
+        if (validCachedPricing) {
             eventPricedTokens = std::min(
                 tokens, NonNegative(*event.cachedPricedTokens));
             exactEventPricedTokens =
@@ -207,18 +215,6 @@ std::optional<CodexCostSummary> CalculateCodexCostSummary(
         } else if (estimate.available) {
             eventPricedTokens = tokens;
             exactEventPricedTokens = eventTokenCount.exact;
-        }
-
-        AddToPeriod(tokens, cost, output.last30Days, output.saturated);
-        if (eventDay >= referenceDay - 6) {
-            AddToPeriod(tokens, cost, output.last7Days, output.saturated);
-        }
-        if (eventDay == referenceDay) {
-            AddToPeriod(tokens, cost, output.today, output.saturated);
-        }
-        if (eventDate.year == reference.year &&
-            eventDate.month == reference.month) {
-            AddToPeriod(tokens, cost, output.monthToDate, output.saturated);
         }
 
         const std::string normalizedModel =
@@ -230,6 +226,22 @@ std::optional<CodexCostSummary> CalculateCodexCostSummary(
         SaturatingAdd(tokens, tokensByModel[modelKey], output.saturated);
         SaturatingAdd(eventPricedTokens, output.pricedTokens,
                       output.saturated);
+
+        AddToPeriod(tokens, cost, eventPricedTokens,
+                    output.last30Days, output.saturated);
+        if (eventDay >= referenceDay - 6) {
+            AddToPeriod(tokens, cost, eventPricedTokens,
+                        output.last7Days, output.saturated);
+        }
+        if (eventDay == referenceDay) {
+            AddToPeriod(tokens, cost, eventPricedTokens,
+                        output.today, output.saturated);
+        }
+        if (eventDate.year == reference.year &&
+            eventDate.month == reference.month) {
+            AddToPeriod(tokens, cost, eventPricedTokens,
+                        output.monthToDate, output.saturated);
+        }
         coverageTokens += eventTokenCount.exact;
         coveragePricedTokens += exactEventPricedTokens;
         if (!std::isfinite(coverageTokens) ||

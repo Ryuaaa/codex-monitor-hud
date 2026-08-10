@@ -978,7 +978,7 @@ std::wstring BuildTokenCostCardText(const AppState& state) {
     }
 
     if (local.available) {
-        output << L"\r\n计价覆盖：" << std::fixed << std::setprecision(0)
+        output << L"\r\n本机计价样本覆盖：" << std::fixed << std::setprecision(0)
                << summary.pricedTokenPercent << L'%';
         if (!summary.topModel.empty()) {
             output << L"  |  主模型："
@@ -997,7 +997,27 @@ std::wstring BuildTokenCostCardText(const AppState& state) {
         }
     }
     if (summary.saturated) output << L"\r\n数值达到显示上限";
-    output << L"\r\nAPI等价费用估算";
+    const auto UsesOfficial = [](const auto& period) {
+        return period.tokensAvailable && period.usedOfficialTokens;
+    };
+    const auto UsesLocal = [](const auto& period) {
+        return period.tokensAvailable && !period.usedOfficialTokens;
+    };
+    const bool anyOfficial =
+        UsesOfficial(summary.today) || UsesOfficial(summary.last7Days) ||
+        UsesOfficial(summary.last30Days) ||
+        UsesOfficial(summary.monthToDate);
+    const bool anyLocal =
+        UsesLocal(summary.today) || UsesLocal(summary.last7Days) ||
+        UsesLocal(summary.last30Days) || UsesLocal(summary.monthToDate);
+    if (anyOfficial && anyLocal) {
+        output << L"\r\nToken：官方优先，缺失周期用本机样本"
+                  L" · 费用：本机样本API等价估算";
+    } else if (anyOfficial) {
+        output << L"\r\nToken：官方汇总 · 费用：本机样本API等价估算";
+    } else {
+        output << L"\r\nToken与费用：本机样本API等价估算";
+    }
     return output.str();
 }
 
@@ -1421,12 +1441,14 @@ void UpdateSamplingDemand(HWND window, AppState& state) {
 void UpdateCodexDemand(HWND, AppState& state) {
     const bool forecastEnabled = !state.windowMinimized && !state.windowHidden &&
                                  CurrentPageShowsQuotaForecast(state);
+    bool costEnabled = false;
+    bool costDemandChanged = false;
     if (state.codexWorkerAvailable) {
         state.codexWorker.SetQuotaForecastEnabled(forecastEnabled);
-        const bool costEnabled =
-            !state.windowMinimized && !state.windowHidden &&
-            CurrentPageShowsCostHistory(state);
-        state.codexWorker.SetCostHistoryEnabled(costEnabled);
+        costEnabled = !state.windowMinimized && !state.windowHidden &&
+                      CurrentPageShowsCostHistory(state);
+        costDemandChanged =
+            state.codexWorker.SetCostHistoryEnabled(costEnabled);
     }
     const bool shouldRefresh =
         !state.windowMinimized && !state.windowHidden &&
@@ -1447,6 +1469,12 @@ void UpdateCodexDemand(HWND, AppState& state) {
         return;
     }
     if (!state.codexPaused) {
+        // When another Codex card already keeps the worker active, enabling
+        // the cost card must not wait for the next five-minute refresh. This
+        // is a one-time user-triggered refresh, not an extra periodic poll.
+        if (costEnabled && costDemandChanged) {
+            state.codexWorker.RequestRefresh();
+        }
         UpdateStatusText(state);
         return;
     }

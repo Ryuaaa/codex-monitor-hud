@@ -9,10 +9,13 @@
 
 namespace codex_monitor::codex {
 
+inline constexpr double kMinimumCodexCostPricingCoveragePercent = 20.0;
+
 struct CodexHybridPeriodSummary {
     bool tokensAvailable = false;
     std::int64_t tokens = 0;
     bool usedOfficialTokens = false;
+    double pricingCoveragePercent = 0.0;
 
     // API-equivalent estimate inferred from the same period's local average
     // price per token. nullopt means there was no usable local price sample.

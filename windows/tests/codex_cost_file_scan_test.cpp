@@ -186,6 +186,8 @@ void TestCandidateDiscoveryRetentionAndPrivacy() {
             "compressed and expired archive coverage must be accounted for");
     Require(result.coverageIncomplete,
             "an unsupported compressed rollout must mark coverage incomplete");
+    Require(!result.discoveryIncomplete,
+            "known compressed content must not make file discovery incomplete");
     Require(result.bytesRead <=
                 codex_monitor::codex::kCodexCostMaximumScanBytes,
             "scan must stay inside the global byte budget");
@@ -346,6 +348,26 @@ void TestUnsafeRootsAndCandidateLinks() {
     }
 }
 
+void TestCancellationStopsAVisibleScan() {
+    TemporaryDirectory temporary;
+    const std::int64_t now = NowUnixSeconds();
+    const auto path = CurrentSessionDirectory(temporary.path(), now) /
+                      "rollout-cancel.jsonl";
+    WriteFile(path, std::string(256 * 1024, 'x') + "\n");
+    auto request = Request(temporary.path(), now);
+    int checks = 0;
+    request.shouldCancel = [&checks] {
+        return ++checks >=
+               static_cast<int>(codex_monitor::codex::kCodexCostHistoryDays) +
+                   5;
+    };
+    const auto result = ScanCodexCostRolloutFiles(request);
+    Require(result.status == CodexCostFileScanStatus::kCancelled &&
+                result.coverageIncomplete &&
+                result.bytesRead == 64 * 1024,
+            "a hidden-card cancellation must stop inside the 64 KiB read loop");
+}
+
 }  // namespace
 
 int main() {
@@ -356,6 +378,7 @@ int main() {
     TestBudgetBoundaryAndResume();
     TestOversizedLineIsBoundedAndCanResume();
     TestUnsafeRootsAndCandidateLinks();
+    TestCancellationStopsAVisibleScan();
     std::cout << "codex_cost_file_scan_test: pass\n";
     return 0;
 }

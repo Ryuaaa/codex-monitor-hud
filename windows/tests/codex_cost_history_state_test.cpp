@@ -116,12 +116,59 @@ void TestFailureRetainsLastGoodAggregate() {
            "a failed scan retains the last good unknown-model aggregate");
 }
 
+void TestPartialDiscoveryDoesNotEvictLastGoodFile() {
+    CodexCostHistoryState state;
+    CodexCostFileScanResult first;
+    first.status = CodexCostFileScanStatus::kOk;
+    first.files = {Cursor("temporarily-missing", 100)};
+    first.lines = {Line(
+        "temporarily-missing", 0,
+        R"({"timestamp":"2026-02-02T02:01:00Z","type":"event_msg","payload":{"type":"token_count","info":{"model":"gpt-5.6-luna","last_token_usage":{"input_tokens":10,"output_tokens":2}}}})")};
+    const auto initial = state.Apply(first, FixedDate);
+    Expect(initial.events.size() == 1, "the baseline file must be retained");
+
+    CodexCostFileScanResult partial;
+    partial.status = CodexCostFileScanStatus::kOk;
+    partial.discoveryIncomplete = true;
+    partial.coverageIncomplete = true;
+    const auto retained = state.Apply(partial, FixedDate);
+    Expect(retained.events.size() == 1 && state.Cursors().size() == 1,
+           "partial discovery must not interpret a missing file as deletion");
+
+    CodexCostFileScanResult complete;
+    complete.status = CodexCostFileScanStatus::kOk;
+    const auto evicted = state.Apply(complete, FixedDate);
+    Expect(evicted.events.empty() && state.Cursors().empty(),
+           "complete discovery may evict a file that is truly absent");
+}
+
+void TestContentGapDoesNotPreventDeletedFileEviction() {
+    CodexCostHistoryState state;
+    CodexCostFileScanResult first;
+    first.status = CodexCostFileScanStatus::kOk;
+    first.files = {Cursor("deleted-before-content-gap", 100)};
+    first.lines = {Line(
+        "deleted-before-content-gap", 0,
+        R"({"timestamp":"2026-02-02T02:01:00Z","type":"event_msg","payload":{"type":"token_count","info":{"model":"gpt-5.6-luna","last_token_usage":{"input_tokens":10,"output_tokens":2}}}})")};
+    Expect(state.Apply(first, FixedDate).events.size() == 1,
+           "the content-gap fixture must retain one baseline event");
+
+    CodexCostFileScanResult contentGap;
+    contentGap.status = CodexCostFileScanStatus::kOk;
+    contentGap.coverageIncomplete = true;
+    const auto evicted = state.Apply(contentGap, FixedDate);
+    Expect(evicted.events.empty() && state.Cursors().empty(),
+           "compressed or oversized content gaps must not retain a deleted file forever");
+}
+
 }  // namespace
 
 int main() {
     TestIncrementalCompactionAndFileNamespace();
     TestTruncationAndRemovedFiles();
     TestFailureRetainsLastGoodAggregate();
+    TestPartialDiscoveryDoesNotEvictLastGoodFile();
+    TestContentGapDoesNotPreventDeletedFileEviction();
     std::cout << "codex_cost_history_state_test: pass\n";
     return 0;
 }

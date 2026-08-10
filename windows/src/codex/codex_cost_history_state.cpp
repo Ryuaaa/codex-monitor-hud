@@ -91,11 +91,18 @@ CodexCostHistoryApplyResult CodexCostHistoryState::Apply(
         }
         existing->cursor = cursor;
     }
-    files_.erase(
-        std::remove_if(files_.begin(), files_.end(), [&present](const FileState& file) {
-            return present.find(file.cursor.fileId) == present.end();
-        }),
-        files_.end());
+    // A partial discovery cannot distinguish deletion from a temporary
+    // permission or enumeration failure. Preserve the last good rows until a
+    // complete discovery confirms that a file is gone.
+    if (!scan.discoveryIncomplete) {
+        files_.erase(
+            std::remove_if(
+                files_.begin(), files_.end(),
+                [&present](const FileState& file) {
+                    return present.find(file.cursor.fileId) == present.end();
+                }),
+            files_.end());
+    }
 
     for (const CodexCostFileLine& line : scan.lines) {
         auto file = std::find_if(
