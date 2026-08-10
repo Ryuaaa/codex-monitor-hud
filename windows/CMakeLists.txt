@@ -100,6 +100,17 @@ if(BUILD_TESTING)
     add_test(NAME windows_codex_cost_summary
         COMMAND CodexMonitorCodexCostSummaryTests)
 
+    add_executable(CodexMonitorCodexCostHybridTests
+        src/codex/codex_cost_model.cpp
+        src/codex/codex_cost_summary.cpp
+        src/codex/codex_cost_hybrid.cpp
+        src/codex/codex_usage_math.cpp
+        tests/codex_cost_hybrid_test.cpp
+    )
+    configure_codex_monitor_target(CodexMonitorCodexCostHybridTests)
+    add_test(NAME windows_codex_cost_hybrid
+        COMMAND CodexMonitorCodexCostHybridTests)
+
     add_executable(CodexMonitorQuotaForecastTests
         src/codex/quota_forecast.cpp
         tests/quota_forecast_test.cpp
