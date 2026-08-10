@@ -13,6 +13,7 @@ sign_identity="${CODE_SIGN_IDENTITY:--}"
 /bin/rm -rf "$app_dir"
 /bin/mkdir -p "$macos_dir" "$resources_dir"
 /usr/bin/xcrun clang -O2 -fobjc-arc -Wall -Wextra -Werror \
+  -mmacosx-version-min=15.0 \
   -arch arm64 -arch x86_64 \
   -framework Cocoa \
   "$source_dir/overlay/CodexMonitorHUD.m" \

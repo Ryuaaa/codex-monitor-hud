@@ -2177,7 +2177,7 @@ static int RunLogicDiagnostic(void) {
     NSString *initialScanText = [@[largeModelLine, tokenLine, @""] componentsJoinedByString:@"\n"];
     [initialScanText writeToURL:scanFile atomically:YES encoding:NSUTF8StringEncoding error:nil];
     NSDictionary *firstScan = CodexScanCostHistoryAtHome(scanRoot, scanCache, costNow);
-    NSString *secondTokenLine = @"{\"timestamp\":\"2026-02-02T02:02:00Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"last_token_usage\":{\"input_tokens\":100000,\"cached_input_tokens\":20000,\"output_tokens\":10000}}}}";
+    NSString *secondTokenLine = @"{\"timestamp\":\"2026-02-02T02:02:00Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"last_token_usage\":{\"input_tokens\":200000,\"cached_input_tokens\":20000,\"output_tokens\":10000}}}}";
     NSFileHandle *scanHandle = [NSFileHandle fileHandleForWritingToURL:scanFile error:nil];
     [scanHandle seekToEndOfFile];
     [scanHandle writeData:[[secondTokenLine stringByAppendingString:@"\n"] dataUsingEncoding:NSUTF8StringEncoding]];
@@ -2188,10 +2188,16 @@ static int RunLogicDiagnostic(void) {
     [scanHandle writeData:[@"{\"timestamp\":\"2026-02-02T02:03:00Z\"" dataUsingEncoding:NSUTF8StringEncoding]];
     [scanHandle closeFile];
     NSDictionary *partialLineScan = CodexScanCostHistoryAtHome(scanRoot, scanCache, costNow);
-    BOOL incrementalScanPass = [firstScan[@"thirtyDayTokens"] longLongValue] == 110000 && [firstScan[@"topModel"] isEqualToString:@"gpt-5.6-terra"] && [secondScan[@"thirtyDayTokens"] longLongValue] == 220000 && [secondScan[@"eventCount"] integerValue] == 2 && ![partialLineScan[@"scanIncomplete"] boolValue] && [partialLineScan[@"thirtyDayTokens"] longLongValue] == 220000;
+    NSData *compactedCacheData = [NSData dataWithContentsOfURL:scanCache];
+    NSDictionary *compactedCache = compactedCacheData ? [NSJSONSerialization JSONObjectWithData:compactedCacheData options:0 error:nil] : nil;
+    NSDictionary *compactedEntry = [[compactedCache[@"files"] allValues] firstObject];
+    NSString *compactedFileKey = [[compactedCache[@"files"] allKeys] firstObject];
+    NSDictionary *compactedEvent = [compactedEntry[@"events"] firstObject];
+    BOOL cacheCompactionPass = [compactedCache[@"version"] integerValue] == 3 && compactedFileKey.length == 64 && [compactedEntry[@"events"] count] == 1 && compactedEntry[@"state"][@"occurrences"] == nil && fabs([compactedEvent[@"x"] doubleValue] - 0.768) < 0.000001;
+    BOOL incrementalScanPass = [firstScan[@"thirtyDayTokens"] longLongValue] == 110000 && [firstScan[@"topModel"] isEqualToString:@"gpt-5.6-terra"] && [secondScan[@"thirtyDayTokens"] longLongValue] == 320000 && fabs([secondScan[@"thirtyDayCost"] doubleValue] - 0.768) < 0.000001 && [secondScan[@"eventCount"] integerValue] == 1 && ![partialLineScan[@"scanIncomplete"] boolValue] && [partialLineScan[@"thirtyDayTokens"] longLongValue] == 320000;
     [NSFileManager.defaultManager removeItemAtURL:scanRoot error:nil];
     BOOL calendarPass = currentPass && delayedPass && emptyPass;
-    BOOL pass = calendarPass && cpuTimebasePass && memoryFormulaPass && activityPass && persistedCwdPass && migrationFallbackPass && costParserPass && costPricingPass && costDedupPass && costWatermarkPass && quotaForecastPass && serviceStatusPass && incrementalScanPass;
+    BOOL pass = calendarPass && cpuTimebasePass && memoryFormulaPass && activityPass && persistedCwdPass && migrationFallbackPass && costParserPass && costPricingPass && costDedupPass && costWatermarkPass && quotaForecastPass && serviceStatusPass && incrementalScanPass && cacheCompactionPass;
     printf("calendar_usage_test=%s\n", calendarPass ? "pass" : "fail");
     printf("cpu_timebase_test=%s\n", cpuTimebasePass ? "pass" : "fail");
     printf("memory_used_formula_test=%s\n", memoryFormulaPass ? "pass" : "fail");
@@ -2205,6 +2211,7 @@ static int RunLogicDiagnostic(void) {
     printf("codex_quota_forecast_test=%s\n", quotaForecastPass ? "pass" : "fail");
     printf("openai_service_status_parser_test=%s\n", serviceStatusPass ? "pass" : "fail");
     printf("codex_cost_incremental_scan_test=%s\n", incrementalScanPass ? "pass" : "fail");
+    printf("codex_cost_cache_compaction_test=%s\n", cacheCompactionPass ? "pass" : "fail");
     return pass ? 0 : 4;
 }
 

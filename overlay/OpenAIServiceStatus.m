@@ -53,6 +53,21 @@ NSDictionary<NSString *, id> *HUDOpenAIServiceStatusFromJSONData(NSData *data) {
     };
 }
 
+static NSData *HUDOpenAIServiceStatusViaSystemCurl(NSURL *url) {
+    if (!url) return nil;
+    NSTask *task = [NSTask new];
+    task.executableURL = [NSURL fileURLWithPath:@"/usr/bin/curl"];
+    task.arguments = @[@"--fail", @"--silent", @"--show-error", @"--max-time", @"8", @"--header", @"Accept: application/json", @"--user-agent", @"Codex-Monitor-HUD", url.absoluteString];
+    NSPipe *output = [NSPipe pipe];
+    task.standardOutput = output;
+    task.standardError = [NSFileHandle fileHandleWithNullDevice];
+    if (![task launchAndReturnError:nil]) return nil;
+    NSData *data = [output.fileHandleForReading readDataToEndOfFile];
+    [task waitUntilExit];
+    if (task.terminationStatus != 0) return nil;
+    return data.length > 0 ? data : nil;
+}
+
 @implementation HUDOpenAIServiceStatusSnapshot
 @end
 
@@ -79,12 +94,13 @@ NSDictionary<NSString *, id> *HUDOpenAIServiceStatusFromJSONData(NSData *data) {
     [request setValue:@"application/json" forHTTPHeaderField:@"Accept"];
     __weak typeof(self) weakSelf = self;
     self.task = [NSURLSession.sharedSession dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+        NSHTTPURLResponse *http = [response isKindOfClass:NSHTTPURLResponse.class] ? (NSHTTPURLResponse *)response : nil;
+        NSDictionary<NSString *, id> *parsed = !error && http.statusCode == 200 ? HUDOpenAIServiceStatusFromJSONData(data) : @{};
+        if (parsed.count == 0) parsed = HUDOpenAIServiceStatusFromJSONData(HUDOpenAIServiceStatusViaSystemCurl(url));
         dispatch_async(dispatch_get_main_queue(), ^{
             typeof(self) strongSelf = weakSelf;
             if (!strongSelf) return;
             strongSelf.task = nil;
-            NSHTTPURLResponse *http = [response isKindOfClass:NSHTTPURLResponse.class] ? (NSHTTPURLResponse *)response : nil;
-            NSDictionary<NSString *, id> *parsed = !error && http.statusCode == 200 ? HUDOpenAIServiceStatusFromJSONData(data) : @{};
             if (parsed.count == 0) {
                 strongSelf.snapshot.errorText = strongSelf.snapshot.available ? @"更新失败，显示上次状态" : @"官方状态页暂不可达";
             } else {

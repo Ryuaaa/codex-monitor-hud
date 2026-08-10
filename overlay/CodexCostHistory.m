@@ -1,10 +1,11 @@
 #import "CodexCostHistory.h"
+#import <CommonCrypto/CommonDigest.h>
 #import <math.h>
 
 static NSInteger const CodexCostHistoryDays = 30;
 static unsigned long long const CodexCostScanBudgetBytes = 64ULL * 1024ULL * 1024ULL;
 static NSUInteger const CodexCostMaxRetainedLineBytes = 512 * 1024;
-static NSInteger const CodexCostCacheVersion = 2;
+static NSInteger const CodexCostCacheVersion = 3;
 static NSString *const CodexCostPricingVersion = @"OpenAI 2026-08-08";
 
 static NSDate *CodexCostParseTimestamp(id value) {
@@ -40,6 +41,15 @@ static unsigned long long CodexStableHash(NSString *text) {
         hash *= 1099511628211ULL;
     }
     return hash;
+}
+
+static NSString *CodexPathCacheKey(NSString *path) {
+    NSData *data = [path ?: @"" dataUsingEncoding:NSUTF8StringEncoding] ?: NSData.data;
+    unsigned char digest[CC_SHA256_DIGEST_LENGTH];
+    CC_SHA256(data.bytes, (CC_LONG)data.length, digest);
+    NSMutableString *result = [NSMutableString stringWithCapacity:CC_SHA256_DIGEST_LENGTH * 2];
+    for (NSUInteger index = 0; index < CC_SHA256_DIGEST_LENGTH; index++) [result appendFormat:@"%02x", digest[index]];
+    return result;
 }
 
 static NSString *CodexNormalizedCostModel(NSString *raw) {
@@ -216,6 +226,43 @@ NSDictionary<NSString *, id> *CodexCostEventsFromJSONLLines(NSArray<NSString *> 
     return @{ @"events": events, @"state": state };
 }
 
+static NSArray<NSDictionary<NSString *, id> *> *CodexCompactedCostEvents(NSArray<NSDictionary<NSString *, id> *> *events,
+                                                                          NSString *sourceKey) {
+    NSMutableDictionary<NSString *, NSMutableDictionary<NSString *, id> *> *rows = [NSMutableDictionary dictionary];
+    for (NSDictionary<NSString *, id> *event in events ?: @[]) {
+        NSString *day = [event[@"d"] isKindOfClass:NSString.class] ? event[@"d"] : nil;
+        NSString *model = [event[@"m"] isKindOfClass:NSString.class] ? event[@"m"] : @"unknown";
+        if (day.length == 0) continue;
+        NSString *groupKey = [NSString stringWithFormat:@"%@\n%@", day, model];
+        NSMutableDictionary<NSString *, id> *row = rows[groupKey];
+        if (!row) {
+            NSString *fingerprint = [NSString stringWithFormat:@"compact-%016llx-%016llx", CodexStableHash(sourceKey ?: @""), CodexStableHash(groupKey)];
+            row = [@{ @"k": fingerprint, @"d": day, @"m": model, @"i": @0LL, @"c": @0LL, @"w": @0LL, @"o": @0LL, @"x": @0.0, @"p": @0LL } mutableCopy];
+            rows[groupKey] = row;
+        }
+        for (NSString *tokenKey in @[@"i", @"c", @"w", @"o"]) {
+            row[tokenKey] = @([row[tokenKey] longLongValue] + MAX(0LL, [event[tokenKey] longLongValue]));
+        }
+        long long eventTokens = MAX(0LL, [event[@"i"] longLongValue]) + MAX(0LL, [event[@"o"] longLongValue]);
+        NSNumber *storedCost = [event[@"x"] isKindOfClass:NSNumber.class] ? event[@"x"] : nil;
+        NSNumber *storedPricedTokens = [event[@"p"] isKindOfClass:NSNumber.class] ? event[@"p"] : nil;
+        if (storedCost && storedPricedTokens) {
+            row[@"x"] = @([row[@"x"] doubleValue] + storedCost.doubleValue);
+            row[@"p"] = @([row[@"p"] longLongValue] + MIN(eventTokens, MAX(0LL, storedPricedTokens.longLongValue)));
+        } else {
+            NSDictionary *estimate = CodexCostEstimateForTokens(model, [event[@"i"] longLongValue], [event[@"c"] longLongValue], [event[@"w"] longLongValue], [event[@"o"] longLongValue]);
+            if ([estimate[@"available"] boolValue]) {
+                row[@"x"] = @([row[@"x"] doubleValue] + [estimate[@"cost"] doubleValue]);
+                row[@"p"] = @([row[@"p"] longLongValue] + eventTokens);
+            }
+        }
+    }
+    return [rows.allValues sortedArrayUsingComparator:^NSComparisonResult(NSDictionary *left, NSDictionary *right) {
+        NSComparisonResult dayResult = [left[@"d"] compare:right[@"d"]];
+        return dayResult != NSOrderedSame ? dayResult : [left[@"m"] compare:right[@"m"]];
+    }];
+}
+
 static NSArray<NSURL *> *CodexCostCandidateFiles(NSURL *home, NSDate *now) {
     if (home.path.length == 0) return @[];
     NSFileManager *fm = NSFileManager.defaultManager;
@@ -346,17 +393,19 @@ NSDictionary<NSString *, id> *CodexAggregateCostEvents(NSArray<NSDictionary<NSSt
         long long tokens = MAX(0, input) + MAX(0, output);
         if (tokens == 0) continue;
         NSString *model = [event[@"m"] isKindOfClass:NSString.class] ? event[@"m"] : @"unknown";
-        NSDictionary *estimate = CodexCostEstimateForTokens(model, input, cached, write, output);
-        BOOL priced = [estimate[@"available"] boolValue];
-        double cost = priced ? [estimate[@"cost"] doubleValue] : 0;
+        NSNumber *storedCost = [event[@"x"] isKindOfClass:NSNumber.class] ? event[@"x"] : nil;
+        NSNumber *storedPricedTokens = [event[@"p"] isKindOfClass:NSNumber.class] ? event[@"p"] : nil;
+        NSDictionary *estimate = storedCost && storedPricedTokens ? nil : CodexCostEstimateForTokens(model, input, cached, write, output);
+        long long eventPricedTokens = storedPricedTokens ? MIN(tokens, MAX(0LL, storedPricedTokens.longLongValue)) : ([estimate[@"available"] boolValue] ? tokens : 0);
+        double cost = storedCost ? storedCost.doubleValue : ([estimate[@"available"] boolValue] ? [estimate[@"cost"] doubleValue] : 0);
         NSMutableDictionary *row = daily[day];
         if (!row) { row = [@{ @"tokens": @0LL, @"cost": @0.0, @"pricedTokens": @0LL } mutableCopy]; daily[day] = row; }
         row[@"tokens"] = @([row[@"tokens"] longLongValue] + tokens);
         row[@"cost"] = @([row[@"cost"] doubleValue] + cost);
-        if (priced) row[@"pricedTokens"] = @([row[@"pricedTokens"] longLongValue] + tokens);
+        row[@"pricedTokens"] = @([row[@"pricedTokens"] longLongValue] + eventPricedTokens);
         modelTokens[model] = @([modelTokens[model] longLongValue] + tokens);
         totalTokens += tokens;
-        if (priced) pricedTokens += tokens;
+        pricedTokens += eventPricedTokens;
     }
     long long todayTokens = 0, sevenTokens = 0, thirtyTokens = 0;
     double todayCost = 0, sevenCost = 0, thirtyCost = 0, monthCost = 0;
@@ -421,10 +470,11 @@ NSDictionary<NSString *, id> *CodexScanCostHistoryAtHome(NSURL *codexHome, NSURL
         if (![values[NSURLIsRegularFileKey] boolValue]) continue;
         unsigned long long size = [values[NSURLFileSizeKey] unsignedLongLongValue];
         NSTimeInterval mtime = [values[NSURLContentModificationDateKey] timeIntervalSince1970];
-        NSDictionary *old = [cachedFiles[file.path] isKindOfClass:NSDictionary.class] ? cachedFiles[file.path] : nil;
+        NSString *fileKey = CodexPathCacheKey(file.path);
+        NSDictionary *old = [cachedFiles[fileKey] isKindOfClass:NSDictionary.class] ? cachedFiles[fileKey] : nil;
         BOOL unchanged = old && [old[@"size"] unsignedLongLongValue] == size && fabs([old[@"mtime"] doubleValue] - mtime) < 0.001 && [old[@"complete"] boolValue];
-        if (unchanged) { newFiles[file.path] = old; continue; }
-        if (remainingBudget == 0) { if (old) newFiles[file.path] = old; incomplete = YES; continue; }
+        if (unchanged) { newFiles[fileKey] = old; continue; }
+        if (remainingBudget == 0) { if (old) newFiles[fileKey] = old; incomplete = YES; continue; }
         unsigned long long oldSize = [old[@"size"] unsignedLongLongValue];
         unsigned long long oldParsedBytes = [old[@"parsedBytes"] unsignedLongLongValue];
         BOOL append = old && oldParsedBytes > 0 && oldParsedBytes < size && size >= oldSize &&
@@ -440,8 +490,10 @@ NSDictionary<NSString *, id> *CodexScanCostHistoryAtHome(NSURL *codexHome, NSURL
         }, &complete, &reachedEnd);
         unsigned long long consumed = parsed > startOffset ? parsed - startOffset : MIN(size - startOffset, remainingBudget);
         remainingBudget = consumed >= remainingBudget ? 0 : remainingBudget - consumed;
-        NSDictionary *entry = @{ @"size": @(size), @"mtime": @(mtime), @"parsedBytes": @(parsed), @"complete": @(complete), @"state": state, @"events": events };
-        newFiles[file.path] = entry;
+        NSArray *compactedEvents = CodexCompactedCostEvents(events, fileKey);
+        [state removeObjectForKey:@"occurrences"];
+        NSDictionary *entry = @{ @"size": @(size), @"mtime": @(mtime), @"parsedBytes": @(parsed), @"complete": @(complete), @"state": state, @"events": compactedEvents };
+        newFiles[fileKey] = entry;
         if (!complete && !reachedEnd) incomplete = YES;
     }
     CodexWriteJSONObject(@{ @"version": @(CodexCostCacheVersion), @"updatedAt": @(referenceNow.timeIntervalSince1970), @"files": newFiles }, cacheURL);
