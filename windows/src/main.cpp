@@ -808,8 +808,10 @@ void OpenSettingsWindow(HWND owner, AppState& state) {
     GetWindowRect(owner, &ownerRect);
     const int width = ScaleForDpi(owner, 500);
     const int height = ScaleForDpi(owner, 390);
-    const int x = ownerRect.left + std::max(0, (ownerRect.right - ownerRect.left - width) / 2);
-    const int y = ownerRect.top + ScaleForDpi(owner, 48);
+    const int ownerWidth = static_cast<int>(ownerRect.right - ownerRect.left);
+    const int x = static_cast<int>(ownerRect.left) +
+                  std::max(0, (ownerWidth - width) / 2);
+    const int y = static_cast<int>(ownerRect.top) + ScaleForDpi(owner, 48);
     state.settingsWindow = CreateWindowExW(
         WS_EX_TOOLWINDOW, kSettingsWindowClassName, L"Codex Monitor HUD Settings",
         WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME,
@@ -981,8 +983,18 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
 
         case WM_SIZE:
             if (!state) return 0;
-            state->windowMinimized = wParam == SIZE_MINIMIZED;
-            if (!state->windowMinimized) LayoutControls(window, *state);
+            {
+                const bool wasMinimized = state->windowMinimized;
+                state->windowMinimized = wParam == SIZE_MINIMIZED;
+                if (!state->windowMinimized) {
+                    if (wasMinimized) {
+                        ClampWindowToVisibleScreens(window, *state);
+                        CaptureWindowPlacement(window, *state);
+                        PersistSettings(*state);
+                    }
+                    LayoutControls(window, *state);
+                }
+            }
             UpdateSamplingDemand(window, *state);
             return 0;
 

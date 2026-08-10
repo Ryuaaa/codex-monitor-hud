@@ -3,11 +3,17 @@
 #include <windows.h>
 #include <shlobj.h>
 
+#include <cstdint>
 #include <fstream>
 #include <iterator>
 #include <system_error>
 
 namespace codex_monitor {
+namespace {
+
+constexpr std::uintmax_t kMaximumSettingsBytes = 64 * 1024;
+
+}  // namespace
 
 std::filesystem::path DefaultSettingsPath() {
     PWSTR localAppData = nullptr;
@@ -25,6 +31,9 @@ std::filesystem::path DefaultSettingsPath() {
 
 SettingsState LoadSettingsFile(const std::filesystem::path& path) {
     if (path.empty()) return DefaultSettings();
+    std::error_code sizeError;
+    const std::uintmax_t size = std::filesystem::file_size(path, sizeError);
+    if (sizeError || size > kMaximumSettingsBytes) return DefaultSettings();
     std::ifstream input(path, std::ios::binary);
     if (!input) return DefaultSettings();
     const std::string contents((std::istreambuf_iterator<char>(input)),

@@ -165,12 +165,17 @@ def main() -> None:
         "FOLDERID_LocalAppData": "settings live in the per-user Windows data directory",
         "CodexMonitorHUD": "settings have an app-specific directory",
         "settings.ini": "settings use a deterministic filename",
+        "kMaximumSettingsBytes = 64 * 1024":
+            "a damaged settings file cannot consume unbounded memory at startup",
         "MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH":
             "settings replacement is atomic and flushed",
     }
     for token, reason in persistence_contracts.items():
         require(SETTINGS_STORE, token, reason)
     reject(SETTINGS_STORE, "GetEnvironmentVariable", "settings paths must not be environment-spliced")
+
+    require(MAIN, "if (wasMinimized)",
+            "restoring after a display change revalidates the saved window position")
 
     cmake_contracts = {
         "add_executable(CodexMonitorHUD WIN32": "the executable uses the Windows GUI subsystem",
