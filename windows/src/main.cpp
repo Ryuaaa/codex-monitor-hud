@@ -19,6 +19,7 @@
 #include "performance_diagnosis.h"
 #include "performance_worker.h"
 #include "performance_snapshot.h"
+#include "service_status_worker.h"
 #include "settings_store_win32.h"
 #include "snapshot_math.h"
 
@@ -60,6 +61,7 @@ constexpr int kSettingsNativeVisibleBaseId = 3400;
 constexpr UINT_PTR kSampleTimerId = 2001;
 constexpr UINT kSampleReadyMessage = WM_APP + 1;
 constexpr UINT kCodexReadyMessage = WM_APP + 2;
+constexpr UINT kServiceStatusReadyMessage = WM_APP + 3;
 constexpr UINT kFastSampleIntervalMs = 5000;
 constexpr ULONGLONG kSlowSampleIntervalMs = 20000;
 constexpr int kMinimumWidth = 390;
@@ -115,6 +117,12 @@ struct AppState {
     bool hasCodexRefresh = false;
     bool codexDataAvailable = false;
     bool codexLastRefreshSucceeded = false;
+    bool windowHidden = true;
+    bool serviceStatusPaused = true;
+    bool serviceStatusWorkerAvailable = false;
+    bool hasServiceStatusRefresh = false;
+    bool serviceStatusLastRefreshSucceeded = false;
+    bool serviceStatusShowingLastKnown = false;
     int contentScrollRow = 0;
     int contentScrollMaximumRow = 0;
     int contentVisibleRows = 1;
@@ -131,12 +139,18 @@ struct AppState {
     codex_monitor::codex::CodexDataState latestCodexData;
     codex_monitor::codex::AppServerRefreshReport latestCodexReport;
     std::chrono::seconds codexNextRefreshDelay{60};
+    codex_monitor::OpenAIServiceStatusWorker serviceStatusWorker;
+    std::optional<codex_monitor::OpenAIServiceStatusModel> latestServiceStatus;
+    std::optional<std::chrono::system_clock::time_point>
+        serviceStatusLastSuccessfulRefresh;
+    std::chrono::seconds serviceStatusNextRefreshDelay{60};
 };
 
 void LayoutControls(HWND window, AppState& state);
 void LayoutSettingsControls(HWND window, AppState& state);
 void UpdateSamplingDemand(HWND window, AppState& state);
 void UpdateCodexDemand(HWND window, AppState& state);
+void UpdateServiceStatusDemand(HWND window, AppState& state);
 void PersistSettings(AppState& state);
 void RefreshSettingsControls(AppState& state);
 
@@ -329,6 +343,19 @@ std::optional<std::wstring> FormatUnixLocalTime(std::int64_t seconds) {
     if (_localtime64_s(&local, &raw) != 0) return std::nullopt;
     wchar_t buffer[32]{};
     if (std::wcsftime(buffer, _countof(buffer), L"%Y-%m-%d %H:%M", &local) == 0) {
+        return std::nullopt;
+    }
+    return std::wstring(buffer);
+}
+
+std::optional<std::wstring> FormatLocalTime(
+    std::chrono::system_clock::time_point time) {
+    const std::time_t raw = std::chrono::system_clock::to_time_t(time);
+    std::tm local{};
+    if (localtime_s(&local, &raw) != 0) return std::nullopt;
+    wchar_t buffer[32]{};
+    if (std::wcsftime(buffer, _countof(buffer), L"%Y-%m-%d %H:%M", &local) ==
+        0) {
         return std::nullopt;
     }
     return std::wstring(buffer);
@@ -565,6 +592,8 @@ std::wstring_view CodexModuleHeading(codex_monitor::ModuleId id) {
             return L"CODEX ACCOUNT TOKEN USAGE";
         case codex_monitor::ModuleId::kCodexRecentTasks:
             return L"CODEX RECENT TASKS (HISTORY)";
+        case codex_monitor::ModuleId::kOpenAIServiceStatus:
+            return L"OPENAI OFFICIAL SERVICE STATUS";
         case codex_monitor::ModuleId::kSystemDiagnosis:
         case codex_monitor::ModuleId::kTargetProcessTree:
         case codex_monitor::ModuleId::kSystemResources:
@@ -583,6 +612,48 @@ std::wstring BuildCodexUnavailableText(codex_monitor::ModuleId id) {
                  L"不代表桌面版全局";
     }
     return std::wstring(CodexModuleHeading(id)) + L"\r\n" + detail;
+}
+
+std::wstring BuildServiceStatusCardText(const AppState& state) {
+    std::wostringstream output;
+    output << L"OPENAI OFFICIAL SERVICE STATUS\r\n";
+    if (state.latestServiceStatus) {
+        output << std::wstring(state.latestServiceStatus->headline.begin(),
+                               state.latestServiceStatus->headline.end())
+               << L"\r\n"
+               << std::wstring(state.latestServiceStatus->detail.begin(),
+                               state.latestServiceStatus->detail.end());
+        if (state.serviceStatusLastSuccessfulRefresh) {
+            if (const auto updated =
+                    FormatLocalTime(*state.serviceStatusLastSuccessfulRefresh)) {
+                output << L"\r\nUpdated: " << *updated;
+            }
+        }
+        if (!state.serviceStatusPaused && state.serviceStatusWorker.IsBusy()) {
+            output << L"\r\nRefreshing; showing last status";
+        } else if (state.serviceStatusShowingLastKnown) {
+            output << L"\r\nUpdate failed; showing last status";
+        } else {
+            output << L"\r\nRefresh cadence: 15 min";
+        }
+    } else if (!state.serviceStatusWorkerAvailable) {
+        output << L"Status reader unavailable";
+    } else if (!state.serviceStatusPaused && state.serviceStatusWorker.IsBusy()) {
+        output << L"Checking the official OpenAI status page";
+    } else if (state.hasServiceStatusRefresh &&
+               !state.serviceStatusLastRefreshSucceeded) {
+        const auto retryMinutes = std::max<std::int64_t>(
+            1, std::chrono::duration_cast<std::chrono::minutes>(
+                   state.serviceStatusNextRefreshDelay).count());
+        output << L"Official status temporarily unavailable\r\nRetry in "
+               << retryMinutes << L" min";
+    } else if (state.serviceStatusPaused) {
+        output << L"Refresh paused while this module is not visible";
+    } else {
+        output << L"Waiting for the official OpenAI status page";
+    }
+    output << L"\r\nSource: status.openai.com";
+    return output.str();
 }
 
 const codex_monitor::codex::RateLimitWindow* SelectQuotaWindow(
@@ -761,6 +832,8 @@ std::wstring BuildCodexCardText(codex_monitor::ModuleId id,
             return BuildTokenUsageCardText(state);
         case codex_monitor::ModuleId::kCodexRecentTasks:
             return BuildRecentTasksCardText(state);
+        case codex_monitor::ModuleId::kOpenAIServiceStatus:
+            return BuildServiceStatusCardText(state);
         case codex_monitor::ModuleId::kSystemDiagnosis:
         case codex_monitor::ModuleId::kTargetProcessTree:
         case codex_monitor::ModuleId::kSystemResources:
@@ -790,6 +863,8 @@ std::wstring BuildModuleCardText(codex_monitor::ModuleId id,
         case codex_monitor::ModuleId::kCodexAccountTokenUsage:
         case codex_monitor::ModuleId::kCodexRecentTasks:
             return BuildCodexUnavailableText(id);
+        case codex_monitor::ModuleId::kOpenAIServiceStatus:
+            return L"OPENAI OFFICIAL SERVICE STATUS\r\nWaiting for official status";
     }
     return L"Unavailable module";
 }
@@ -823,6 +898,17 @@ void UpdateCodexCards(AppState& state) {
     }
 }
 
+void UpdateServiceStatusCards(AppState& state) {
+    const std::wstring text = BuildServiceStatusCardText(state);
+    for (const ModuleViews& views : state.moduleViews) {
+        const codex_monitor::ModuleDefinition& definition =
+            codex_monitor::ModuleRegistry()[codex_monitor::ModuleIndex(views.id)];
+        if (!definition.requiresServiceStatus) continue;
+        SetWindowTextW(views.homeCard, text.c_str());
+        SetWindowTextW(views.nativeCard, text.c_str());
+    }
+}
+
 bool NativePageNeedsPerformanceData(const codex_monitor::SettingsState& settings,
                                     codex_monitor::Page page) {
     for (codex_monitor::ModuleId id :
@@ -839,6 +925,18 @@ bool NativePageNeedsCodexData(const codex_monitor::SettingsState& settings,
          codex_monitor::VisibleModulesForNativePage(settings, page)) {
         if (codex_monitor::ModuleRegistry()[codex_monitor::ModuleIndex(id)]
                 .requiresCodexData) return true;
+    }
+    return false;
+}
+
+bool NativePageNeedsServiceStatus(const codex_monitor::SettingsState& settings,
+                                  codex_monitor::Page page) {
+    for (codex_monitor::ModuleId id :
+         codex_monitor::VisibleModulesForNativePage(settings, page)) {
+        if (codex_monitor::ModuleRegistry()[codex_monitor::ModuleIndex(id)]
+                .requiresServiceStatus) {
+            return true;
+        }
     }
     return false;
 }
@@ -868,42 +966,83 @@ bool CurrentPageNeedsCodexData(const AppState& state) {
     return false;
 }
 
+bool CurrentPageNeedsServiceStatus(const AppState& state) {
+    switch (state.settings.currentPage) {
+        case codex_monitor::Page::kHome:
+            return codex_monitor::HomeNeedsServiceStatus(state.settings);
+        case codex_monitor::Page::kCodex:
+            return NativePageNeedsServiceStatus(
+                state.settings, codex_monitor::Page::kCodex);
+        case codex_monitor::Page::kComputer:
+            return false;
+    }
+    return false;
+}
+
 void UpdateStatusText(AppState& state) {
     std::wostringstream output;
-    output << L"Always on top: " << (state.settings.alwaysOnTop ? L"On" : L"Off")
-           << L"  |  Sampler: ";
-    if (state.windowMinimized) {
-        output << L"paused while minimized";
-    } else if (!CurrentPageNeedsPerformance(state)) {
-        output << L"paused; current page has no visible performance modules";
-    } else if (state.performanceWorker.IsBusy()) {
-        output << L"refreshing in background";
-        if (state.timerActive) output << L"; 5 s fast / 20 s full";
-    } else if (state.timerActive) {
-        output << L"5 s fast / 20 s full";
-    } else {
-        output << L"timer unavailable";
+    output << L"Top: " << (state.settings.alwaysOnTop ? L"On" : L"Off");
+    const bool needsPerformance = CurrentPageNeedsPerformance(state);
+    const bool needsCodex = CurrentPageNeedsCodexData(state);
+    const bool needsService = CurrentPageNeedsServiceStatus(state);
+    if (needsPerformance) {
+        output << L"  |  System: ";
+        if (state.windowMinimized) {
+            output << L"paused";
+        } else if (state.performanceWorker.IsBusy()) {
+            output << L"refreshing";
+        } else if (state.timerActive) {
+            output << L"5 s / 20 s";
+        } else {
+            output << L"unavailable";
+        }
+        if (state.hasPerformanceSnapshot &&
+            state.latestSnapshot.unreadableProcessMetricCount > 0) {
+            output << L" (" << state.latestSnapshot.unreadableProcessMetricCount
+                   << L" metric gaps)";
+        }
     }
-    if (state.hasPerformanceSnapshot && state.latestSnapshot.unreadableProcessMetricCount > 0) {
-        output << L"  |  Metric gaps: " << state.latestSnapshot.unreadableProcessMetricCount;
+    if (needsCodex) {
+        output << L"  |  Codex: ";
+        if (state.windowMinimized || state.codexPaused) {
+            output << L"paused";
+        } else if (!state.codexWorkerAvailable) {
+            output << L"unavailable";
+        } else if (state.codexWorker.IsBusy()) {
+            output << L"refreshing";
+        } else if (!state.hasCodexRefresh) {
+            output << L"waiting";
+        } else if (!state.codexLastRefreshSucceeded) {
+            const auto retryMinutes = std::max<std::int64_t>(
+                1, std::chrono::duration_cast<std::chrono::minutes>(
+                       state.codexNextRefreshDelay).count());
+            output << retryMinutes << L" min retry";
+        } else {
+            output << L"5 min";
+        }
     }
-    output << L"  |  Codex: ";
-    if (state.windowMinimized || state.codexPaused ||
-        !CurrentPageNeedsCodexData(state)) {
-        output << L"paused";
-    } else if (!state.codexWorkerAvailable) {
-        output << L"unavailable";
-    } else if (state.codexWorker.IsBusy()) {
-        output << L"refreshing";
-    } else if (!state.hasCodexRefresh) {
-        output << L"waiting for first refresh";
-    } else if (!state.codexLastRefreshSucceeded) {
-        const auto retryMinutes = std::max<std::int64_t>(
-            1, std::chrono::duration_cast<std::chrono::minutes>(
-                   state.codexNextRefreshDelay).count());
-        output << retryMinutes << L" min retry";
-    } else {
-        output << L"5 min normal";
+    if (needsService) {
+        output << L"  |  Service: ";
+        if (state.windowMinimized || state.windowHidden ||
+            state.serviceStatusPaused) {
+            output << L"paused";
+        } else if (!state.serviceStatusWorkerAvailable) {
+            output << L"unavailable";
+        } else if (state.serviceStatusWorker.IsBusy()) {
+            output << L"refreshing";
+        } else if (!state.hasServiceStatusRefresh) {
+            output << L"waiting";
+        } else if (!state.serviceStatusLastRefreshSucceeded) {
+            const auto retryMinutes = std::max<std::int64_t>(
+                1, std::chrono::duration_cast<std::chrono::minutes>(
+                       state.serviceStatusNextRefreshDelay).count());
+            output << retryMinutes << L" min retry";
+        } else {
+            output << L"15 min";
+        }
+    }
+    if (!needsPerformance && !needsCodex && !needsService) {
+        output << L"  |  No active data modules";
     }
     SetWindowTextW(state.status, output.str().c_str());
 }
@@ -982,6 +1121,19 @@ void ApplyCodexRefresh(
     UpdateStatusText(state);
 }
 
+void ApplyServiceStatusRefresh(
+    AppState& state,
+    codex_monitor::CompletedServiceStatusRefresh completed) {
+    state.latestServiceStatus = std::move(completed.status);
+    state.serviceStatusLastSuccessfulRefresh = completed.lastSuccessfulRefresh;
+    state.serviceStatusLastRefreshSucceeded = completed.succeeded;
+    state.serviceStatusShowingLastKnown = completed.showingLastKnown;
+    state.serviceStatusNextRefreshDelay = completed.nextRefreshDelay;
+    state.hasServiceStatusRefresh = true;
+    UpdateServiceStatusCards(state);
+    UpdateStatusText(state);
+}
+
 void UpdateSamplingDemand(HWND window, AppState& state) {
     const bool shouldSample = !state.windowMinimized && CurrentPageNeedsPerformance(state);
     if (!shouldSample) {
@@ -1034,6 +1186,36 @@ void UpdateCodexDemand(HWND, AppState& state) {
     state.codexPaused = false;
     state.codexWorker.ActivateAndRefresh();
     if (!state.codexDataAvailable) UpdateCodexCards(state);
+    UpdateStatusText(state);
+}
+
+void UpdateServiceStatusDemand(HWND, AppState& state) {
+    const bool shouldRefresh = !state.windowMinimized && !state.windowHidden &&
+                               CurrentPageNeedsServiceStatus(state);
+    if (!shouldRefresh) {
+        if (!state.serviceStatusPaused && state.serviceStatusWorkerAvailable) {
+            state.serviceStatusWorker.PauseAndInvalidate();
+        }
+        state.serviceStatusPaused = true;
+        UpdateServiceStatusCards(state);
+        UpdateStatusText(state);
+        return;
+    }
+
+    if (!state.serviceStatusWorkerAvailable) {
+        state.serviceStatusPaused = false;
+        UpdateServiceStatusCards(state);
+        UpdateStatusText(state);
+        return;
+    }
+    if (!state.serviceStatusPaused) {
+        UpdateStatusText(state);
+        return;
+    }
+
+    state.serviceStatusPaused = false;
+    state.serviceStatusWorker.ActivateAndRefresh();
+    UpdateServiceStatusCards(state);
     UpdateStatusText(state);
 }
 
@@ -1122,7 +1304,8 @@ void UpdatePageVisibility(AppState& state) {
     if (isHome) {
         SetWindowTextW(state.subtitle, L"Home - selected performance and Codex modules");
     } else if (isCodex) {
-        SetWindowTextW(state.subtitle, L"Codex - local read-only data modules");
+        SetWindowTextW(state.subtitle,
+                       L"Codex - read-only data and official service status");
     } else {
         SetWindowTextW(state.subtitle, L"Computer performance - Windows native metrics");
     }
@@ -1257,7 +1440,9 @@ bool CreateControls(HWND window, AppState& state) {
         views.id = definition.id;
         const std::wstring initialText = definition.requiresPerformanceSampling
             ? L"Starting sampler"
-            : BuildCodexUnavailableText(definition.id);
+            : definition.requiresCodexData
+                ? BuildCodexUnavailableText(definition.id)
+                : BuildServiceStatusCardText(state);
         views.homeCard =
             CreateLabel(window, initialText.c_str(), SS_LEFT | WS_BORDER);
         views.nativeCard =
@@ -1362,6 +1547,7 @@ void SwitchPage(HWND window, AppState& state, codex_monitor::Page page) {
     LayoutControls(window, state);
     UpdateSamplingDemand(window, state);
     UpdateCodexDemand(window, state);
+    UpdateServiceStatusDemand(window, state);
     PersistSettings(state);
 }
 
@@ -1587,6 +1773,7 @@ LRESULT CALLBACK SettingsWindowProcedure(HWND window, UINT message,
                     LayoutControls(state->mainWindow, *state);
                     UpdateSamplingDemand(state->mainWindow, *state);
                     UpdateCodexDemand(state->mainWindow, *state);
+                    UpdateServiceStatusDemand(state->mainWindow, *state);
                     PersistSettings(*state);
                 }
                 return 0;
@@ -1608,6 +1795,7 @@ LRESULT CALLBACK SettingsWindowProcedure(HWND window, UINT message,
                     LayoutControls(state->mainWindow, *state);
                     UpdateSamplingDemand(state->mainWindow, *state);
                     UpdateCodexDemand(state->mainWindow, *state);
+                    UpdateServiceStatusDemand(state->mainWindow, *state);
                     PersistSettings(*state);
                 }
                 return 0;
@@ -1780,8 +1968,12 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             if (!state->performanceWorker.Start(window, kSampleReadyMessage)) return -1;
             state->codexWorkerAvailable =
                 state->codexWorker.Start(window, kCodexReadyMessage, "0.3.0");
+            state->serviceStatusWorkerAvailable =
+                state->serviceStatusWorker.Start(window,
+                                                 kServiceStatusReadyMessage);
             UpdateSamplingDemand(window, *state);
             UpdateCodexDemand(window, *state);
+            UpdateServiceStatusDemand(window, *state);
             return 0;
 
         case WM_COMMAND:
@@ -1840,6 +2032,18 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
                     state->codexWorker.TakeLatest();
                 if (completed && !state->codexPaused) {
                     ApplyCodexRefresh(*state, std::move(*completed));
+                } else {
+                    UpdateStatusText(*state);
+                }
+            }
+            return 0;
+
+        case kServiceStatusReadyMessage:
+            if (state) {
+                std::optional<codex_monitor::CompletedServiceStatusRefresh>
+                    completed = state->serviceStatusWorker.TakeLatest();
+                if (completed && !state->serviceStatusPaused) {
+                    ApplyServiceStatusRefresh(*state, std::move(*completed));
                 } else {
                     UpdateStatusText(*state);
                 }
@@ -1913,7 +2117,15 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             }
             UpdateSamplingDemand(window, *state);
             UpdateCodexDemand(window, *state);
+            UpdateServiceStatusDemand(window, *state);
             return 0;
+
+        case WM_SHOWWINDOW:
+            if (state) {
+                state->windowHidden = wParam == FALSE;
+                UpdateServiceStatusDemand(window, *state);
+            }
+            break;
 
         case WM_EXITSIZEMOVE:
             if (state) {
@@ -1994,6 +2206,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
                 StopSamplingTimer(window, *state);
                 state->performanceWorker.StopAndJoin();
                 state->codexWorker.StopAndJoin();
+                state->serviceStatusWorker.StopAndJoin();
                 if (state->settingsWindow) DestroyWindow(state->settingsWindow);
                 DeleteFonts(*state);
                 if (state->backgroundBrush) DeleteObject(state->backgroundBrush);

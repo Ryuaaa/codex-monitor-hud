@@ -25,6 +25,7 @@ enum class ModuleId {
     kCodexSubscriptionType,
     kCodexAccountTokenUsage,
     kCodexRecentTasks,
+    kOpenAIServiceStatus,
 };
 
 struct ModuleDefinition {
@@ -34,11 +35,12 @@ struct ModuleDefinition {
     Page nativePage;
     bool requiresPerformanceSampling;
     bool requiresCodexData;
+    bool requiresServiceStatus;
     bool defaultHomeVisible;
     bool defaultNativePageVisible;
 };
 
-constexpr std::size_t kModuleCount = 10;
+constexpr std::size_t kModuleCount = 11;
 
 struct WindowPlacement {
     int x = 0;
@@ -70,6 +72,7 @@ std::vector<ModuleId> VisibleModulesForNativePage(
     Page page);
 bool HomeNeedsPerformanceData(const SettingsState& settings);
 bool HomeNeedsCodexData(const SettingsState& settings);
+bool HomeNeedsServiceStatus(const SettingsState& settings);
 bool MoveHomeModule(SettingsState& settings, ModuleId id, int direction);
 
 std::string SerializeSettings(const SettingsState& settings);

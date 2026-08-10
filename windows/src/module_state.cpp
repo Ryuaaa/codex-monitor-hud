@@ -14,6 +14,7 @@ constexpr std::array<ModuleDefinition, kModuleCount> kRegistry{{
      Page::kComputer,
      true,
      false,
+     false,
      true,
      true},
     {ModuleId::kTargetProcessTree,
@@ -21,6 +22,7 @@ constexpr std::array<ModuleDefinition, kModuleCount> kRegistry{{
      L"Codex / ChatGPT process tree",
      Page::kComputer,
      true,
+     false,
      false,
      true,
      true},
@@ -30,6 +32,7 @@ constexpr std::array<ModuleDefinition, kModuleCount> kRegistry{{
      Page::kComputer,
      true,
      false,
+     false,
      true,
      true},
     {ModuleId::kCommitAndPageFile,
@@ -38,6 +41,7 @@ constexpr std::array<ModuleDefinition, kModuleCount> kRegistry{{
      Page::kComputer,
      true,
      false,
+     false,
      true,
      true},
     {ModuleId::kTopMemoryProcesses,
@@ -45,6 +49,7 @@ constexpr std::array<ModuleDefinition, kModuleCount> kRegistry{{
      L"Top processes by memory",
      Page::kComputer,
      true,
+     false,
      false,
      true,
      true},
@@ -55,6 +60,7 @@ constexpr std::array<ModuleDefinition, kModuleCount> kRegistry{{
      false,
      true,
      false,
+     false,
      true},
     {ModuleId::kCodexWeeklyQuota,
      "codex-weekly-quota",
@@ -62,6 +68,7 @@ constexpr std::array<ModuleDefinition, kModuleCount> kRegistry{{
      Page::kCodex,
      false,
      true,
+     false,
      false,
      true},
     {ModuleId::kCodexSubscriptionType,
@@ -71,6 +78,7 @@ constexpr std::array<ModuleDefinition, kModuleCount> kRegistry{{
      false,
      true,
      false,
+     false,
      true},
     {ModuleId::kCodexAccountTokenUsage,
      "codex-account-token-usage",
@@ -79,11 +87,22 @@ constexpr std::array<ModuleDefinition, kModuleCount> kRegistry{{
      false,
      true,
      false,
+     false,
      false},
     {ModuleId::kCodexRecentTasks,
      "codex-recent-tasks",
      L"Codex recent tasks (history)",
      Page::kCodex,
+     false,
+     true,
+     false,
+     false,
+     true},
+    {ModuleId::kOpenAIServiceStatus,
+     "openai-service-status",
+     L"OpenAI official service status",
+     Page::kCodex,
+     false,
      false,
      true,
      false,
@@ -235,6 +254,13 @@ bool HomeNeedsCodexData(const SettingsState& settings) {
     return false;
 }
 
+bool HomeNeedsServiceStatus(const SettingsState& settings) {
+    for (ModuleId id : VisibleHomeModules(settings)) {
+        if (kRegistry[ModuleIndex(id)].requiresServiceStatus) return true;
+    }
+    return false;
+}
+
 bool MoveHomeModule(SettingsState& settings, ModuleId id, int direction) {
     settings.homeOrder = SanitizeHomeOrder(settings.homeOrder);
     const auto current = std::find(settings.homeOrder.begin(), settings.homeOrder.end(), id);
@@ -252,7 +278,7 @@ bool MoveHomeModule(SettingsState& settings, ModuleId id, int direction) {
 std::string SerializeSettings(const SettingsState& settings) {
     const std::vector<ModuleId> order = SanitizeHomeOrder(settings.homeOrder);
     std::ostringstream output;
-    output << "version=3\n";
+    output << "version=4\n";
     output << "page=" << PageKey(settings.currentPage) << '\n';
     output << "always_on_top=" << (settings.alwaysOnTop ? 1 : 0) << '\n';
     output << "home_order=";

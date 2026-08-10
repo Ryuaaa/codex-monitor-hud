@@ -80,6 +80,30 @@ CODEX_USAGE_TEST = (
 CODEX_WORKER_TEST = (
     WINDOWS_ROOT / "tests" / "codex_worker_test.cpp"
 ).read_text(encoding="utf-8")
+SERVICE_STATUS_MODEL = (
+    WINDOWS_ROOT / "src" / "service_status_model.cpp"
+).read_text(encoding="utf-8")
+SERVICE_STATUS_JSON = (
+    WINDOWS_ROOT / "src" / "service_status_json_win32.cpp"
+).read_text(encoding="utf-8")
+SERVICE_STATUS_FETCH = (
+    WINDOWS_ROOT / "src" / "service_status_fetch_win32.cpp"
+).read_text(encoding="utf-8")
+SERVICE_STATUS_WORKER = (
+    WINDOWS_ROOT / "src" / "service_status_worker.cpp"
+).read_text(encoding="utf-8")
+SERVICE_STATUS_WORKER_HEADER = (
+    WINDOWS_ROOT / "src" / "service_status_worker.h"
+).read_text(encoding="utf-8")
+SERVICE_STATUS_MODEL_TEST = (
+    WINDOWS_ROOT / "tests" / "service_status_model_test.cpp"
+).read_text(encoding="utf-8")
+SERVICE_STATUS_JSON_TEST = (
+    WINDOWS_ROOT / "tests" / "service_status_json_test.cpp"
+).read_text(encoding="utf-8")
+SERVICE_STATUS_WORKER_TEST = (
+    WINDOWS_ROOT / "tests" / "service_status_worker_test.cpp"
+).read_text(encoding="utf-8")
 RESOURCE_SCRIPT = (WINDOWS_ROOT / "resources" / "CodexMonitorHUD.rc").read_text(
     encoding="utf-8"
 )
@@ -291,14 +315,17 @@ def main() -> None:
         "Page nativePage": "each module declares its own native page",
         "requiresPerformanceSampling": "sampling demand is declared per module",
         "requiresCodexData": "Codex demand is independent from performance demand",
+        "requiresServiceStatus": "official service-status demand is an independent dependency",
         "nativePageVisible": "own-page visibility is independent from Home visibility",
         "kCodexFiveHourQuota": "the five-hour quota has its own module identity",
         "kCodexWeeklyQuota": "the weekly quota has its own module identity",
         "kSystemDiagnosis": "the system diagnosis has its own module identity",
+        "kOpenAIServiceStatus": "official service status has its own module identity",
         "SanitizeHomeOrder": "saved order is repaired against the current registry",
         "VisibleHomeModules": "homepage visibility is derived in the portable model",
         "VisibleModulesForNativePage": "native pages are filtered by registry metadata",
         "HomeNeedsCodexData": "homepage Codex demand follows visible modules",
+        "HomeNeedsServiceStatus": "homepage service-status demand follows visible modules",
         "MoveHomeModule": "settings reorder behavior is portable and testable",
         "SerializeSettings": "settings use an explicit whitelist serializer",
         "ParseSettings": "settings parsing has a portable boundary",
@@ -313,11 +340,13 @@ def main() -> None:
         "intentionally empty homepage": "all-hidden homepage intent is fixed",
         "unknown page must fall back to home": "damaged settings have a safe fallback",
         "off-screen saved window must return": "monitor removal recovery is fixed",
-        "TestVersionThreeRoundTripAndIndependentQuotaSwitches":
-            "the two quota switches and version 3 schema have a round-trip test",
+        "TestVersionFourRoundTripAndIndependentQuotaSwitches":
+            "the two quota switches and version 4 schema have a round-trip test",
+        "TestVersionThreeMigrationPreservesExplicitVisibility":
+            "version 3 settings retain explicit visibility when the service module is added",
         "TestVersionOneMigrationPreservesOldHomeChoices":
             "version 1 settings migrate without enabling new Home work",
-        '"version=3\\n"': "the current persisted settings schema is version 3",
+        '"version=4\\n"': "the current persisted settings schema is version 4",
         '"version=1\\n"': "the previous settings schema has an explicit migration fixture",
     }
     for token, reason in state_test_contracts.items():
@@ -599,10 +628,81 @@ def main() -> None:
     for token, reason in codex_usage_test_contracts.items():
         require(CODEX_USAGE_TEST, token, reason)
 
+    service_status_contracts = {
+        "Codex in ChatGPT Desktop":
+            "the public Statuspage component is identified explicitly",
+        "MapOpenAIServiceStatus":
+            "provider strings are mapped through a stable presentation model",
+        'kStatusHost[] = L"status.openai.com"':
+            "the network target is fixed to OpenAI's official status host",
+        'kStatusPath[] = L"/api/v2/summary.json"':
+            "the client reads only the public summary endpoint",
+        "kMaximumResponseBytes = 1024 * 1024":
+            "the public response has a strict memory bound",
+        "WINHTTP_DISABLE_COOKIES":
+            "the public status request never uses browser cookies",
+        "WINHTTP_DISABLE_AUTHENTICATION":
+            "the public status request disables automatic account authentication",
+        "WINHTTP_DISABLE_REDIRECTS":
+            "the fixed official request cannot redirect to another host",
+        "cancellationEpoch_":
+            "pause and stop invalidate an in-flight status result",
+        "kSuccessfulRefreshDelay{900}":
+            "healthy status checks use the low-burden fifteen-minute cadence",
+        "std::chrono::seconds{120}":
+            "status failures use bounded progressive backoff",
+        "retainedStatus_":
+            "a transient failure can keep the last verified status visible",
+        "resumeNotBefore_":
+            "page switching cannot bypass the low-burden refresh cadence",
+        "PostMessageW(notifyWindow, notifyMessage, 0, 0)":
+            "status completion carries no owning pointer across threads",
+    }
+    service_sources = (
+        SERVICE_STATUS_MODEL + SERVICE_STATUS_JSON + SERVICE_STATUS_FETCH +
+        SERVICE_STATUS_WORKER_HEADER + SERVICE_STATUS_WORKER
+    )
+    for token, reason in service_status_contracts.items():
+        require(service_sources, token, reason)
+    for token, reason in {
+        "TestCodexComponentMappings": "all documented Codex health values are fixed",
+        "TestOverallFallbackMappings": "missing Codex status safely falls back to overall",
+    }.items():
+        require(SERVICE_STATUS_MODEL_TEST, token, reason)
+    for token, reason in {
+        "TestOperationalSummary": "the normal public payload is parsed",
+        "TestMalformedJsonFails": "malformed public payloads stay unavailable",
+        "TestKnownFieldTypeErrorsFail":
+            "known status fields with wrong types stay unavailable",
+    }.items():
+        require(SERVICE_STATUS_JSON_TEST, token, reason)
+    for token, reason in {
+        "TestActivationRefreshesImmediatelyAndUsesSuccessCadence":
+            "visibility demand triggers one immediate status refresh",
+        "TestFailureRetainsLastSuccess":
+            "a transient status failure retains the last verified result",
+        "TestFailureBackoffCapsAndResetsAfterSuccess":
+            "the full failure backoff and recovery reset are fixed",
+        "TestResumeReusesFreshResultWithoutExtraFetch":
+            "restoring a fresh status does not trigger a duplicate request",
+        "TestPauseDiscardsInflightResultAndResumeRefreshes":
+            "hidden-module cancellation and resume are fixed",
+        "TestStopAndJoinCompletes":
+            "window teardown cannot leave the status worker behind",
+    }.items():
+        require(SERVICE_STATUS_WORKER_TEST, token, reason)
+
     main_codex_contracts = {
         "CurrentPageNeedsCodexData": "Codex work follows visible module demand",
         "HomeNeedsCodexData": "Home can request Codex independently from performance data",
         "NativePageNeedsCodexData": "the Codex native page follows its own switches",
+        "CurrentPageNeedsServiceStatus":
+            "official status work follows only a currently visible status module",
+        "UpdateServiceStatusDemand":
+            "official status lifecycle transitions share one demand gate",
+        "serviceStatusWorker.PauseAndInvalidate":
+            "hidden or minimized status cards stop future network work",
+        "WM_SHOWWINDOW": "hiding the HUD re-evaluates official status demand",
         "UpdateCodexDemand": "all demand transitions share one start/stop gate",
         "codexWorker.PauseAndInvalidate": "minimize and hidden modules stop Codex work",
         "totals->monthForecastTokens":
@@ -641,6 +741,10 @@ def main() -> None:
         raise AssertionError(
             "Codex demand must be reconsidered on startup, page/settings changes, and minimize/restore"
         )
+    if MAIN.count("UpdateServiceStatusDemand(") < 6:
+        raise AssertionError(
+            "service-status demand must be reconsidered on show, startup, page/settings, and size changes"
+        )
 
     hud_sources = cmake_call_body(CMAKE, "add_executable", "CodexMonitorHUD")
     hud_source_contracts = {
@@ -653,6 +757,14 @@ def main() -> None:
         "src/codex/codex_refresh_schedule.cpp": "Codex request coalescing is compiled into the HUD",
         "src/codex/codex_usage_math.cpp": "official daily usage math is compiled into the HUD",
         "src/codex/codex_worker.cpp": "the serial Codex worker is compiled into the HUD",
+        "src/service_status_fetch_win32.cpp":
+            "the bounded official status transport is compiled into the HUD",
+        "src/service_status_json_win32.cpp":
+            "the official status parser is compiled into the HUD",
+        "src/service_status_model.cpp":
+            "the stable status presentation model is compiled into the HUD",
+        "src/service_status_worker.cpp":
+            "the visibility-driven status worker is compiled into the HUD",
         "src/main.cpp": "the product window is compiled into the HUD",
     }
     for token, reason in hud_source_contracts.items():
@@ -661,6 +773,8 @@ def main() -> None:
     hud_libraries = cmake_call_body(CMAKE, "target_link_libraries", "CodexMonitorHUD")
     require(hud_libraries, "windowsapp",
             "the HUD itself links Windows.Data.Json rather than only its tests")
+    require(hud_libraries, "winhttp",
+            "the HUD links the documented native HTTP client library")
 
     cmake_contracts = {
         "add_executable(CodexMonitorHUD WIN32": "the executable uses the Windows GUI subsystem",
@@ -706,6 +820,18 @@ def main() -> None:
             "the background Codex worker integration test is buildable",
         "add_test(NAME windows_codex_worker":
             "the background Codex worker integration test is registered with CTest",
+        "add_executable(CodexMonitorServiceStatusModelTests":
+            "portable service-status mapping tests are buildable",
+        "add_test(NAME windows_service_status_model":
+            "portable service-status mapping tests are registered with CTest",
+        "add_executable(CodexMonitorServiceStatusJsonTests":
+            "Windows status JSON tests are buildable",
+        "add_test(NAME windows_service_status_json":
+            "Windows status JSON tests are registered with CTest",
+        "add_executable(CodexMonitorServiceStatusWorkerTests":
+            "the no-network service worker test is buildable",
+        "add_test(NAME windows_service_status_worker":
+            "the no-network service worker test is registered with CTest",
         "cxx_std_17": "the implementation has an explicit language baseline",
         "MSVC_RUNTIME_LIBRARY": "the release binary does not require a separate VC runtime install",
         "PSAPI_VERSION=1": "PSAPI names resolve consistently through Psapi.lib",
@@ -713,7 +839,8 @@ def main() -> None:
         "$<$<COMPILE_LANGUAGE:CXX>:/W4>":
             "C++ compiler flags are not forwarded to the resource compiler",
         "windowsapp": "Windows.Data.Json is linked for the official protocol parser",
-        "user32 gdi32 psapi shell32 ole32": "only documented Windows system libraries are linked",
+        "user32 gdi32 psapi shell32 ole32 winhttp windowsapp":
+            "only documented Windows system libraries are linked",
     }
     for token, reason in cmake_contracts.items():
         require(CMAKE, token, reason)

@@ -41,6 +41,14 @@ if(BUILD_TESTING)
     add_test(NAME windows_performance_diagnosis
         COMMAND CodexMonitorPerformanceDiagnosisTests)
 
+    add_executable(CodexMonitorServiceStatusModelTests
+        src/service_status_model.cpp
+        tests/service_status_model_test.cpp
+    )
+    configure_codex_monitor_target(CodexMonitorServiceStatusModelTests)
+    add_test(NAME windows_service_status_model
+        COMMAND CodexMonitorServiceStatusModelTests)
+
     add_executable(CodexMonitorSnapshotMathTests
         tests/snapshot_math_test.cpp
     )
@@ -116,6 +124,43 @@ if(WIN32)
         )
         target_link_libraries(CodexMonitorCodexJsonTests PRIVATE windowsapp)
         add_test(NAME windows_codex_json COMMAND CodexMonitorCodexJsonTests)
+
+        add_executable(CodexMonitorServiceStatusJsonTests
+            src/service_status_json_win32.cpp
+            tests/service_status_json_test.cpp
+        )
+        configure_codex_monitor_target(CodexMonitorServiceStatusJsonTests)
+        target_compile_definitions(CodexMonitorServiceStatusJsonTests PRIVATE
+            UNICODE
+            _UNICODE
+            NOMINMAX
+            _SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS
+            WINVER=0x0A00
+            _WIN32_WINNT=0x0A00
+        )
+        target_link_libraries(CodexMonitorServiceStatusJsonTests PRIVATE windowsapp)
+        add_test(NAME windows_service_status_json
+            COMMAND CodexMonitorServiceStatusJsonTests)
+
+        add_executable(CodexMonitorServiceStatusWorkerTests
+            src/service_status_worker.cpp
+            tests/service_status_worker_test.cpp
+        )
+        configure_codex_monitor_target(CodexMonitorServiceStatusWorkerTests)
+        target_compile_definitions(CodexMonitorServiceStatusWorkerTests PRIVATE
+            UNICODE
+            _UNICODE
+            NOMINMAX
+            _SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS
+            WINVER=0x0A00
+            _WIN32_WINNT=0x0A00
+        )
+        target_link_libraries(CodexMonitorServiceStatusWorkerTests PRIVATE
+            user32 windowsapp)
+        add_test(NAME windows_service_status_worker
+            COMMAND CodexMonitorServiceStatusWorkerTests)
+        set_tests_properties(windows_service_status_worker
+            PROPERTIES TIMEOUT 20)
 
         add_executable(CodexMonitorCodexAppServerClientTests
             src/codex/codex_app_server_client.cpp
@@ -202,6 +247,10 @@ if(WIN32)
         src/performance_diagnosis.cpp
         src/performance_worker.cpp
         src/sampling_schedule.cpp
+        src/service_status_fetch_win32.cpp
+        src/service_status_json_win32.cpp
+        src/service_status_model.cpp
+        src/service_status_worker.cpp
         src/settings_store_win32.cpp
         src/windows_sampler.cpp
     )
@@ -216,7 +265,7 @@ if(WIN32)
         _WIN32_WINNT=0x0A00
     )
     target_link_libraries(CodexMonitorHUD PRIVATE
-        user32 gdi32 psapi shell32 ole32 windowsapp)
+        user32 gdi32 psapi shell32 ole32 winhttp windowsapp)
 else()
     message(STATUS "Non-Windows host: configuring portable snapshot and state tests only.")
 endif()

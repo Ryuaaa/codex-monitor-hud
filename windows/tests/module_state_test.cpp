@@ -39,6 +39,8 @@ void TestNewInstallDefaultsUseRegistryPolicy() {
            "the default homepage must request performance data");
     Expect(!codex_monitor::HomeNeedsCodexData(settings),
            "new Codex modules must not silently add homepage data work");
+    Expect(!codex_monitor::HomeNeedsServiceStatus(settings),
+           "the service-status module must not add homepage network work by default");
 
     const std::vector<ModuleId> computer =
         codex_monitor::VisibleModulesForNativePage(settings, Page::kComputer);
@@ -51,20 +53,23 @@ void TestNewInstallDefaultsUseRegistryPolicy() {
             codex_monitor::ModuleRegistry()[codex_monitor::ModuleIndex(id)];
         Expect(definition.nativePage == Page::kComputer &&
                    definition.requiresPerformanceSampling &&
-                   !definition.requiresCodexData,
+                   !definition.requiresCodexData &&
+                   !definition.requiresServiceStatus,
                "every computer-page module must be a performance-only module");
     }
 
     const std::vector<ModuleId> codex =
         codex_monitor::VisibleModulesForNativePage(settings, Page::kCodex);
-    Expect(codex.size() == 4,
-           "the Codex page defaults to both quotas, subscription, and recent history");
+    Expect(codex.size() == 5,
+           "the Codex page defaults to both quotas, subscription, recent history, and service status");
     Expect(Contains(codex, ModuleId::kCodexFiveHourQuota),
            "the five-hour quota must be visible on a new Codex page");
     Expect(Contains(codex, ModuleId::kCodexWeeklyQuota),
            "the weekly quota must be visible on a new Codex page");
     Expect(Contains(codex, ModuleId::kCodexRecentTasks),
            "recent task history must be visible on a new Codex page");
+    Expect(Contains(codex, ModuleId::kOpenAIServiceStatus),
+           "OpenAI service status must be visible on a new Codex page");
     Expect(!Contains(codex, ModuleId::kCodexAccountTokenUsage),
            "account Token usage must default to off");
     Expect(codex_monitor::VisibleModulesForNativePage(settings, Page::kHome).empty(),
@@ -92,7 +97,7 @@ void TestOrderSanitizationAndMovement() {
            "the first module must not move beyond the registry boundary");
 }
 
-void TestVersionThreeRoundTripAndIndependentQuotaSwitches() {
+void TestVersionFourRoundTripAndIndependentQuotaSwitches() {
     using codex_monitor::ModuleId;
     using codex_monitor::Page;
 
@@ -109,11 +114,13 @@ void TestVersionThreeRoundTripAndIndependentQuotaSwitches() {
     settings.homeVisible[codex_monitor::ModuleIndex(ModuleId::kCodexFiveHourQuota)] = true;
     settings.nativePageVisible[
         codex_monitor::ModuleIndex(ModuleId::kCodexWeeklyQuota)] = true;
+    settings.nativePageVisible[
+        codex_monitor::ModuleIndex(ModuleId::kOpenAIServiceStatus)] = true;
     settings.windowPlacement = codex_monitor::WindowPlacement{-900, 120, 720, 640};
 
     const std::string serialized = codex_monitor::SerializeSettings(settings);
-    Expect(serialized.find("version=3\n") == 0,
-           "the settings whitelist must be serialized as version 3");
+    Expect(serialized.find("version=4\n") == 0,
+           "the settings whitelist must be serialized as version 4");
 
     const codex_monitor::SettingsState parsed = codex_monitor::ParseSettings(serialized);
     Expect(parsed.currentPage == Page::kCodex,
@@ -132,11 +139,33 @@ void TestVersionThreeRoundTripAndIndependentQuotaSwitches() {
            "the five-hour quota homepage switch must round-trip independently");
     Expect(!Contains(home, ModuleId::kCodexWeeklyQuota),
            "the weekly quota homepage switch must remain off independently");
-    Expect(nativeCodex.size() == 1 &&
-               Contains(nativeCodex, ModuleId::kCodexWeeklyQuota),
-           "the weekly quota native-page switch must round-trip independently");
+    Expect(nativeCodex.size() == 2 &&
+               Contains(nativeCodex, ModuleId::kCodexWeeklyQuota) &&
+               Contains(nativeCodex, ModuleId::kOpenAIServiceStatus),
+           "the weekly quota and service-status native-page switches must round-trip");
     Expect(!Contains(nativeCodex, ModuleId::kCodexFiveHourQuota),
            "the five-hour quota native-page switch must remain off independently");
+}
+
+void TestVersionThreeMigrationPreservesExplicitVisibility() {
+    using codex_monitor::ModuleId;
+    using codex_monitor::Page;
+
+    const codex_monitor::SettingsState migrated = codex_monitor::ParseSettings(
+        "version=3\n"
+        "page=codex\n"
+        "home_order=codex-weekly-quota,system-resources\n"
+        "home_visible=codex-weekly-quota\n"
+        "native_visible=codex-five-hour-quota,codex-weekly-quota,codex-subscription-type,codex-recent-tasks\n");
+
+    Expect(!codex_monitor::HomeNeedsServiceStatus(migrated),
+           "version 3 migration must not silently add service-status homepage work");
+    const std::vector<ModuleId> nativeCodex =
+        codex_monitor::VisibleModulesForNativePage(migrated, Page::kCodex);
+    Expect(!Contains(nativeCodex, ModuleId::kOpenAIServiceStatus),
+           "version 3 migration must preserve an explicit Codex-page selection");
+    Expect(migrated.homeOrder.size() == codex_monitor::kModuleCount,
+           "version 3 migration must append the service-status module to homepage order");
 }
 
 void TestVersionOneMigrationPreservesOldHomeChoices() {
@@ -175,12 +204,15 @@ void TestVersionOneMigrationPreservesOldHomeChoices() {
     }
     Expect(!codex_monitor::HomeNeedsCodexData(migrated),
            "sanitizing a version 1 order must not start Codex data work");
+    Expect(!codex_monitor::HomeNeedsServiceStatus(migrated),
+           "sanitizing a version 1 order must not start service-status work");
 
     const std::vector<ModuleId> nativeCodex =
         codex_monitor::VisibleModulesForNativePage(migrated, Page::kCodex);
     Expect(Contains(nativeCodex, ModuleId::kCodexFiveHourQuota) &&
                Contains(nativeCodex, ModuleId::kCodexWeeklyQuota) &&
                Contains(nativeCodex, ModuleId::kCodexRecentTasks) &&
+               Contains(nativeCodex, ModuleId::kOpenAIServiceStatus) &&
                !Contains(nativeCodex, ModuleId::kCodexAccountTokenUsage),
            "version 1 migration must apply independent Codex-page defaults");
     const std::vector<ModuleId> nativeComputer =
@@ -196,33 +228,44 @@ void TestPageFilteringAndHomeDemandGates() {
     codex_monitor::SettingsState settings = codex_monitor::DefaultSettings();
     settings.homeVisible.fill(false);
     Expect(!codex_monitor::HomeNeedsPerformanceData(settings) &&
-               !codex_monitor::HomeNeedsCodexData(settings),
-           "an intentionally empty homepage must not request either data source");
+               !codex_monitor::HomeNeedsCodexData(settings) &&
+               !codex_monitor::HomeNeedsServiceStatus(settings),
+           "an intentionally empty homepage must not request any data source");
 
     settings.homeVisible[codex_monitor::ModuleIndex(ModuleId::kSystemResources)] = true;
     Expect(codex_monitor::HomeNeedsPerformanceData(settings) &&
-               !codex_monitor::HomeNeedsCodexData(settings),
+               !codex_monitor::HomeNeedsCodexData(settings) &&
+               !codex_monitor::HomeNeedsServiceStatus(settings),
            "a performance-only homepage must request only performance data");
 
     settings.homeVisible[codex_monitor::ModuleIndex(ModuleId::kCodexWeeklyQuota)] = true;
     Expect(codex_monitor::HomeNeedsPerformanceData(settings) &&
-               codex_monitor::HomeNeedsCodexData(settings),
+               codex_monitor::HomeNeedsCodexData(settings) &&
+               !codex_monitor::HomeNeedsServiceStatus(settings),
            "a mixed homepage must request both independent data sources");
 
     settings.homeVisible[codex_monitor::ModuleIndex(ModuleId::kSystemResources)] = false;
     Expect(!codex_monitor::HomeNeedsPerformanceData(settings) &&
-               codex_monitor::HomeNeedsCodexData(settings),
+               codex_monitor::HomeNeedsCodexData(settings) &&
+               !codex_monitor::HomeNeedsServiceStatus(settings),
            "a Codex-only homepage must stop performance sampling");
+
+    settings.homeVisible[codex_monitor::ModuleIndex(ModuleId::kCodexWeeklyQuota)] = false;
+    settings.homeVisible[codex_monitor::ModuleIndex(ModuleId::kOpenAIServiceStatus)] = true;
+    Expect(!codex_monitor::HomeNeedsPerformanceData(settings) &&
+               !codex_monitor::HomeNeedsCodexData(settings) &&
+               codex_monitor::HomeNeedsServiceStatus(settings),
+           "a service-status-only homepage must request only official status data");
 
     settings.nativePageVisible.fill(true);
     const std::vector<ModuleId> computer =
         codex_monitor::VisibleModulesForNativePage(settings, Page::kComputer);
     Expect(computer.size() == 5,
-           "the computer page must filter out all five Codex modules even when enabled");
+           "the computer page must filter out all six Codex-page modules even when enabled");
     const std::vector<ModuleId> codex =
         codex_monitor::VisibleModulesForNativePage(settings, Page::kCodex);
-    Expect(codex.size() == 5,
-           "the Codex page must filter out all five computer modules even when enabled");
+    Expect(codex.size() == 6,
+           "the Codex page must include its six modules and filter out computer modules");
 }
 
 void TestMalformedSettingsFallBackSafely() {
@@ -245,9 +288,11 @@ void TestMalformedSettingsFallBackSafely() {
            "unknown homepage visibility keys must retain safe registry defaults");
     Expect(!codex_monitor::HomeNeedsCodexData(parsed),
            "damaged settings must not silently enable new Codex homepage work");
+    Expect(!codex_monitor::HomeNeedsServiceStatus(parsed),
+           "damaged settings must not silently enable service-status homepage work");
     Expect(codex_monitor::VisibleModulesForNativePage(parsed, Page::kComputer).size() == 5,
            "damaged native visibility must keep the five computer defaults");
-    Expect(codex_monitor::VisibleModulesForNativePage(parsed, Page::kCodex).size() == 4,
+    Expect(codex_monitor::VisibleModulesForNativePage(parsed, Page::kCodex).size() == 5,
            "damaged native visibility must keep safe Codex defaults");
     Expect(!parsed.windowPlacement, "an invalid window placement must be ignored");
 }
@@ -282,7 +327,8 @@ void TestWindowPlacementReturnsToAVisibleWorkArea() {
 int main() {
     TestNewInstallDefaultsUseRegistryPolicy();
     TestOrderSanitizationAndMovement();
-    TestVersionThreeRoundTripAndIndependentQuotaSwitches();
+    TestVersionFourRoundTripAndIndependentQuotaSwitches();
+    TestVersionThreeMigrationPreservesExplicitVisibility();
     TestVersionOneMigrationPreservesOldHomeChoices();
     TestPageFilteringAndHomeDemandGates();
     TestMalformedSettingsFallBackSafely();
