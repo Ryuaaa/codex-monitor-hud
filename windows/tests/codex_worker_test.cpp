@@ -24,6 +24,10 @@ using namespace std::chrono_literals;
 constexpr UINT kWorkerReadyMessage = WM_APP + 41;
 int failures = 0;
 
+void Stage(const char* value) {
+    std::cerr << "worker_test_stage=" << value << '\n';
+}
+
 void Expect(bool condition, const char* message) {
     if (condition) return;
     std::cerr << "FAIL: " << message << '\n';
@@ -132,6 +136,7 @@ void DrainRefreshMessages(HWND window) {
 }
 
 void TestSuccessfulBackgroundRefresh(HWND window) {
+    Stage("success_begin");
     ScopedEnvironmentVariable scenario(L"CODEX_FAKE_SCENARIO", L"app-success");
     CodexWorker worker;
     Expect(worker.Start(window, kWorkerReadyMessage, "test-version"),
@@ -155,10 +160,12 @@ void TestSuccessfulBackgroundRefresh(HWND window) {
                "a successful worker refresh must identify its outcome to the UI");
     }
     worker.StopAndJoin();
+    Stage("success_end");
 }
 
 void TestPauseCancelsAndResumeRefreshes(HWND window,
                                         const std::filesystem::path& executable) {
+    Stage("pause_begin");
     ScopedEnvironmentVariable scenario(L"CODEX_FAKE_SCENARIO", L"app-cancel");
     CodexWorker worker;
     Expect(worker.Start(window, kWorkerReadyMessage, "test-version"),
@@ -167,10 +174,12 @@ void TestPauseCancelsAndResumeRefreshes(HWND window,
            "the cancellation worker must queue an immediate refresh");
     Expect(WaitUntil([&] { return ProcessWithImagePathExists(executable); }, 5s),
            "the hanging fake app-server must start before pause");
+    Stage("pause_process_started");
 
     worker.PauseAndInvalidate();
     Expect(WaitUntil([&] { return !ProcessWithImagePathExists(executable); }, 5s),
            "pause must terminate the app-server job without an orphan");
+    Stage("pause_process_stopped");
     DrainRefreshMessages(window);
     Expect(!worker.TakeLatest(),
            "a result invalidated by pause must not reach the UI");
@@ -182,12 +191,15 @@ void TestPauseCancelsAndResumeRefreshes(HWND window,
     Expect(resumed && resumed->report.allMethodsCompleted() &&
                !resumed->report.failure,
            "the resumed generation must complete normally");
+    Stage("pause_resumed");
     worker.StopAndJoin();
     Expect(!ProcessWithImagePathExists(executable),
            "stopping the worker must leave no app-server process");
+    Stage("pause_end");
 }
 
 void TestFailureBackoffAndRecovery(HWND window) {
+    Stage("backoff_begin");
     ScopedEnvironmentVariable scenario(L"CODEX_FAKE_SCENARIO",
                                        L"app-single-error");
     CodexWorker worker;
@@ -199,14 +211,17 @@ void TestFailureBackoffAndRecovery(HWND window) {
     const auto first = WaitForRefresh(window, worker, 10s);
     Expect(first && !first->succeeded && first->nextRefreshDelay == 60s,
            "the first failed refresh must retry after one minute");
+    Stage("backoff_first");
     Expect(worker.RequestRefresh(), "an explicit second refresh must bypass the timer");
     const auto second = WaitForRefresh(window, worker, 10s);
     Expect(second && !second->succeeded && second->nextRefreshDelay == 120s,
            "the second consecutive failure must back off to two minutes");
+    Stage("backoff_second");
     Expect(worker.RequestRefresh(), "an explicit third refresh must bypass the timer");
     const auto third = WaitForRefresh(window, worker, 10s);
     Expect(third && !third->succeeded && third->nextRefreshDelay == 300s,
            "the third consecutive failure must back off to five minutes");
+    Stage("backoff_third");
 
     scenario.Set(L"app-success");
     Expect(worker.RequestRefresh(), "recovery must allow an immediate explicit refresh");
@@ -215,11 +230,13 @@ void TestFailureBackoffAndRecovery(HWND window) {
                recovered->nextRefreshDelay == 300s,
            "a successful refresh must reset failure backoff to normal cadence");
     worker.StopAndJoin();
+    Stage("backoff_end");
 }
 
 }  // namespace
 
 int wmain(int argc, wchar_t** argv) {
+    Stage("main_begin");
     const std::filesystem::path fakeServer =
         argc >= 2 ? std::filesystem::path(argv[1]) : std::filesystem::path{};
     const std::filesystem::path testRoot = CreateTestDirectory();
@@ -251,8 +268,10 @@ int wmain(int argc, wchar_t** argv) {
     DrainRefreshMessages(window);
     TestFailureBackoffAndRecovery(window);
 
+    Stage("cleanup_begin");
     DestroyWindow(window);
     std::filesystem::remove_all(testRoot, error);
+    Stage("cleanup_end");
     if (failures != 0) return 1;
     std::cout << "codex_worker_tests=pass\n";
     return 0;
