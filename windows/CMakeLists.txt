@@ -79,6 +79,7 @@ if(WIN32)
             UNICODE
             _UNICODE
             NOMINMAX
+            _SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS
             WINVER=0x0A00
             _WIN32_WINNT=0x0A00
         )
