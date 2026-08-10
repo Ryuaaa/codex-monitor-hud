@@ -60,6 +60,14 @@ struct RefreshResult {
     AppServerRefreshReport report;
 };
 
+struct ApartmentCleanup {
+    bool initialized = false;
+
+    ~ApartmentCleanup() {
+        if (initialized) winrt::uninit_apartment();
+    }
+};
+
 RefreshResult FailureResult(const CodexDataState& retainedData,
                             AppServerClientFailureKind failure,
                             const wchar_t* message) {
@@ -184,6 +192,10 @@ void CodexWorker::Run() {
         // remains alive and the worker retains its normal retry cadence.
     }
 
+    // Declared before the client so COM remains initialized until every
+    // thread-owned WinRT object has been destroyed, including on early return.
+    ApartmentCleanup apartmentCleanup{apartmentInitialized};
+
     // The client and its retained parsed state never leave this thread.
     CodexAppServerClient client;
     std::size_t consecutiveFailureCount = 0;
@@ -195,7 +207,6 @@ void CodexWorker::Run() {
             std::unique_lock<std::mutex> lock(mutex_);
             for (;;) {
                 if (schedule_.IsStopped()) {
-                    if (apartmentInitialized) winrt::uninit_apartment();
                     return;
                 }
 
