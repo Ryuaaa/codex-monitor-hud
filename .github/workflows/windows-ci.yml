@@ -52,11 +52,79 @@ jobs:
           if (-not (Test-Path -Path $binary -PathType Leaf)) {
             throw "Expected Windows executable was not produced: $binary"
           }
+          $bytes = [System.IO.File]::ReadAllBytes($binary)
+          if ($bytes.Length -lt 64 -or $bytes[0] -ne 0x4d -or $bytes[1] -ne 0x5a) {
+            throw "Build output is not a valid PE executable"
+          }
+          $peOffset = [System.BitConverter]::ToInt32($bytes, 0x3c)
+          if ($peOffset -lt 0 -or $peOffset + 6 -gt $bytes.Length -or
+              $bytes[$peOffset] -ne 0x50 -or $bytes[$peOffset + 1] -ne 0x45 -or
+              $bytes[$peOffset + 2] -ne 0 -or $bytes[$peOffset + 3] -ne 0) {
+            throw "Build output has an invalid PE header"
+          }
+          $machine = [System.BitConverter]::ToUInt16($bytes, $peOffset + 4)
+          if ($machine -ne 0x8664) {
+            throw "Build output is not an x64 PE executable"
+          }
+
+      - name: Create portable Windows package
+        shell: pwsh
+        run: |
+          ./windows/package-release.ps1 `
+            -BinaryPath "windows/out/build/Release/CodexMonitorHUD.exe" `
+            -OutputDirectory "windows/out/release"
+
+      - name: Verify portable package and checksum
+        shell: pwsh
+        run: |
+          $archive = "windows/out/release/CodexMonitorHUD-windows-x64.zip"
+          $checksum = "$archive.sha256"
+          if (-not (Test-Path -LiteralPath $archive -PathType Leaf)) {
+            throw "Expected Windows archive was not produced: $archive"
+          }
+          if (-not (Test-Path -LiteralPath $checksum -PathType Leaf)) {
+            throw "Expected SHA-256 file was not produced: $checksum"
+          }
+
+          $expectedHash = ((Get-Content -LiteralPath $checksum -Raw).Trim() -split '\s+')[0]
+          $actualHash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($expectedHash -ne $actualHash) {
+            throw "Windows archive SHA-256 verification failed"
+          }
+
+          $expanded = Join-Path $env:RUNNER_TEMP "codex-monitor-package-check"
+          Expand-Archive -LiteralPath $archive -DestinationPath $expanded
+          $root = Join-Path $expanded "CodexMonitorHUD-windows-x64"
+          foreach ($required in @("CodexMonitorHUD.exe", "LICENSE", "README.md")) {
+            if (-not (Test-Path -LiteralPath (Join-Path $root $required) -PathType Leaf)) {
+              throw "Windows archive is missing required file: $required"
+            }
+          }
+          $expectedFiles = @("CodexMonitorHUD.exe", "LICENSE", "README.md") | Sort-Object
+          $actualFiles = @(Get-ChildItem -LiteralPath $root -File | ForEach-Object Name | Sort-Object)
+          if (Compare-Object -ReferenceObject $expectedFiles -DifferenceObject $actualFiles) {
+            throw "Windows archive contains an unexpected file set"
+          }
+          $sourceHash = (Get-FileHash -LiteralPath "windows/out/build/Release/CodexMonitorHUD.exe" -Algorithm SHA256).Hash
+          $packagedHash = (Get-FileHash -LiteralPath (Join-Path $root "CodexMonitorHUD.exe") -Algorithm SHA256).Hash
+          if ($sourceHash -ne $packagedHash) {
+            throw "Packaged executable does not match the tested build output"
+          }
 
       - name: Upload Windows executable
         uses: actions/upload-artifact@v4
         with:
           name: CodexMonitorHUD-windows-x64-release
           path: windows/out/build/Release/CodexMonitorHUD.exe
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload portable Windows package
+        uses: actions/upload-artifact@v4
+        with:
+          name: CodexMonitorHUD-windows-x64-portable
+          path: |
+            windows/out/release/CodexMonitorHUD-windows-x64.zip
+            windows/out/release/CodexMonitorHUD-windows-x64.zip.sha256
           if-no-files-found: error
           retention-days: 14

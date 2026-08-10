@@ -6,6 +6,7 @@ from pathlib import Path
 
 
 WINDOWS_ROOT = Path(__file__).resolve().parents[1]
+REPOSITORY_ROOT = WINDOWS_ROOT.parent
 MAIN = (WINDOWS_ROOT / "src" / "main.cpp").read_text(encoding="utf-8")
 MODULE_STATE = (WINDOWS_ROOT / "src" / "module_state.cpp").read_text(encoding="utf-8")
 MODULE_STATE_HEADER = (WINDOWS_ROOT / "src" / "module_state.h").read_text(encoding="utf-8")
@@ -26,6 +27,10 @@ DIAGNOSIS_TEST = (WINDOWS_ROOT / "tests" / "performance_diagnosis_test.cpp").rea
 )
 SCHEDULE_TEST = (WINDOWS_ROOT / "tests" / "sampling_schedule_test.cpp").read_text(encoding="utf-8")
 CMAKE = (WINDOWS_ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
+PACKAGE_SCRIPT = (WINDOWS_ROOT / "package-release.ps1").read_text(encoding="utf-8")
+WINDOWS_WORKFLOW = (
+    REPOSITORY_ROOT / ".github" / "workflows" / "windows-ci.yml"
+).read_text(encoding="utf-8")
 CODEX_TYPES = (WINDOWS_ROOT / "src" / "codex" / "codex_types.h").read_text(
     encoding="utf-8"
 )
@@ -337,6 +342,39 @@ def main() -> None:
     }
     for token, reason in diagnosis_test_contracts.items():
         require(DIAGNOSIS_TEST, token, reason)
+
+    package_contracts = {
+        "Set-StrictMode -Version Latest": "packaging fails on undeclared PowerShell state",
+        "Resolve-Path -LiteralPath $BinaryPath": "the package input must exist",
+        "CodexMonitorHUD-windows-x64": "the portable package has a stable platform name",
+        "Copy-Item -LiteralPath $licensePath": "the portable package carries its license",
+        "Copy-Item -LiteralPath $readmePath": "the portable package carries Windows instructions",
+        "Compress-Archive -LiteralPath $stagingDirectory":
+            "the package preserves a single top-level directory",
+        "Get-FileHash -LiteralPath $archivePath -Algorithm SHA256":
+            "the package receives a SHA-256 checksum",
+        "[System.Text.Encoding]::ASCII": "the checksum file has deterministic text encoding",
+    }
+    for token, reason in package_contracts.items():
+        require(PACKAGE_SCRIPT, token, reason)
+
+    package_workflow_contracts = {
+        "./windows/package-release.ps1": "Windows CI creates the portable package",
+        "Build output is not an x64 PE executable":
+            "Windows CI verifies that the release binary is really x64",
+        "Windows archive SHA-256 verification failed":
+            "Windows CI independently verifies the package checksum",
+        "Expand-Archive -LiteralPath $archive":
+            "Windows CI opens the package before publishing it",
+        "Windows archive contains an unexpected file set":
+            "Windows CI fixes the portable archive contents",
+        "Packaged executable does not match the tested build output":
+            "Windows CI compares the packaged EXE with the tested EXE",
+        "CodexMonitorHUD-windows-x64-portable":
+            "Windows CI publishes the archive and checksum together",
+    }
+    for token, reason in package_workflow_contracts.items():
+        require(WINDOWS_WORKFLOW, token, reason)
 
     persistence_contracts = {
         "FOLDERID_LocalAppData": "settings live in the per-user Windows data directory",

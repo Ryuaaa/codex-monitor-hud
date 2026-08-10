@@ -89,6 +89,16 @@ ctest --test-dir windows/out/build -C Release --output-on-failure
 
 仓库的 Windows x64 CI 会执行源码契约检查、MSVC Release 编译、全部测试、EXE 存在性验证并上传临时构建产物。ARM64 尚未进入支持和发布范围。
 
+CI 还会生成 `CodexMonitorHUD-windows-x64.zip`，其中包含 EXE、许可证和本说明，并同时生成 `.zip.sha256` 校验文件。这个便携包尚未进行 Windows 代码签名，不等同于正式安装包。
+
+在 Windows 本机完成 Release 编译后，也可运行：
+
+```powershell
+./windows/package-release.ps1 `
+  -BinaryPath "windows/out/build/Release/CodexMonitorHUD.exe" `
+  -OutputDirectory "windows/out/release"
+```
+
 ## 测试范围
 
 不依赖 Windows 的源码契约与算法测试：
@@ -129,7 +139,7 @@ Windows CI 还包含以下原生集成测试：
 - 尚未在真实 Windows x64 上完成视觉/交互验收，也未与真实任务管理器和真实 Codex 账号数据做逐项对照。
 - 尚未实现网络速度、磁盘读写、历史曲线与持久化、Token 成本/预测、OpenAI 服务状态和额度通知。
 - 尚未移植颜色、透明度、角落预设，以及锁定窗口位置/大小。
-- 尚未实现登录后自动启动、检查更新/一键更新、安装包、Windows 代码签名和正式发布流程。
+- 已有 CI 便携 ZIP 与 SHA-256 校验文件；尚未实现登录后自动启动、检查更新/一键更新、安装包、Windows 代码签名和正式发布流程。
 - 尚未支持或验证 Windows ARM64。
 - 热压力仍只显示 Windows 没有统一接口，不会通过不可靠的通用传感器模拟 macOS 热压力。
 - 当前仍使用标准 Windows 标题栏；视觉细节尚未达到 macOS 版的完整等价。
