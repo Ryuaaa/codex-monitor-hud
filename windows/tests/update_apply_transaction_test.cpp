@@ -119,8 +119,12 @@ void TestPlatformVerificationBoundary() {
     };
 
 #ifdef _WIN32
+    // The hosted Windows runner can expose %TEMP% through an 8.3 alias
+    // (RUNNER~1). The production boundary intentionally rejects aliases after
+    // resolving handles, so build this fixture below CTest's canonical working
+    // directory instead of testing an unrelated alias rejection here.
     const std::filesystem::path root =
-        std::filesystem::temp_directory_path() /
+        std::filesystem::current_path() /
         ("codex-monitor-update-apply-" +
          std::to_string(static_cast<long long>(
              std::filesystem::file_time_type::clock::now()
