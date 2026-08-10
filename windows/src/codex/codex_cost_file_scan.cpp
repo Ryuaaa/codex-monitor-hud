@@ -672,7 +672,9 @@ void ReadCandidate(
             metadata.sizeBytes == old->observedSizeBytes &&
             metadata.modifiedUnixNanoseconds != old->modifiedUnixNanoseconds;
         resetForChange = truncated || sameSizeRewrite;
-        cursor.resetAfterTruncation = truncated;
+        // Both truncation and an in-place same-size rewrite invalidate the
+        // parser watermark and compacted events retained by the caller.
+        cursor.resetAfterTruncation = resetForChange;
         if (!resetForChange) {
             cursor.parsedOffsetBytes = old->parsedOffsetBytes;
             cursor.discardingOversizedLine =

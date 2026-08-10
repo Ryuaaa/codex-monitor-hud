@@ -3,6 +3,7 @@
 #include <windows.h>
 
 #include "codex_app_server_client.h"
+#include "codex_cost_summary.h"
 #include "quota_forecast.h"
 #include "codex_refresh_schedule.h"
 
@@ -31,6 +32,24 @@ struct QuotaForecastRefresh {
     bool historySaveFailed = false;
 };
 
+enum class CodexCostRefreshStatus {
+    kAvailable,
+    kCodexHomeUnavailable,
+    kScanFailed,
+    kNoTokenEvents,
+};
+
+struct CodexCostRefresh {
+    CodexCostRefreshStatus status = CodexCostRefreshStatus::kScanFailed;
+    std::optional<CodexCostSummary> localSummary;
+    bool showingLastKnown = false;
+    bool coverageIncomplete = false;
+    std::size_t skippedCompressedFiles = 0;
+    std::size_t skippedOversizedLines = 0;
+    std::size_t rejectedUnsafeEntries = 0;
+    std::size_t malformedLineCount = 0;
+};
+
 struct CompletedCodexRefresh {
     // CodexDataState is already the privacy-trimmed product model: it contains
     // no raw protocol lines, stderr, account identity, paths, thread IDs, or
@@ -38,6 +57,7 @@ struct CompletedCodexRefresh {
     CodexDataState data;
     AppServerRefreshReport report;
     std::optional<QuotaForecastRefresh> quotaForecastUpdate;
+    std::optional<CodexCostRefresh> costHistoryUpdate;
     bool succeeded = false;
     std::chrono::seconds nextRefreshDelay{60};
 };
@@ -55,6 +75,7 @@ public:
                std::string_view clientVersion,
                std::filesystem::path quotaHistoryPath = {});
     bool SetQuotaForecastEnabled(bool enabled);
+    bool SetCostHistoryEnabled(bool enabled);
     bool ActivateAndRefresh();
     bool RequestRefresh();
     void PauseAndInvalidate();
@@ -72,11 +93,13 @@ private:
     std::optional<std::chrono::steady_clock::time_point> nextAutomaticRefresh_;
     std::atomic<std::uint64_t> cancellationEpoch_{1};
     std::atomic<std::uint64_t> quotaForecastEpoch_{1};
+    std::atomic<std::uint64_t> costHistoryEpoch_{1};
     HWND completionWindow_ = nullptr;
     UINT completionMessage_ = 0;
     std::string clientVersion_;
     std::filesystem::path quotaHistoryPath_;
     bool quotaForecastEnabled_ = false;
+    bool costHistoryEnabled_ = false;
     bool started_ = false;
     std::thread thread_;
 };

@@ -1,6 +1,8 @@
 #include "codex_worker.h"
 
 #include "codex_executable.h"
+#include "codex_cost_file_scan.h"
+#include "codex_cost_history_state.h"
 #include "quota_history_store.h"
 
 #include <winrt/base.h>
@@ -8,7 +10,10 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdio>
+#include <ctime>
 #include <filesystem>
+#include <limits>
 #include <system_error>
 #include <utility>
 #include <vector>
@@ -177,6 +182,82 @@ QuotaForecastRefresh RefreshQuotaForecast(
     return result;
 }
 
+std::optional<std::string> LocalDateFromUnixMilliseconds(
+    std::int64_t milliseconds) noexcept {
+    if (milliseconds < 0) return std::nullopt;
+    const std::int64_t seconds = milliseconds / 1000;
+    if (seconds > static_cast<std::int64_t>(
+                      std::numeric_limits<std::time_t>::max())) {
+        return std::nullopt;
+    }
+    const std::time_t value = static_cast<std::time_t>(seconds);
+    std::tm local{};
+#ifdef _WIN32
+    if (localtime_s(&local, &value) != 0) return std::nullopt;
+#else
+    if (!localtime_r(&value, &local)) return std::nullopt;
+#endif
+    char buffer[11]{};
+    if (std::snprintf(buffer, sizeof(buffer), "%04d-%02d-%02d",
+                      local.tm_year + 1900, local.tm_mon + 1,
+                      local.tm_mday) != 10) {
+        return std::nullopt;
+    }
+    return std::string(buffer);
+}
+
+std::optional<std::string> CurrentLocalDateString() noexcept {
+    const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch());
+    return LocalDateFromUnixMilliseconds(now.count());
+}
+
+CodexCostRefresh RefreshCostHistory(
+    const std::optional<std::filesystem::path>& codexHome,
+    CodexCostHistoryState& historyState) {
+    CodexCostRefresh output;
+    CodexCostFileScanResult scan;
+    if (codexHome) {
+        CodexCostFileScanRequest request;
+        request.codexHome = *codexHome;
+        request.nowUnixSeconds =
+            std::chrono::duration_cast<std::chrono::seconds>(
+                std::chrono::system_clock::now().time_since_epoch())
+                .count();
+        request.previousFiles = historyState.Cursors();
+        scan = ScanCodexCostRolloutFiles(request);
+        output.status = scan.ok() ? CodexCostRefreshStatus::kNoTokenEvents
+                                  : CodexCostRefreshStatus::kScanFailed;
+        output.coverageIncomplete = scan.coverageIncomplete;
+        output.skippedCompressedFiles = scan.skippedCompressedFiles;
+        output.skippedOversizedLines = scan.skippedOversizedLines;
+        output.rejectedUnsafeEntries = scan.rejectedUnsafeEntries;
+    } else {
+        scan.status = CodexCostFileScanStatus::kInvalidArgument;
+        output.status = CodexCostRefreshStatus::kCodexHomeUnavailable;
+    }
+
+    CodexCostHistoryApplyResult applied = historyState.Apply(
+        scan, LocalDateFromUnixMilliseconds);
+    output.malformedLineCount = applied.malformedLineCount;
+    const std::optional<std::string> currentDate = CurrentLocalDateString();
+    if (currentDate) {
+        output.localSummary =
+            CalculateCodexCostSummary(applied.events, *currentDate);
+        if (output.localSummary) {
+            output.localSummary->saturated =
+                output.localSummary->saturated || applied.saturated;
+        }
+    }
+    const bool hasEvents = output.localSummary && output.localSummary->available;
+    if (scan.ok() && hasEvents) {
+        output.status = CodexCostRefreshStatus::kAvailable;
+    } else if (!scan.ok() && hasEvents) {
+        output.showingLastKnown = true;
+    }
+    return output;
+}
+
 struct ApartmentCleanup {
     bool initialized = false;
 
@@ -243,6 +324,19 @@ bool CodexWorker::SetQuotaForecastEnabled(bool enabled) {
     return true;
 }
 
+bool CodexWorker::SetCostHistoryEnabled(bool enabled) {
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!started_ || costHistoryEnabled_ == enabled) return false;
+        costHistoryEnabled_ = enabled;
+        costHistoryEpoch_.fetch_add(1, std::memory_order_acq_rel);
+    }
+    // This feature shares the normal five-minute Codex refresh. If the worker
+    // is paused, the page-level demand gate activates it immediately.
+    wake_.notify_one();
+    return true;
+}
+
 bool CodexWorker::ActivateAndRefresh() {
     bool changed = false;
     {
@@ -279,6 +373,7 @@ void CodexWorker::PauseAndInvalidate() {
         // cancelled even after a new generation becomes active.
         cancellationEpoch_.fetch_add(1, std::memory_order_acq_rel);
         quotaForecastEpoch_.fetch_add(1, std::memory_order_acq_rel);
+        costHistoryEpoch_.fetch_add(1, std::memory_order_acq_rel);
     }
     wake_.notify_one();
 }
@@ -308,11 +403,13 @@ void CodexWorker::StopAndJoin() {
         latest_.reset();
         cancellationEpoch_.fetch_add(1, std::memory_order_acq_rel);
         quotaForecastEpoch_.fetch_add(1, std::memory_order_acq_rel);
+        costHistoryEpoch_.fetch_add(1, std::memory_order_acq_rel);
         completionWindow_ = nullptr;
         completionMessage_ = 0;
         clientVersion_.clear();
         quotaHistoryPath_.clear();
         quotaForecastEnabled_ = false;
+        costHistoryEnabled_ = false;
         started_ = false;
         if (thread_.joinable()) threadToJoin = std::move(thread_);
     }
@@ -336,12 +433,15 @@ void CodexWorker::Run() {
 
     // The client and its retained parsed state never leave this thread.
     CodexAppServerClient client;
+    CodexCostHistoryState costHistoryState;
     std::size_t consecutiveFailureCount = 0;
     for (;;) {
         std::optional<::codex_monitor::CodexRefreshWorkItem> item;
         std::uint64_t refreshEpoch = 0;
         std::uint64_t forecastEpoch = 0;
+        std::uint64_t costEpoch = 0;
         bool forecastEnabled = false;
+        bool costEnabled = false;
         std::string clientVersion;
         std::filesystem::path quotaHistoryPath;
         {
@@ -365,6 +465,9 @@ void CodexWorker::Run() {
                     forecastEnabled = quotaForecastEnabled_;
                     forecastEpoch =
                         quotaForecastEpoch_.load(std::memory_order_acquire);
+                    costEnabled = costHistoryEnabled_;
+                    costEpoch =
+                        costHistoryEpoch_.load(std::memory_order_acquire);
                     quotaHistoryPath = quotaHistoryPath_;
                     break;
                 }
@@ -378,6 +481,7 @@ void CodexWorker::Run() {
         }
 
         RefreshResult refresh;
+        std::optional<std::filesystem::path> refreshedCodexHome;
         if (!apartmentInitialized) {
             refresh = FailureResult(
                 client.data(), AppServerClientFailureKind::kTransportFailed,
@@ -398,6 +502,7 @@ void CodexWorker::Run() {
                                        std::memory_order_acquire) != refreshEpoch;
                         });
                     refresh.data = client.data();
+                    if (costEnabled) refreshedCodexHome = client.codexHome();
                 }
             } catch (...) {
                 refresh = FailureResult(
@@ -438,6 +543,14 @@ void CodexWorker::Run() {
                 *refresh.data.rateLimits.lastValue, quotaHistoryPath, replace);
         }
 
+        std::optional<CodexCostRefresh> costHistoryUpdate;
+        if (costEnabled &&
+            cancellationEpoch_.load(std::memory_order_acquire) == refreshEpoch &&
+            costHistoryEpoch_.load(std::memory_order_acquire) == costEpoch) {
+            costHistoryUpdate =
+                RefreshCostHistory(refreshedCodexHome, costHistoryState);
+        }
+
         const bool succeeded = RefreshSucceeded(refresh.report, refresh.data);
         HWND notifyWindow = nullptr;
         UINT notifyMessage = 0;
@@ -452,6 +565,11 @@ void CodexWorker::Run() {
                         forecastEpoch) {
                     quotaForecastUpdate.reset();
                 }
+                if (!costHistoryEnabled_ ||
+                    costHistoryEpoch_.load(std::memory_order_acquire) !=
+                        costEpoch) {
+                    costHistoryUpdate.reset();
+                }
                 if (succeeded) {
                     consecutiveFailureCount = 0;
                 } else if (consecutiveFailureCount < kFailedRefreshDelays.size()) {
@@ -462,7 +580,8 @@ void CodexWorker::Run() {
                     : FailureRefreshDelay(consecutiveFailureCount);
                 latest_ = CompletedCodexRefresh{
                     std::move(refresh.data), std::move(refresh.report),
-                    std::move(quotaForecastUpdate), succeeded, delay};
+                    std::move(quotaForecastUpdate),
+                    std::move(costHistoryUpdate), succeeded, delay};
                 if (schedule_.RecommendedDelay()) {
                     nextAutomaticRefresh_ =
                         std::chrono::steady_clock::now() + delay;

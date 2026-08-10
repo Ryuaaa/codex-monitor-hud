@@ -7,6 +7,7 @@
 #include <tlhelp32.h>
 
 #include "codex/codex_worker.h"
+#include "codex/codex_cost_file_scan.h"
 
 #include <winrt/base.h>
 
@@ -17,6 +18,7 @@
 #include <cstdio>
 #include <cwchar>
 #include <cstdint>
+#include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -290,6 +292,17 @@ std::int64_t CurrentUnixSeconds() {
         .count();
 }
 
+std::string CurrentUtcTimestamp() {
+    const std::time_t now = std::time(nullptr);
+    std::tm utc{};
+    if (gmtime_s(&utc, &now) != 0) return {};
+    char buffer[32]{};
+    if (std::strftime(buffer, sizeof(buffer), "%Y-%m-%dT%H:%M:%SZ", &utc) == 0) {
+        return {};
+    }
+    return std::string(buffer);
+}
+
 void TestSuccessfulBackgroundRefresh(HWND window) {
     Stage("success_begin");
     ScopedEnvironmentVariable scenario(L"CODEX_FAKE_SCENARIO", L"app-success");
@@ -503,6 +516,80 @@ void TestQuotaForecastDemandGating(HWND window,
     Stage("quota_end");
 }
 
+void TestCostHistoryDemandGating(HWND window,
+                                const std::filesystem::path& testRoot) {
+    Stage("cost_begin");
+    ScopedEnvironmentVariable scenario(L"CODEX_FAKE_SCENARIO",
+                                       L"app-cost-history");
+    const std::filesystem::path codexHome = testRoot / L"cost-home";
+    const std::int64_t now = CurrentUnixSeconds();
+    const auto dateFolders =
+        codex_monitor::codex::RecentLocalCodexSessionDatePaths(now, 1);
+    Expect(dateFolders.size() == 1,
+           "the cost test must resolve its current local session folder");
+    if (dateFolders.empty()) return;
+    const std::filesystem::path sessionDirectory =
+        codexHome / L"sessions" / dateFolders.front();
+    std::error_code error;
+    std::filesystem::create_directories(sessionDirectory, error);
+    Expect(!error, "the cost test session directory must be created");
+    const std::string timestamp = CurrentUtcTimestamp();
+    Expect(!timestamp.empty(), "the cost test must create a UTC timestamp");
+    const std::string fixture =
+        "{\"timestamp\":\"" + timestamp +
+        "\",\"type\":\"turn_context\",\"payload\":{\"model\":\"gpt-5.6-luna\"}}\n" +
+        "{\"timestamp\":\"" + timestamp +
+        "\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\","
+        "\"info\":{\"last_token_usage\":{\"input_tokens\":1000,"
+        "\"cached_input_tokens\":200,\"output_tokens\":100}}}}\n";
+    Expect(WriteTextFile(sessionDirectory / L"rollout-cost.jsonl", fixture),
+           "the cost test rollout must be written");
+    ScopedEnvironmentVariable configuredHome(L"CODEX_FAKE_CODEX_HOME",
+                                               codexHome.wstring());
+
+    CodexWorker worker;
+    Expect(worker.Start(window, kWorkerReadyMessage, "test-version"),
+           "the cost worker must start");
+    Expect(worker.ActivateAndRefresh(),
+           "the cost worker must queue a default-disabled refresh");
+    const auto disabled = WaitForRefresh(window, worker, 10s);
+    Expect(disabled && disabled->succeeded && !disabled->costHistoryUpdate,
+           "default-disabled cost history must not scan or publish output");
+
+    Expect(worker.SetCostHistoryEnabled(true),
+           "explicitly enabling cost history must change demand");
+    Expect(!worker.IsBusy(),
+           "enabling beside active Codex cards must not add a network read");
+    Expect(worker.RequestRefresh(),
+           "the cost test must request its enabled refresh");
+    const auto enabled = WaitForRefresh(window, worker, 10s);
+    Expect(enabled && enabled->succeeded && enabled->costHistoryUpdate,
+           "enabled cost history must publish a scan result");
+    if (enabled && enabled->costHistoryUpdate) {
+        const auto& update = *enabled->costHistoryUpdate;
+        Expect(update.status ==
+                   codex_monitor::codex::CodexCostRefreshStatus::kAvailable,
+               "the real temporary rollout must produce an available result");
+        Expect(update.localSummary && update.localSummary->available &&
+                   update.localSummary->today.tokens == 1100,
+               "the worker must parse and summarize the temporary Token event");
+        Expect(update.localSummary &&
+                   update.localSummary->pricedTokenPercent == 100.0,
+               "the known model must have complete price coverage");
+    }
+
+    Expect(worker.SetCostHistoryEnabled(false),
+           "disabling cost history must change demand");
+    Expect(worker.RequestRefresh(),
+           "ordinary Codex data must still refresh after cost history is disabled");
+    const auto disabledAgain = WaitForRefresh(window, worker, 10s);
+    Expect(disabledAgain && disabledAgain->succeeded &&
+               !disabledAgain->costHistoryUpdate,
+           "disabled cost history must not publish retained output");
+    worker.StopAndJoin();
+    Stage("cost_end");
+}
+
 }  // namespace
 
 int wmain(int argc, wchar_t** argv) {
@@ -514,7 +601,7 @@ int wmain(int argc, wchar_t** argv) {
     const std::wstring mode = argc >= 3 ? argv[2] : L"all";
     const bool validMode = mode == L"all" || mode == L"success" ||
                            mode == L"pause" || mode == L"backoff" ||
-                           mode == L"quota";
+                           mode == L"quota" || mode == L"cost";
     const std::filesystem::path testRoot = CreateTestDirectory();
     if (fakeServer.empty() || testRoot.empty() || !validMode) {
         std::cerr << "FAIL: worker test requires a fake app-server and temp directory\n";
@@ -552,6 +639,9 @@ int wmain(int argc, wchar_t** argv) {
     }
     if (mode == L"all" || mode == L"quota") {
         TestQuotaForecastDemandGating(window, testRoot);
+    }
+    if (mode == L"all" || mode == L"cost") {
+        TestCostHistoryDemandGating(window, testRoot);
     }
 
     Stage("cleanup_begin");

@@ -254,6 +254,11 @@ if(WIN32)
 
         add_executable(CodexMonitorCodexWorkerTests
             src/codex/codex_app_server_client.cpp
+            src/codex/codex_cost_event_parser.cpp
+            src/codex/codex_cost_file_scan.cpp
+            src/codex/codex_cost_history_state.cpp
+            src/codex/codex_cost_model.cpp
+            src/codex/codex_cost_summary.cpp
             src/codex/codex_executable.cpp
             src/codex/codex_json_win32.cpp
             src/codex/codex_process.cpp
@@ -299,18 +304,28 @@ if(WIN32)
         add_test(NAME windows_codex_worker_quota
             COMMAND CodexMonitorCodexWorkerTests
                     $<TARGET_FILE:CodexMonitorFakeCodexAppServer> quota)
+        add_test(NAME windows_codex_worker_cost
+            COMMAND CodexMonitorCodexWorkerTests
+                    $<TARGET_FILE:CodexMonitorFakeCodexAppServer> cost)
         set_tests_properties(
             windows_codex_worker
             windows_codex_worker_success
             windows_codex_worker_pause
             windows_codex_worker_backoff
             windows_codex_worker_quota
+            windows_codex_worker_cost
             PROPERTIES TIMEOUT 30)
     endif()
 
     add_executable(CodexMonitorHUD WIN32
         resources/CodexMonitorHUD.rc
         src/codex/codex_app_server_client.cpp
+        src/codex/codex_cost_event_parser.cpp
+        src/codex/codex_cost_file_scan.cpp
+        src/codex/codex_cost_history_state.cpp
+        src/codex/codex_cost_hybrid.cpp
+        src/codex/codex_cost_model.cpp
+        src/codex/codex_cost_summary.cpp
         src/codex/codex_executable.cpp
         src/codex/codex_json_win32.cpp
         src/codex/codex_process.cpp

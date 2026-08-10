@@ -13,6 +13,7 @@
 #include <winrt/base.h>
 
 #include "../resources/resource.h"
+#include "codex/codex_cost_hybrid.h"
 #include "codex/codex_usage_math.h"
 #include "codex/codex_worker.h"
 #include "module_state.h"
@@ -141,6 +142,8 @@ struct AppState {
     codex_monitor::codex::AppServerRefreshReport latestCodexReport;
     std::optional<codex_monitor::codex::QuotaForecastRefresh>
         latestQuotaForecast;
+    std::optional<codex_monitor::codex::CodexCostRefresh>
+        latestCostHistory;
     std::chrono::seconds codexNextRefreshDelay{60};
     codex_monitor::OpenAIServiceStatusWorker serviceStatusWorker;
     std::optional<codex_monitor::OpenAIServiceStatusModel> latestServiceStatus;
@@ -595,6 +598,8 @@ std::wstring_view CodexModuleHeading(codex_monitor::ModuleId id) {
             return L"CODEX SUBSCRIPTION TYPE";
         case codex_monitor::ModuleId::kCodexAccountTokenUsage:
             return L"CODEX ACCOUNT TOKEN USAGE";
+        case codex_monitor::ModuleId::kCodexTokenCostEstimate:
+            return L"CODEX TOKEN USAGE & COST (BETA)";
         case codex_monitor::ModuleId::kCodexRecentTasks:
             return L"CODEX RECENT TASKS (HISTORY)";
         case codex_monitor::ModuleId::kOpenAIServiceStatus:
@@ -618,6 +623,10 @@ std::wstring BuildCodexUnavailableText(codex_monitor::ModuleId id) {
         detail = L"正在连接本机 Codex 只读接口\r\n"
                  L"当前未返回；状态只表示 app-server 进程范围，"
                  L"不代表桌面版全局";
+    }
+    if (id == codex_monitor::ModuleId::kCodexTokenCostEstimate) {
+        detail = L"正在读取本机 Codex Token 历史\r\n"
+                 L"费用为 API 等价估算，不是订阅账单";
     }
     return std::wstring(CodexModuleHeading(id)) + L"\r\n" + detail;
 }
@@ -885,6 +894,113 @@ std::wstring BuildTokenUsageCardText(const AppState& state) {
     return output.str();
 }
 
+std::wstring FormatEstimatedUsd(double value) {
+    if (!std::isfinite(value) || value < 0.0) return L"--";
+    std::wostringstream output;
+    output << L'$' << std::fixed
+           << std::setprecision(value > 0.0 && value < 0.01 ? 4 : 2)
+           << value;
+    return output.str();
+}
+
+void AppendHybridCostPeriod(
+    std::wostringstream& output,
+    std::wstring_view label,
+    const codex_monitor::codex::CodexHybridPeriodSummary& period) {
+    output << label << L'：';
+    if (!period.tokensAvailable) {
+        output << L"--";
+        return;
+    }
+    output << FormatTokenCount(period.tokens) << L" · ";
+    if (period.estimatedUsd) {
+        output << FormatEstimatedUsd(*period.estimatedUsd);
+    } else {
+        output << L"费用样本不足";
+    }
+}
+
+std::wstring BuildTokenCostCardText(const AppState& state) {
+    codex_monitor::codex::UsageCalendarTotals official;
+    if (state.latestCodexData.usage.lastValue) {
+        const auto calculated = codex_monitor::codex::CalculateUsageCalendarTotals(
+            *state.latestCodexData.usage.lastValue, CurrentLocalDate());
+        if (calculated) official = *calculated;
+    }
+
+    codex_monitor::codex::CodexCostSummary local;
+    if (state.latestCostHistory && state.latestCostHistory->localSummary) {
+        local = *state.latestCostHistory->localSummary;
+    }
+    const codex_monitor::codex::CodexCostHybridSummary summary =
+        codex_monitor::codex::CalculateCodexCostHybridSummary(official, local);
+
+    std::wostringstream output;
+    output << CodexModuleHeading(
+        codex_monitor::ModuleId::kCodexTokenCostEstimate);
+    if (!summary.available) {
+        output << L"\r\n";
+        if (!state.latestCostHistory) {
+            output << L"正在读取本机 Codex Token 历史";
+        } else {
+            switch (state.latestCostHistory->status) {
+                case codex_monitor::codex::CodexCostRefreshStatus::kCodexHomeUnavailable:
+                    output << L"Codex 当前未返回本机数据目录";
+                    break;
+                case codex_monitor::codex::CodexCostRefreshStatus::kScanFailed:
+                    output << L"本机 Token 历史读取失败";
+                    break;
+                case codex_monitor::codex::CodexCostRefreshStatus::kNoTokenEvents:
+                    output << L"本机记录暂时没有 Token 数据";
+                    break;
+                case codex_monitor::codex::CodexCostRefreshStatus::kAvailable:
+                    output << L"当前没有可显示的 Token 数据";
+                    break;
+            }
+        }
+        output << L"\r\n费用将在取得模型样本后估算";
+        return output.str();
+    }
+
+    output << L"\r\n";
+    AppendHybridCostPeriod(output, L"近30日", summary.last30Days);
+    output << L"\r\n";
+    AppendHybridCostPeriod(output, L"今日", summary.today);
+    output << L"  |  ";
+    AppendHybridCostPeriod(output, L"近7日", summary.last7Days);
+    output << L"\r\n";
+    AppendHybridCostPeriod(output, L"本月", summary.monthToDate);
+    output << L"  |  月末约：";
+    if (summary.monthForecastEstimatedUsd) {
+        output << FormatEstimatedUsd(*summary.monthForecastEstimatedUsd);
+    } else {
+        output << L"数据不足";
+    }
+
+    if (local.available) {
+        output << L"\r\n计价覆盖：" << std::fixed << std::setprecision(0)
+               << summary.pricedTokenPercent << L'%';
+        if (!summary.topModel.empty()) {
+            output << L"  |  主模型："
+                   << std::wstring(summary.topModel.begin(), summary.topModel.end());
+        }
+    }
+    if (state.latestCostHistory) {
+        if (state.latestCostHistory->coverageIncomplete) {
+            output << L"\r\n本机历史仍在补齐";
+        }
+        if (state.latestCostHistory->skippedCompressedFiles > 0) {
+            output << L"\r\n压缩历史暂未读取";
+        }
+        if (state.latestCostHistory->showingLastKnown) {
+            output << L"\r\n本次读取失败，显示上次历史";
+        }
+    }
+    if (summary.saturated) output << L"\r\n数值达到显示上限";
+    output << L"\r\nAPI等价费用估算";
+    return output.str();
+}
+
 std::wstring BuildRecentTasksCardText(const AppState& state) {
     const auto& method = state.latestCodexData.threadList;
     std::wostringstream output;
@@ -932,6 +1048,8 @@ std::wstring BuildCodexCardText(codex_monitor::ModuleId id,
             return BuildSubscriptionCardText(state);
         case codex_monitor::ModuleId::kCodexAccountTokenUsage:
             return BuildTokenUsageCardText(state);
+        case codex_monitor::ModuleId::kCodexTokenCostEstimate:
+            return BuildTokenCostCardText(state);
         case codex_monitor::ModuleId::kCodexRecentTasks:
             return BuildRecentTasksCardText(state);
         case codex_monitor::ModuleId::kOpenAIServiceStatus:
@@ -964,6 +1082,7 @@ std::wstring BuildModuleCardText(codex_monitor::ModuleId id,
         case codex_monitor::ModuleId::kCodexQuotaForecast:
         case codex_monitor::ModuleId::kCodexSubscriptionType:
         case codex_monitor::ModuleId::kCodexAccountTokenUsage:
+        case codex_monitor::ModuleId::kCodexTokenCostEstimate:
         case codex_monitor::ModuleId::kCodexRecentTasks:
             return BuildCodexUnavailableText(id);
         case codex_monitor::ModuleId::kOpenAIServiceStatus:
@@ -1072,6 +1191,20 @@ bool CurrentPageNeedsCodexData(const AppState& state) {
 bool CurrentPageShowsQuotaForecast(const AppState& state) {
     const std::size_t index = codex_monitor::ModuleIndex(
         codex_monitor::ModuleId::kCodexQuotaForecast);
+    switch (state.settings.currentPage) {
+        case codex_monitor::Page::kHome:
+            return state.settings.homeVisible[index];
+        case codex_monitor::Page::kCodex:
+            return state.settings.nativePageVisible[index];
+        case codex_monitor::Page::kComputer:
+            return false;
+    }
+    return false;
+}
+
+bool CurrentPageShowsCostHistory(const AppState& state) {
+    const std::size_t index = codex_monitor::ModuleIndex(
+        codex_monitor::ModuleId::kCodexTokenCostEstimate);
     switch (state.settings.currentPage) {
         case codex_monitor::Page::kHome:
             return state.settings.homeVisible[index];
@@ -1230,6 +1363,10 @@ void ApplyCodexRefresh(
         state.latestQuotaForecast =
             std::move(completed.quotaForecastUpdate);
     }
+    if (completed.costHistoryUpdate) {
+        state.latestCostHistory =
+            std::move(completed.costHistoryUpdate);
+    }
     state.codexLastRefreshSucceeded = completed.succeeded;
     state.codexNextRefreshDelay = completed.nextRefreshDelay;
     state.hasCodexRefresh = true;
@@ -1286,6 +1423,10 @@ void UpdateCodexDemand(HWND, AppState& state) {
                                  CurrentPageShowsQuotaForecast(state);
     if (state.codexWorkerAvailable) {
         state.codexWorker.SetQuotaForecastEnabled(forecastEnabled);
+        const bool costEnabled =
+            !state.windowMinimized && !state.windowHidden &&
+            CurrentPageShowsCostHistory(state);
+        state.codexWorker.SetCostHistoryEnabled(costEnabled);
     }
     const bool shouldRefresh =
         !state.windowMinimized && !state.windowHidden &&

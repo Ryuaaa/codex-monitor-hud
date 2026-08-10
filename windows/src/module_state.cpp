@@ -98,6 +98,15 @@ constexpr std::array<ModuleDefinition, kModuleCount> kRegistry{{
      false,
      false,
      false},
+    {ModuleId::kCodexTokenCostEstimate,
+     "codex-token-cost-estimate",
+     L"Codex Token usage & API-equivalent cost (Beta)",
+     Page::kCodex,
+     false,
+     true,
+     false,
+     false,
+     false},
     {ModuleId::kCodexRecentTasks,
      "codex-recent-tasks",
      L"Codex recent tasks (history)",
@@ -287,7 +296,7 @@ bool MoveHomeModule(SettingsState& settings, ModuleId id, int direction) {
 std::string SerializeSettings(const SettingsState& settings) {
     const std::vector<ModuleId> order = SanitizeHomeOrder(settings.homeOrder);
     std::ostringstream output;
-    output << "version=5\n";
+    output << "version=6\n";
     output << "page=" << PageKey(settings.currentPage) << '\n';
     output << "always_on_top=" << (settings.alwaysOnTop ? 1 : 0) << '\n';
     output << "home_order=";
@@ -401,15 +410,16 @@ SettingsState ParseSettings(std::string_view text) {
             settings.nativePageVisible[index] =
                 kRegistry[index].defaultNativePageVisible;
         }
-        // Only a valid v5 file that genuinely omitted native_visible receives
-        // newly introduced native-page defaults. Older, unknown, and malformed
+        // Only a valid current or immediately preceding settings file that
+        // genuinely omitted native_visible receives newly introduced
+        // native-page defaults. Older, unknown, and malformed
         // files keep all pre-v5 defaults but must not silently opt an existing
         // user into the forecast module.
         // A genuinely new install is created through DefaultSettings() before
         // any file exists. An empty file is damaged existing state, so it must
         // not silently opt the user into newly introduced work.
         const bool useCurrentNativeDefaults =
-            version == 5 && !nativeVisibleKeySeen;
+            (version == 5 || version == 6) && !nativeVisibleKeySeen;
         if (!useCurrentNativeDefaults) {
             settings.nativePageVisible[ModuleIndex(ModuleId::kCodexQuotaForecast)] =
                 false;

@@ -77,6 +77,24 @@ CODEX_APP_SERVER_TEST = (
 CODEX_USAGE_TEST = (
     WINDOWS_ROOT / "tests" / "codex_usage_math_test.cpp"
 ).read_text(encoding="utf-8")
+CODEX_COST_MODEL = (
+    WINDOWS_ROOT / "src" / "codex" / "codex_cost_model.cpp"
+).read_text(encoding="utf-8")
+CODEX_COST_EVENT_PARSER = (
+    WINDOWS_ROOT / "src" / "codex" / "codex_cost_event_parser.cpp"
+).read_text(encoding="utf-8")
+CODEX_COST_FILE_SCAN = (
+    WINDOWS_ROOT / "src" / "codex" / "codex_cost_file_scan.cpp"
+).read_text(encoding="utf-8")
+CODEX_COST_HISTORY_STATE = (
+    WINDOWS_ROOT / "src" / "codex" / "codex_cost_history_state.cpp"
+).read_text(encoding="utf-8")
+CODEX_COST_SUMMARY = (
+    WINDOWS_ROOT / "src" / "codex" / "codex_cost_summary.cpp"
+).read_text(encoding="utf-8")
+CODEX_COST_HYBRID = (
+    WINDOWS_ROOT / "src" / "codex" / "codex_cost_hybrid.cpp"
+).read_text(encoding="utf-8")
 CODEX_WORKER_TEST = (
     WINDOWS_ROOT / "tests" / "codex_worker_test.cpp"
 ).read_text(encoding="utf-8")
@@ -320,6 +338,7 @@ def main() -> None:
         "kCodexFiveHourQuota": "the five-hour quota has its own module identity",
         "kCodexWeeklyQuota": "the weekly quota has its own module identity",
         "kCodexQuotaForecast": "quota trend forecasting has its own module identity",
+        "kCodexTokenCostEstimate": "Token and API-equivalent cost has its own Beta module identity",
         "kSystemDiagnosis": "the system diagnosis has its own module identity",
         "kOpenAIServiceStatus": "official service status has its own module identity",
         "SanitizeHomeOrder": "saved order is repaired against the current registry",
@@ -341,17 +360,36 @@ def main() -> None:
         "intentionally empty homepage": "all-hidden homepage intent is fixed",
         "unknown page must fall back to home": "damaged settings have a safe fallback",
         "off-screen saved window must return": "monitor removal recovery is fixed",
-        "TestVersionFiveRoundTripAndIndependentQuotaSwitches":
-            "the independent quota switches and version 5 schema have a round-trip test",
+        "TestVersionSixRoundTripAndIndependentQuotaSwitches":
+            "the independent quota switches and version 6 schema have a round-trip test",
         "TestVersionThreeMigrationPreservesExplicitVisibility":
             "version 3 settings retain explicit visibility when the service module is added",
         "TestVersionOneMigrationPreservesOldHomeChoices":
             "version 1 settings migrate without enabling new Home work",
-        '"version=5\\n"': "the current persisted settings schema is version 5",
+        '"version=6\\n"': "the current persisted settings schema is version 6",
         '"version=1\\n"': "the previous settings schema has an explicit migration fixture",
     }
     for token, reason in state_test_contracts.items():
         require(STATE_TEST, token, reason)
+
+    cost_contracts = {
+        "kCodexCostPricingVersion": "the frozen price table has an explicit version",
+        "ParseCodexCostJsonlLine": "local rollout parsing has a narrow boundary",
+        "kCodexCostMaximumScanBytes": "local history scanning has a hard byte budget",
+        "kCodexCostMaximumLineBytes": "one damaged line cannot grow memory without bound",
+        "resetAfterTruncation": "rewritten rollout files invalidate retained parser state",
+        "CalculateCodexCostSummary": "cost periods and coverage are aggregated independently",
+        "CalculateCodexCostHybridSummary": "official Token totals remain the primary display source",
+    }
+    cost_sources = (CODEX_COST_MODEL + CODEX_COST_EVENT_PARSER +
+                    CODEX_COST_FILE_SCAN + CODEX_COST_HISTORY_STATE +
+                    CODEX_COST_SUMMARY + CODEX_COST_HYBRID)
+    for token, reason in cost_contracts.items():
+        require(cost_sources, token, reason)
+    reject(struct_body(CODEX_WORKER_HEADER, "CodexCostRefresh"),
+           "path", "cost refresh results must not expose local source paths")
+    reject(struct_body(CODEX_WORKER_HEADER, "CodexCostRefresh"),
+           "raw", "cost refresh results must not expose raw session JSON")
 
     diagnosis_contracts = {
         "Missing a low metric cannot prove":
@@ -566,6 +604,10 @@ def main() -> None:
         "cancellationEpoch_": "pause uses a monotonic cancellation generation",
         "quotaForecastEpoch_": "hiding forecast invalidates a pending history commit",
         "SetQuotaForecastEnabled": "quota history work follows forecast-card visibility",
+        "SetCostHistoryEnabled":
+            "local cost history is gated independently by visible-card demand",
+        "costHistoryEpoch_":
+            "disabled or hidden cost results cannot be published later",
         "MoveFileExW": "Windows history replacement is atomic and replaces an old file",
         "fetch_add": "pause and stop permanently invalidate an old generation",
         "PauseAndInvalidate": "no-demand states invalidate in-flight work",
@@ -821,6 +863,20 @@ def main() -> None:
             "official daily usage math tests are buildable",
         "add_test(NAME windows_codex_usage_math":
             "official daily usage math tests are registered with CTest",
+        "add_executable(CodexMonitorCodexCostSummaryTests":
+            "portable Codex cost summary tests are buildable",
+        "add_test(NAME windows_codex_cost_summary":
+            "portable Codex cost summary tests are registered with CTest",
+        "add_executable(CodexMonitorCodexCostHybridTests":
+            "official/local cost merge tests are buildable",
+        "add_test(NAME windows_codex_cost_hybrid":
+            "official/local cost merge tests are registered with CTest",
+        "add_executable(CodexMonitorCodexCostEventParserTests":
+            "privacy-trimmed rollout parser tests are buildable",
+        "add_test(NAME windows_codex_cost_file_scan":
+            "bounded local file scan tests are registered with CTest",
+        "add_test(NAME windows_codex_cost_history_state":
+            "incremental history state tests are registered with CTest",
         "add_executable(CodexMonitorQuotaForecastTests":
             "portable quota forecast tests are buildable",
         "add_test(NAME windows_quota_forecast":
@@ -847,6 +903,8 @@ def main() -> None:
             "the background Codex worker integration test is registered with CTest",
         "add_test(NAME windows_codex_worker_quota":
             "quota demand gating has a focused Windows worker test",
+        "add_test(NAME windows_codex_worker_cost":
+            "cost-history demand gating has a focused Windows worker test",
         "add_executable(CodexMonitorServiceStatusModelTests":
             "portable service-status mapping tests are buildable",
         "add_test(NAME windows_service_status_model":

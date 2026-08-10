@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <iterator>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -106,6 +107,48 @@ bool Contains(std::string_view value, std::string_view token) {
     return value.find(token) != std::string_view::npos;
 }
 
+std::optional<std::wstring> EnvironmentValue(const wchar_t* name) {
+    const DWORD required = GetEnvironmentVariableW(name, nullptr, 0);
+    if (required == 0) return std::nullopt;
+    std::wstring value(required, L'\0');
+    const DWORD copied = GetEnvironmentVariableW(name, value.data(), required);
+    if (copied == 0 || copied >= required) return std::nullopt;
+    value.resize(copied);
+    return value;
+}
+
+std::string JsonEscapedUtf8(std::wstring_view value) {
+    if (value.empty()) return {};
+    const int required = WideCharToMultiByte(
+        CP_UTF8, WC_ERR_INVALID_CHARS, value.data(),
+        static_cast<int>(value.size()), nullptr, 0, nullptr, nullptr);
+    if (required <= 0) return {};
+    std::string utf8(static_cast<std::size_t>(required), '\0');
+    if (WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, value.data(),
+                            static_cast<int>(value.size()), utf8.data(),
+                            required, nullptr, nullptr) != required) {
+        return {};
+    }
+    std::string escaped;
+    escaped.reserve(utf8.size() + 16);
+    for (const char character : utf8) {
+        switch (character) {
+            case '\\': escaped += "\\\\"; break;
+            case '"': escaped += "\\\""; break;
+            case '\b': escaped += "\\b"; break;
+            case '\f': escaped += "\\f"; break;
+            case '\n': escaped += "\\n"; break;
+            case '\r': escaped += "\\r"; break;
+            case '\t': escaped += "\\t"; break;
+            default:
+                if (static_cast<unsigned char>(character) < 0x20) return {};
+                escaped.push_back(character);
+                break;
+        }
+    }
+    return escaped;
+}
+
 void SignalConfiguredReadyEvent() {
     wchar_t name[256]{};
     const DWORD length = GetEnvironmentVariableW(
@@ -203,7 +246,7 @@ int RunAppServerScenario(const std::wstring& scenario,
         Sleep(INFINITE);
         return 0;
     }
-    std::string_view initializeResponse =
+    std::string initializeResponse =
         R"json({"id":1,"result":{"server":"fake",)json"
         R"json("codexHome":"C:\\Users\\Codex Test\\.codex"}})json";
     if (scenario == L"app-init-missing-home") {
@@ -214,6 +257,13 @@ int RunAppServerScenario(const std::wstring& scenario,
     } else if (scenario == L"app-init-nul-home") {
         initializeResponse =
             R"json({"id":1,"result":{"codexHome":"C:\\Safe\u0000evil"}})json";
+    } else if (scenario == L"app-cost-history") {
+        const auto configured = EnvironmentValue(L"CODEX_FAKE_CODEX_HOME");
+        const std::string escaped =
+            configured ? JsonEscapedUtf8(*configured) : std::string{};
+        initializeResponse =
+            "{\"id\":1,\"result\":{\"server\":\"fake\",\"codexHome\":\"" +
+            escaped + "\"}}";
     }
     if (!WriteLine(output, initializeResponse)) {
         return 23;

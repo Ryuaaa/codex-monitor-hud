@@ -10,6 +10,7 @@
 #include <set>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -245,6 +246,16 @@ void TestIncrementalAppendPartialLineAndTruncation() {
     Require(LineTexts(truncated.lines) == std::set<std::string>({"x"}) &&
                 truncated.files.front().resetAfterTruncation,
             "a truncated file must reset to offset zero");
+
+    const auto rewriteBaseline = truncated.files;
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    WriteFile(path, "y\n");
+    auto rewriteRequest = Request(temporary.path(), now);
+    rewriteRequest.previousFiles = rewriteBaseline;
+    auto rewritten = ScanCodexCostRolloutFiles(rewriteRequest);
+    Require(LineTexts(rewritten.lines) == std::set<std::string>({"y"}) &&
+                rewritten.files.front().resetAfterTruncation,
+            "a same-size in-place rewrite must reset retained parser state");
 }
 
 void TestBudgetBoundaryAndResume() {
