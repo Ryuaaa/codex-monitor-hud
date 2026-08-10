@@ -29,12 +29,21 @@ if(BUILD_TESTING)
     )
     configure_codex_monitor_target(CodexMonitorModuleStateTests)
     add_test(NAME windows_module_state COMMAND CodexMonitorModuleStateTests)
+
+    add_executable(CodexMonitorSamplingScheduleTests
+        src/sampling_schedule.cpp
+        tests/sampling_schedule_test.cpp
+    )
+    configure_codex_monitor_target(CodexMonitorSamplingScheduleTests)
+    add_test(NAME windows_sampling_schedule COMMAND CodexMonitorSamplingScheduleTests)
 endif()
 
 if(WIN32)
     add_executable(CodexMonitorHUD WIN32
         src/main.cpp
         src/module_state.cpp
+        src/performance_worker.cpp
+        src/sampling_schedule.cpp
         src/settings_store_win32.cpp
         src/windows_sampler.cpp
     )

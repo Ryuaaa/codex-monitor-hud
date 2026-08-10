@@ -8,6 +8,10 @@ WINDOWS_ROOT = Path(__file__).resolve().parents[1]
 MAIN = (WINDOWS_ROOT / "src" / "main.cpp").read_text(encoding="utf-8")
 MODULE_STATE = (WINDOWS_ROOT / "src" / "module_state.cpp").read_text(encoding="utf-8")
 MODULE_STATE_HEADER = (WINDOWS_ROOT / "src" / "module_state.h").read_text(encoding="utf-8")
+WORKER = (WINDOWS_ROOT / "src" / "performance_worker.cpp").read_text(encoding="utf-8")
+WORKER_HEADER = (WINDOWS_ROOT / "src" / "performance_worker.h").read_text(encoding="utf-8")
+SCHEDULE = (WINDOWS_ROOT / "src" / "sampling_schedule.cpp").read_text(encoding="utf-8")
+SCHEDULE_HEADER = (WINDOWS_ROOT / "src" / "sampling_schedule.h").read_text(encoding="utf-8")
 SETTINGS_STORE = (WINDOWS_ROOT / "src" / "settings_store_win32.cpp").read_text(encoding="utf-8")
 SAMPLER = (WINDOWS_ROOT / "src" / "windows_sampler.cpp").read_text(encoding="utf-8")
 SAMPLER_HEADER = (WINDOWS_ROOT / "src" / "windows_sampler.h").read_text(encoding="utf-8")
@@ -15,6 +19,7 @@ SNAPSHOT = (WINDOWS_ROOT / "src" / "performance_snapshot.h").read_text(encoding=
 MATH = (WINDOWS_ROOT / "src" / "snapshot_math.h").read_text(encoding="utf-8")
 TEST = (WINDOWS_ROOT / "tests" / "snapshot_math_test.cpp").read_text(encoding="utf-8")
 STATE_TEST = (WINDOWS_ROOT / "tests" / "module_state_test.cpp").read_text(encoding="utf-8")
+SCHEDULE_TEST = (WINDOWS_ROOT / "tests" / "sampling_schedule_test.cpp").read_text(encoding="utf-8")
 CMAKE = (WINDOWS_ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
 
 
@@ -44,7 +49,7 @@ def main() -> None:
         "WM_TIMER": "the HUD refreshes from the sampler",
         "SIZE_MINIMIZED": "minimization has an explicit low-burden path",
         "KillTimer(window, kSampleTimerId)": "minimization stops periodic sampling",
-        "ResetCpuBaseline": "restoring cannot report a stale long-interval CPU delta",
+        "PauseAndInvalidate": "hidden performance pages invalidate outstanding samples",
         "HomeNeedsPerformance": "homepage sampling follows visible module dependencies",
         "CurrentPageNeedsPerformance": "page-level sampling demand is centralized",
         "case codex_monitor::Page::kCodex:\n            return false":
@@ -73,6 +78,49 @@ def main() -> None:
     for token, reason in window_contracts.items():
         require(MAIN, token, reason)
     reject(MAIN, "Placeholder", "milestone 2 must not retain placeholder cards")
+    reject(MAIN, ".Sample(", "the window thread must not execute native sampling")
+
+    worker_contracts = {
+        "std::thread": "native sampling runs away from the window message thread",
+        "std::condition_variable": "the worker sleeps instead of polling for requests",
+        "WindowsSampler sampler_": "the single serial worker owns the native sampler",
+        "std::optional<CompletedSample> latest_":
+            "completed data is retained in worker-owned storage",
+        "PostMessageW(notifyWindow, notifyMessage, 0, 0)":
+            "completion notification carries no owning raw pointer",
+        "schedule_.PauseAndInvalidate()":
+            "pausing cancels pending work and invalidates an in-flight result",
+        "sampler_.ResetCpuBaseline()":
+            "baseline reset runs on the sampler-owning thread",
+        "schedule_.Finish(*item)": "generation validation gates publication",
+        "thread_.join()": "shutdown waits for the sole worker thread",
+    }
+    for token, reason in worker_contracts.items():
+        require(WORKER_HEADER + WORKER, token, reason)
+
+    schedule_contracts = {
+        "pendingMode_": "busy requests occupy one coalescing slot",
+        "Covers": "a running full sample covers concurrent fast requests",
+        "generation_": "pause and stop can invalidate old work",
+        "baselineResetPending_": "resume sampling is ordered behind a baseline reset",
+        "ActivateAndRequestFullSample": "resume always requests full metrics",
+        "PauseAndInvalidate": "pause semantics are centralized and portable",
+    }
+    for token, reason in schedule_contracts.items():
+        require(SCHEDULE_HEADER + SCHEDULE, token, reason)
+    reject(SCHEDULE_HEADER + SCHEDULE, "windows.h",
+           "request scheduling must remain portable")
+
+    schedule_test_contracts = {
+        "slow sampling must win request coalescing": "slow priority is fixed by a test",
+        "an in-flight pre-pause result must be rejected":
+            "generation invalidation is fixed by a test",
+        "resume must reset the baseline before sampling":
+            "resume ordering is fixed by a test",
+        "stop must reject future work": "shutdown request handling is fixed by a test",
+    }
+    for token, reason in schedule_test_contracts.items():
+        require(SCHEDULE_TEST, token, reason)
 
     sampler_contracts = {
         "GetSystemTimes": "whole-machine CPU comes from documented system counters",
@@ -182,12 +230,18 @@ def main() -> None:
     cmake_contracts = {
         "add_executable(CodexMonitorHUD WIN32": "the executable uses the Windows GUI subsystem",
         "src/windows_sampler.cpp": "the native sampler is compiled into the HUD",
+        "src/performance_worker.cpp": "the HUD builds its serial background worker",
+        "src/sampling_schedule.cpp": "the request scheduler is shared with fixed tests",
         "src/module_state.cpp": "the module state model is compiled into the HUD",
         "src/settings_store_win32.cpp": "the per-user settings store is compiled into the HUD",
         "add_executable(CodexMonitorSnapshotMathTests": "portable fixed tests are buildable",
         "add_test(NAME windows_snapshot_math": "portable tests are registered with CTest",
         "add_executable(CodexMonitorModuleStateTests": "portable state tests are buildable",
         "add_test(NAME windows_module_state": "portable state tests are registered with CTest",
+        "add_executable(CodexMonitorSamplingScheduleTests":
+            "portable sampling scheduling tests are buildable",
+        "add_test(NAME windows_sampling_schedule":
+            "sampling scheduling tests are registered with CTest",
         "cxx_std_17": "the implementation has an explicit language baseline",
         "MSVC_RUNTIME_LIBRARY": "the release binary does not require a separate VC runtime install",
         "PSAPI_VERSION=1": "PSAPI names resolve consistently through Psapi.lib",

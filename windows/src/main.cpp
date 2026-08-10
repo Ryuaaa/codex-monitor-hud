@@ -11,10 +11,10 @@
 #include <windows.h>
 
 #include "module_state.h"
+#include "performance_worker.h"
 #include "performance_snapshot.h"
 #include "settings_store_win32.h"
 #include "snapshot_math.h"
-#include "windows_sampler.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -23,6 +23,7 @@
 #include <optional>
 #include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -44,6 +45,7 @@ constexpr int kSettingsMoveDownBaseId = 3200;
 constexpr int kSettingsTopmostId = 3300;
 constexpr int kSettingsCloseId = 3301;
 constexpr UINT_PTR kSampleTimerId = 2001;
+constexpr UINT kSampleReadyMessage = WM_APP + 1;
 constexpr UINT kFastSampleIntervalMs = 5000;
 constexpr ULONGLONG kSlowSampleIntervalMs = 20000;
 constexpr int kMinimumWidth = 390;
@@ -95,7 +97,7 @@ struct AppState {
     ULONGLONG nextSlowSampleTick = 0;
     std::filesystem::path settingsPath;
     codex_monitor::SettingsState settings = codex_monitor::DefaultSettings();
-    codex_monitor::WindowsSampler sampler;
+    codex_monitor::PerformanceWorker performanceWorker;
     codex_monitor::PerformanceSnapshot latestSnapshot;
 };
 
@@ -378,6 +380,9 @@ void UpdateStatusText(AppState& state) {
         output << L"paused while minimized";
     } else if (!CurrentPageNeedsPerformance(state)) {
         output << L"paused; current page has no visible performance modules";
+    } else if (state.performanceWorker.IsBusy()) {
+        output << L"refreshing in background";
+        if (state.timerActive) output << L"; 5 s fast / 20 s full";
     } else if (state.timerActive) {
         output << L"5 s fast / 20 s full";
     } else {
@@ -417,10 +422,24 @@ void StartSamplingTimer(HWND window, AppState& state) {
     UpdateStatusText(state);
 }
 
-void RefreshPerformanceSnapshot(AppState& state, codex_monitor::SampleMode mode) {
-    state.latestSnapshot = state.sampler.Sample(mode);
+void ShowSamplingRefreshState(AppState& state) {
+    constexpr wchar_t message[] =
+        L"REFRESHING PERFORMANCE DATA\r\nWaiting for background sample";
+    for (const ModuleViews& views : state.moduleViews) {
+        if (state.settings.currentPage == codex_monitor::Page::kHome &&
+            state.settings.homeVisible[codex_monitor::ModuleIndex(views.id)]) {
+            SetWindowTextW(views.homeCard, message);
+        }
+        if (state.settings.currentPage == codex_monitor::Page::kComputer) {
+            SetWindowTextW(views.computerCard, message);
+        }
+    }
+}
+
+void ApplyPerformanceSnapshot(AppState& state, codex_monitor::CompletedSample completed) {
+    state.latestSnapshot = std::move(completed.snapshot);
     state.hasPerformanceSnapshot = true;
-    if (mode == codex_monitor::SampleMode::kFastAndSlow) {
+    if (completed.mode == codex_monitor::SampleMode::kFastAndSlow) {
         state.nextSlowSampleTick = GetTickCount64() + kSlowSampleIntervalMs;
     }
     UpdateModuleCards(state);
@@ -431,7 +450,10 @@ void UpdateSamplingDemand(HWND window, AppState& state) {
     const bool shouldSample = !state.windowMinimized && CurrentPageNeedsPerformance(state);
     if (!shouldSample) {
         StopSamplingTimer(window, state);
-        if (!state.samplingPaused) state.sampler.ResetCpuBaseline();
+        if (!state.samplingPaused) {
+            state.performanceWorker.PauseAndInvalidate();
+            state.hasPerformanceSnapshot = false;
+        }
         state.samplingPaused = true;
         UpdateStatusText(state);
         return;
@@ -443,8 +465,10 @@ void UpdateSamplingDemand(HWND window, AppState& state) {
     }
 
     state.samplingPaused = false;
-    state.sampler.ResetCpuBaseline();
-    RefreshPerformanceSnapshot(state, codex_monitor::SampleMode::kFastAndSlow);
+    state.hasPerformanceSnapshot = false;
+    state.nextSlowSampleTick = 0;
+    ShowSamplingRefreshState(state);
+    state.performanceWorker.ActivateAndRequestFullSample();
     StartSamplingTimer(window, state);
 }
 
@@ -955,6 +979,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
     switch (message) {
         case WM_CREATE:
             if (!state || !CreateControls(window, *state)) return -1;
+            if (!state->performanceWorker.Start(window, kSampleReadyMessage)) return -1;
             UpdateSamplingDemand(window, *state);
             return 0;
 
@@ -990,10 +1015,23 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
                     GetTickCount64() >= state->nextSlowSampleTick
                         ? codex_monitor::SampleMode::kFastAndSlow
                         : codex_monitor::SampleMode::kFast;
-                RefreshPerformanceSnapshot(*state, mode);
+                state->performanceWorker.Request(mode);
+                UpdateStatusText(*state);
                 return 0;
             }
             break;
+
+        case kSampleReadyMessage:
+            if (state) {
+                std::optional<codex_monitor::CompletedSample> completed =
+                    state->performanceWorker.TakeLatest();
+                if (completed && !state->samplingPaused) {
+                    ApplyPerformanceSnapshot(*state, std::move(*completed));
+                } else {
+                    UpdateStatusText(*state);
+                }
+            }
+            return 0;
 
         case WM_SIZE:
             if (!state) return 0;
@@ -1075,6 +1113,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
                 CaptureWindowPlacement(window, *state);
                 PersistSettings(*state);
                 StopSamplingTimer(window, *state);
+                state->performanceWorker.StopAndJoin();
                 if (state->settingsWindow) DestroyWindow(state->settingsWindow);
                 DeleteFonts(*state);
                 if (state->backgroundBrush) DeleteObject(state->backgroundBrush);
