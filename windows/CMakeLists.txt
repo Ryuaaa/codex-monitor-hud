@@ -16,6 +16,9 @@ function(configure_codex_monitor_target target)
     )
     target_compile_definitions(${target} PRIVATE
         CODEX_MONITOR_WINDOWS_VERSION="${PROJECT_VERSION}"
+        CODEX_MONITOR_WINDOWS_VERSION_MAJOR=${PROJECT_VERSION_MAJOR}
+        CODEX_MONITOR_WINDOWS_VERSION_MINOR=${PROJECT_VERSION_MINOR}
+        CODEX_MONITOR_WINDOWS_VERSION_PATCH=${PROJECT_VERSION_PATCH}
     )
     if(MSVC)
         target_compile_options(${target} PRIVATE
@@ -171,6 +174,26 @@ if(BUILD_TESTING)
     configure_codex_monitor_target(CodexMonitorUpdateStateStoreTests)
     add_test(NAME windows_update_state_store
         COMMAND CodexMonitorUpdateStateStoreTests)
+
+    add_executable(CodexMonitorUpdateInstallerVerifierTests
+        src/update/update_installer_verifier_win32.cpp
+        tests/update_installer_verifier_test.cpp
+    )
+    configure_codex_monitor_target(CodexMonitorUpdateInstallerVerifierTests)
+    if(WIN32)
+        target_compile_definitions(
+            CodexMonitorUpdateInstallerVerifierTests PRIVATE
+            UNICODE
+            _UNICODE
+            NOMINMAX
+            WINVER=0x0A00
+            _WIN32_WINNT=0x0A00
+        )
+        target_link_libraries(
+            CodexMonitorUpdateInstallerVerifierTests PRIVATE bcrypt)
+    endif()
+    add_test(NAME windows_update_installer_verifier
+        COMMAND CodexMonitorUpdateInstallerVerifierTests)
 endif()
 
 if(WIN32)
@@ -429,6 +452,7 @@ if(WIN32)
         src/update/github_release_selector.cpp
         src/update/update_check_win32.cpp
         src/update/update_fetch_win32.cpp
+        src/update/update_installer_verifier_win32.cpp
         src/update/update_state_store.cpp
         src/update/update_worker.cpp
         src/windows_sampler.cpp
@@ -444,7 +468,7 @@ if(WIN32)
         _WIN32_WINNT=0x0A00
     )
     target_link_libraries(CodexMonitorHUD PRIVATE
-        user32 gdi32 psapi shell32 ole32 winhttp windowsapp)
+        user32 gdi32 psapi shell32 ole32 winhttp windowsapp bcrypt)
 else()
     message(STATUS "Non-Windows host: configuring portable snapshot and state tests only.")
 endif()

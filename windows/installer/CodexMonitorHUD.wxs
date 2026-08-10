@@ -15,6 +15,7 @@
         Description="Low-overhead Codex and computer performance monitor" />
 
     <MajorUpgrade
+        Schedule="afterInstallInitialize"
         DowngradeErrorMessage="A newer version of Codex Monitor HUD is already installed." />
     <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
 

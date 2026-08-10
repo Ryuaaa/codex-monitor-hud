@@ -128,6 +128,12 @@ UPDATE_SELECTOR = (
 UPDATE_FETCH = (
     WINDOWS_ROOT / "src" / "update" / "update_fetch_win32.cpp"
 ).read_text(encoding="utf-8")
+UPDATE_INSTALLER_VERIFIER = (
+    WINDOWS_ROOT / "src" / "update" / "update_installer_verifier_win32.cpp"
+).read_text(encoding="utf-8")
+UPDATE_INSTALLER_VERIFIER_HEADER = (
+    WINDOWS_ROOT / "src" / "update" / "update_installer_verifier_win32.h"
+).read_text(encoding="utf-8")
 UPDATE_STATE = (
     WINDOWS_ROOT / "src" / "update" / "update_state_store.cpp"
 ).read_text(encoding="utf-8")
@@ -435,11 +441,45 @@ def main() -> None:
             "the UI supplies an independent update-state file",
     }
     update_sources = (UPDATE_SELECTOR + UPDATE_FETCH + UPDATE_STATE +
-                      UPDATE_WORKER_HEADER + UPDATE_WORKER + MAIN)
+                      UPDATE_INSTALLER_VERIFIER_HEADER +
+                      UPDATE_INSTALLER_VERIFIER + UPDATE_WORKER_HEADER +
+                      UPDATE_WORKER + MAIN)
     for token, reason in update_contracts.items():
         require(update_sources, token, reason)
     reject(UPDATE_FETCH, "Authorization", "public update checks must not send a token")
     reject(UPDATE_FETCH, "Cookie:", "public update checks must not send cookies")
+    installer_verifier_sources = (
+        UPDATE_INSTALLER_VERIFIER_HEADER + UPDATE_INSTALLER_VERIFIER
+    )
+    for token, reason in {
+        "kMaximumWindowsInstallerBytes":
+            "downloaded installers have a hard file-size limit",
+        "FILE_FLAG_OPEN_REPARSE_POINT":
+            "installer verification refuses redirected filesystem targets",
+        "BCryptHashData":
+            "MSI SHA-256 is calculated through Windows CNG",
+        "ConstantTimeSha256Equals":
+            "the complete digest is compared without early exit",
+        "It must never authorize":
+            "checksum equality cannot be mistaken for publisher trust",
+    }.items():
+        require(installer_verifier_sources, token, reason)
+    require(RESOURCE_SCRIPT, "CODEX_MONITOR_WINDOWS_VERSION_MAJOR",
+            "the executable resource version follows the CMake project version")
+    reject(RESOURCE_SCRIPT, "FILEVERSION 0,3,0,0",
+           "the executable resource version must not be hard-coded separately")
+    require(CMAKE, "CODEX_MONITOR_WINDOWS_VERSION_PATCH=${PROJECT_VERSION_PATCH}",
+            "all executable version components come from one CMake source")
+    require((WINDOWS_ROOT / "installer" / "CodexMonitorHUD.wxs").read_text(
+                encoding="utf-8"),
+            'Schedule="afterInstallInitialize"',
+            "major upgrades keep rollback protection after the old version is removed")
+    require((WINDOWS_ROOT / "build-installer.ps1").read_text(encoding="utf-8"),
+            "$patchVersion -gt 65535",
+            "MSI versions are rejected before exceeding Windows Installer limits")
+    require((WINDOWS_ROOT / "build-installer.ps1").read_text(encoding="utf-8"),
+            "$binaryVersionInfo.ProductVersion -ne $sourceVersion",
+            "the MSI cannot wrap an executable carrying a different version")
 
     diagnosis_contracts = {
         "Missing a low metric cannot prove":
@@ -881,6 +921,8 @@ def main() -> None:
             "strict Windows release selection is compiled into the HUD",
         "src/update/update_fetch_win32.cpp":
             "the bounded public GitHub transport is compiled into the HUD",
+        "src/update/update_installer_verifier_win32.cpp":
+            "strict MSI SHA-256 verification is compiled into the HUD",
         "src/update/update_worker.cpp":
             "daily and manual update scheduling is compiled into the HUD",
         "src/main.cpp": "the product window is compiled into the HUD",
@@ -954,6 +996,8 @@ def main() -> None:
             "Windows-only release evaluation tests are registered with CTest",
         "add_test(NAME windows_update_worker":
             "daily and manual update worker tests are registered with CTest",
+        "add_test(NAME windows_update_installer_verifier":
+            "downloaded MSI checksum verification tests are registered with CTest",
         "add_executable(CodexMonitorCodexProcessTests":
             "bounded process integration tests are buildable",
         "add_test(NAME windows_codex_process":

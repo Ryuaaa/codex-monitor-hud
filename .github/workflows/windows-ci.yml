@@ -66,6 +66,16 @@ jobs:
           if ($machine -ne 0x8664) {
             throw "Build output is not an x64 PE executable"
           }
+          $cmake = Get-Content -LiteralPath "windows/CMakeLists.txt" -Raw
+          if ($cmake -notmatch 'project\(CodexMonitorHUDWindows VERSION ([0-9]+\.[0-9]+\.[0-9]+)') {
+            throw "Could not read the expected Windows version"
+          }
+          $expectedVersion = $Matches[1]
+          $versionInfo = (Get-Item -LiteralPath $binary).VersionInfo
+          if ($versionInfo.FileVersion -ne $expectedVersion -or
+              $versionInfo.ProductVersion -ne $expectedVersion) {
+            throw "PE version metadata does not match CMake: expected $expectedVersion, got file=$($versionInfo.FileVersion) product=$($versionInfo.ProductVersion)"
+          }
 
       - name: Create portable Windows package
         shell: pwsh
@@ -117,6 +127,25 @@ jobs:
           ./windows/build-installer.ps1 `
             -BinaryPath "windows/out/build/Release/CodexMonitorHUD.exe" `
             -OutputDirectory "windows/out/installer"
+
+      - name: Test Windows Installer version limits
+        shell: pwsh
+        run: |
+          $dummyBinary = Join-Path $env:RUNNER_TEMP "version-limit-fixture.exe"
+          [System.IO.File]::WriteAllBytes($dummyBinary, [byte[]](0x4d, 0x5a))
+          foreach ($invalidVersion in @("256.0.0", "0.256.0", "0.0.65536")) {
+            try {
+              ./windows/build-installer.ps1 `
+                -BinaryPath $dummyBinary `
+                -OutputDirectory (Join-Path $env:RUNNER_TEMP "invalid-msi") `
+                -Version $invalidVersion
+              throw "Invalid MSI version was accepted: $invalidVersion"
+            } catch {
+              if ($_.Exception.Message -notlike "*exceeds Windows Installer limits*") {
+                throw
+              }
+            }
+          }
 
       - name: Test MSI install and uninstall
         shell: pwsh
