@@ -120,6 +120,24 @@ if(BUILD_TESTING)
     add_test(NAME windows_codex_cost_event_parser
         COMMAND CodexMonitorCodexCostEventParserTests)
 
+    add_executable(CodexMonitorCodexCostFileScanTests
+        src/codex/codex_cost_file_scan.cpp
+        tests/codex_cost_file_scan_test.cpp
+    )
+    configure_codex_monitor_target(CodexMonitorCodexCostFileScanTests)
+    add_test(NAME windows_codex_cost_file_scan
+        COMMAND CodexMonitorCodexCostFileScanTests)
+
+    add_executable(CodexMonitorCodexCostHistoryStateTests
+        src/codex/codex_cost_model.cpp
+        src/codex/codex_cost_event_parser.cpp
+        src/codex/codex_cost_history_state.cpp
+        tests/codex_cost_history_state_test.cpp
+    )
+    configure_codex_monitor_target(CodexMonitorCodexCostHistoryStateTests)
+    add_test(NAME windows_codex_cost_history_state
+        COMMAND CodexMonitorCodexCostHistoryStateTests)
+
     add_executable(CodexMonitorQuotaForecastTests
         src/codex/quota_forecast.cpp
         tests/quota_forecast_test.cpp
