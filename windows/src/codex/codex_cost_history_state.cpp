@@ -1,14 +1,168 @@
 #include "codex/codex_cost_history_state.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 #include <map>
+#include <set>
+#include <string_view>
 #include <unordered_set>
 #include <utility>
 
 namespace codex_monitor::codex {
 namespace {
+
+constexpr std::int64_t kMaximumUnixSeconds = 253402300799LL;
+constexpr std::size_t kMaximumFileIdBytes = 96;
+constexpr std::size_t kMaximumModelBytes = 128;
+
+bool StartsWith(std::string_view value, std::string_view prefix) noexcept {
+    return value.size() >= prefix.size() &&
+           value.substr(0, prefix.size()) == prefix;
+}
+
+bool IsLowerHex(char value) noexcept {
+    return (value >= '0' && value <= '9') ||
+           (value >= 'a' && value <= 'f');
+}
+
+bool IsSafeFileId(std::string_view value) noexcept {
+    if (value.empty() || value.size() > kMaximumFileIdBytes) return false;
+    if (StartsWith(value, "win-")) {
+        if (value.size() != 4 + 8 + 1 + 16 || value[12] != '-') return false;
+        for (std::size_t index = 4; index < value.size(); ++index) {
+            if (index == 12) continue;
+            if (!IsLowerHex(value[index])) return false;
+        }
+        return true;
+    }
+    if (!StartsWith(value, "posix-")) return false;
+    const std::size_t separator = value.find('-', 6);
+    if (separator == std::string_view::npos || separator == 6 ||
+        separator + 1 >= value.size() ||
+        value.find('-', separator + 1) != std::string_view::npos) {
+        return false;
+    }
+    for (std::size_t index = 6; index < value.size(); ++index) {
+        if (index == separator) continue;
+        if (!IsLowerHex(value[index])) return false;
+    }
+    return true;
+}
+
+bool IsSafeModel(std::string_view value) noexcept {
+    if (value.empty() || value.size() > kMaximumModelBytes) return false;
+    for (const char character : value) {
+        const bool asciiLetter =
+            (character >= 'a' && character <= 'z') ||
+            (character >= 'A' && character <= 'Z');
+        const bool digit = character >= '0' && character <= '9';
+        if (!asciiLetter && !digit && character != '.' && character != '-' &&
+            character != '_') {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool IsLeapYear(int year) noexcept {
+    return year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+}
+
+int DaysInMonth(int year, int month) noexcept {
+    static constexpr std::array<int, 12> kDays{
+        31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+    if (month < 1 || month > 12) return 0;
+    if (month == 2 && IsLeapYear(year)) return 29;
+    return kDays[static_cast<std::size_t>(month - 1)];
+}
+
+bool IsCanonicalDate(std::string_view value) noexcept {
+    if (value.size() != 10 || value[4] != '-' || value[7] != '-') {
+        return false;
+    }
+    int digits[8]{};
+    std::size_t digitIndex = 0;
+    for (std::size_t index = 0; index < value.size(); ++index) {
+        if (index == 4 || index == 7) continue;
+        if (value[index] < '0' || value[index] > '9') return false;
+        digits[digitIndex++] = value[index] - '0';
+    }
+    const int year = digits[0] * 1000 + digits[1] * 100 + digits[2] * 10 +
+                     digits[3];
+    const int month = digits[4] * 10 + digits[5];
+    const int day = digits[6] * 10 + digits[7];
+    return year >= 1 && month >= 1 && month <= 12 && day >= 1 &&
+           day <= DaysInMonth(year, month);
+}
+
+bool UsageIsNonNegative(const CodexTokenUsage& usage) noexcept {
+    return usage.inputTokens >= 0 && usage.cachedInputTokens >= 0 &&
+           usage.cacheWriteInputTokens >= 0 && usage.outputTokens >= 0;
+}
+
+std::int64_t SaturatingCountedTokens(const CodexTokenUsage& usage) noexcept {
+    if (usage.inputTokens >
+        std::numeric_limits<std::int64_t>::max() - usage.outputTokens) {
+        return std::numeric_limits<std::int64_t>::max();
+    }
+    return usage.inputTokens + usage.outputTokens;
+}
+
+bool SnapshotIsConsistent(const CodexCostHistorySnapshot& snapshot) {
+    if (snapshot.updatedAtUnixSeconds < 0 ||
+        snapshot.updatedAtUnixSeconds > kMaximumUnixSeconds ||
+        snapshot.files.size() > kCodexCostHistoryCacheMaximumFiles) {
+        return false;
+    }
+
+    std::size_t totalRows = 0;
+    std::unordered_set<std::string> fileIds;
+    fileIds.reserve(snapshot.files.size());
+    for (const CodexCostHistoryFileSnapshot& file : snapshot.files) {
+        if (!IsSafeFileId(file.fileId) ||
+            !fileIds.insert(file.fileId).second ||
+            file.parsedOffsetBytes > file.observedSizeBytes ||
+            file.complete !=
+                (file.parsedOffsetBytes == file.observedSizeBytes) ||
+            (file.discardingOversizedLine &&
+             !file.hasSkippedOversizedLine) ||
+            !IsSafeModel(file.parser.currentModel) ||
+            !UsageIsNonNegative(file.parser.rawTotalsWatermark) ||
+            file.rows.size() >
+                kCodexCostHistoryCacheMaximumRows - totalRows) {
+            return false;
+        }
+        const CodexTokenUsage& watermark = file.parser.rawTotalsWatermark;
+        if (!file.parser.hasRawTotalsWatermark &&
+            (watermark.inputTokens != 0 || watermark.cachedInputTokens != 0 ||
+             watermark.cacheWriteInputTokens != 0 ||
+             watermark.outputTokens != 0)) {
+            return false;
+        }
+        totalRows += file.rows.size();
+
+        std::set<std::pair<std::string, std::string>> rowKeys;
+        for (const CodexCostHistoryRowSnapshot& row : file.rows) {
+            if (!IsCanonicalDate(row.localDate) || !IsSafeModel(row.model) ||
+                !UsageIsNonNegative(row.usage) ||
+                !std::isfinite(row.cachedEstimatedUsd) ||
+                row.cachedEstimatedUsd < 0.0 ||
+                row.cachedPricedTokens < 0) {
+                return false;
+            }
+            const std::int64_t counted = SaturatingCountedTokens(row.usage);
+            if (counted <= 0 || row.cachedPricedTokens > counted ||
+                (row.cachedPricedTokens == 0 &&
+                 row.cachedEstimatedUsd != 0.0) ||
+                !rowKeys.emplace(row.localDate, row.model).second) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
 
 void SaturatingAdd(std::int64_t value,
                    std::int64_t& target,
@@ -58,6 +212,113 @@ std::vector<CodexCostFileCursor> CodexCostHistoryState::Cursors() const {
     result.reserve(files_.size());
     for (const FileState& file : files_) result.push_back(file.cursor);
     return result;
+}
+
+std::optional<CodexCostHistorySnapshot>
+CodexCostHistoryState::ExportSnapshot(
+    std::int64_t updatedAtUnixSeconds) const noexcept {
+    try {
+        CodexCostHistorySnapshot snapshot;
+        snapshot.updatedAtUnixSeconds = updatedAtUnixSeconds;
+        snapshot.files.reserve(files_.size());
+        for (const FileState& file : files_) {
+            CodexCostHistoryFileSnapshot exported;
+            exported.fileId = file.cursor.fileId;
+            exported.observedSizeBytes = file.cursor.observedSizeBytes;
+            exported.modifiedUnixNanoseconds =
+                file.cursor.modifiedUnixNanoseconds;
+            exported.parsedOffsetBytes = file.cursor.parsedOffsetBytes;
+            exported.discardingOversizedLine =
+                file.cursor.discardingOversizedLine;
+            exported.hasSkippedOversizedLine =
+                file.cursor.hasSkippedOversizedLine;
+            exported.complete = file.cursor.complete;
+            exported.parser.currentModel = file.parser.currentModel;
+            exported.parser.hasRawTotalsWatermark =
+                file.parser.hasRawTotalsWatermark;
+            exported.parser.rawTotalsWatermark =
+                file.parser.rawTotalsWatermark;
+            exported.rows.reserve(file.rows.size());
+
+            for (const auto& entry : file.rows) {
+                const auto& key = entry.first;
+                const CodexCostEvent& event = entry.second;
+                const std::string expectedFingerprint =
+                    file.cursor.fileId + "|" + key.first + "|" + key.second;
+                if (event.localDate != key.first || event.model != key.second ||
+                    event.fingerprint != expectedFingerprint ||
+                    !event.cachedEstimatedUsd || !event.cachedPricedTokens) {
+                    return std::nullopt;
+                }
+                CodexCostHistoryRowSnapshot row;
+                row.localDate = event.localDate;
+                row.model = event.model;
+                row.usage = event.usage;
+                row.cachedEstimatedUsd = *event.cachedEstimatedUsd;
+                row.cachedPricedTokens = *event.cachedPricedTokens;
+                exported.rows.push_back(std::move(row));
+            }
+            snapshot.files.push_back(std::move(exported));
+        }
+        if (!SnapshotIsConsistent(snapshot)) return std::nullopt;
+        return snapshot;
+    } catch (...) {
+        return std::nullopt;
+    }
+}
+
+bool CodexCostHistoryState::ImportSnapshot(
+    const CodexCostHistorySnapshot& snapshot) noexcept {
+    try {
+        if (!SnapshotIsConsistent(snapshot)) return false;
+
+        std::vector<FileState> restored;
+        restored.reserve(snapshot.files.size());
+        for (const CodexCostHistoryFileSnapshot& imported : snapshot.files) {
+            FileState file;
+            file.cursor.fileId = imported.fileId;
+            file.cursor.observedSizeBytes = imported.observedSizeBytes;
+            file.cursor.modifiedUnixNanoseconds =
+                imported.modifiedUnixNanoseconds;
+            file.cursor.parsedOffsetBytes = imported.parsedOffsetBytes;
+            file.cursor.discardingOversizedLine =
+                imported.discardingOversizedLine;
+            file.cursor.hasSkippedOversizedLine =
+                imported.hasSkippedOversizedLine;
+            file.cursor.complete = imported.complete;
+            // resetAfterTruncation is a one-scan command, never durable state.
+            file.cursor.resetAfterTruncation = false;
+            file.parser.currentModel = imported.parser.currentModel;
+            file.parser.hasRawTotalsWatermark =
+                imported.parser.hasRawTotalsWatermark;
+            file.parser.rawTotalsWatermark =
+                imported.parser.rawTotalsWatermark;
+            file.parser.emittedOccurrences.clear();
+
+            for (const CodexCostHistoryRowSnapshot& importedRow :
+                 imported.rows) {
+                const std::pair<std::string, std::string> key{
+                    importedRow.localDate, importedRow.model};
+                CodexCostEvent event;
+                event.fingerprint = imported.fileId + "|" + key.first + "|" +
+                                    key.second;
+                event.localDate = key.first;
+                event.model = key.second;
+                event.usage = importedRow.usage;
+                event.cachedEstimatedUsd = importedRow.cachedEstimatedUsd;
+                event.cachedPricedTokens = importedRow.cachedPricedTokens;
+                const auto inserted =
+                    file.rows.emplace(std::move(key), std::move(event));
+                if (!inserted.second) return false;
+            }
+            restored.push_back(std::move(file));
+        }
+
+        files_.swap(restored);
+        return true;
+    } catch (...) {
+        return false;
+    }
 }
 
 CodexCostHistoryApplyResult CodexCostHistoryState::Apply(

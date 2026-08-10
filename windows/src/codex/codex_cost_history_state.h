@@ -9,6 +9,7 @@
 
 #include "codex/codex_cost_event_parser.h"
 #include "codex/codex_cost_file_scan.h"
+#include "codex/codex_cost_history_store.h"
 #include "codex/codex_cost_summary.h"
 
 namespace codex_monitor::codex {
@@ -34,6 +35,17 @@ public:
     CodexCostHistoryState& operator=(const CodexCostHistoryState&) = delete;
 
     [[nodiscard]] std::vector<CodexCostFileCursor> Cursors() const;
+
+    // Export omits source paths, raw lines, occurrence hashes, and the
+    // one-scan resetAfterTruncation signal. Invalid internal data or an invalid
+    // capture time returns nullopt rather than producing a partial snapshot.
+    [[nodiscard]] std::optional<CodexCostHistorySnapshot> ExportSnapshot(
+        std::int64_t updatedAtUnixSeconds) const noexcept;
+
+    // Import validates the complete snapshot before replacing any live state.
+    // On invalid input or allocation failure, the existing state is unchanged.
+    [[nodiscard]] bool ImportSnapshot(
+        const CodexCostHistorySnapshot& snapshot) noexcept;
 
     [[nodiscard]] CodexCostHistoryApplyResult Apply(
         const CodexCostFileScanResult& scan,

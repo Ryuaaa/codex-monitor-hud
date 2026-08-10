@@ -144,6 +144,17 @@ if(BUILD_TESTING)
     add_test(NAME windows_codex_cost_history_state
         COMMAND CodexMonitorCodexCostHistoryStateTests)
 
+    add_executable(CodexMonitorCodexCostHistoryStoreTests
+        src/codex/codex_cost_event_parser.cpp
+        src/codex/codex_cost_history_state.cpp
+        src/codex/codex_cost_history_store.cpp
+        src/codex/codex_cost_model.cpp
+        tests/codex_cost_history_store_test.cpp
+    )
+    configure_codex_monitor_target(CodexMonitorCodexCostHistoryStoreTests)
+    add_test(NAME windows_codex_cost_history_store
+        COMMAND CodexMonitorCodexCostHistoryStoreTests)
+
     add_executable(CodexMonitorQuotaForecastTests
         src/codex/quota_forecast.cpp
         tests/quota_forecast_test.cpp
@@ -401,6 +412,7 @@ if(WIN32)
             src/codex/codex_cost_event_parser.cpp
             src/codex/codex_cost_file_scan.cpp
             src/codex/codex_cost_history_state.cpp
+            src/codex/codex_cost_history_store.cpp
             src/codex/codex_cost_model.cpp
             src/codex/codex_cost_summary.cpp
             src/codex/codex_executable.cpp
@@ -467,6 +479,7 @@ if(WIN32)
         src/codex/codex_cost_event_parser.cpp
         src/codex/codex_cost_file_scan.cpp
         src/codex/codex_cost_history_state.cpp
+        src/codex/codex_cost_history_store.cpp
         src/codex/codex_cost_hybrid.cpp
         src/codex/codex_cost_model.cpp
         src/codex/codex_cost_summary.cpp

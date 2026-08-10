@@ -89,6 +89,9 @@ CODEX_COST_FILE_SCAN = (
 CODEX_COST_HISTORY_STATE = (
     WINDOWS_ROOT / "src" / "codex" / "codex_cost_history_state.cpp"
 ).read_text(encoding="utf-8")
+CODEX_COST_HISTORY_STORE = (
+    WINDOWS_ROOT / "src" / "codex" / "codex_cost_history_store.cpp"
+).read_text(encoding="utf-8")
 CODEX_COST_SUMMARY = (
     WINDOWS_ROOT / "src" / "codex" / "codex_cost_summary.cpp"
 ).read_text(encoding="utf-8")
@@ -411,12 +414,19 @@ def main() -> None:
         "kCodexCostMaximumScanBytes": "local history scanning has a hard byte budget",
         "kCodexCostMaximumLineBytes": "one damaged line cannot grow memory without bound",
         "resetAfterTruncation": "rewritten rollout files invalidate retained parser state",
+        "kCodexCostHistoryCacheMaximumBytes":
+            "restart cache size is bounded independently from source scanning",
+        'kVersionLine = "version=1"':
+            "restart cache has an explicit format version",
+        "CodexCostHistoryAtomicReplace":
+            "restart cache commits through an atomic replacement boundary",
         "CalculateCodexCostSummary": "cost periods and coverage are aggregated independently",
         "CalculateCodexCostHybridSummary": "official Token totals remain the primary display source",
     }
     cost_sources = (CODEX_COST_MODEL + CODEX_COST_EVENT_PARSER +
                     CODEX_COST_FILE_SCAN + CODEX_COST_HISTORY_STATE +
-                    CODEX_COST_SUMMARY + CODEX_COST_HYBRID)
+                    CODEX_COST_HISTORY_STORE + CODEX_COST_SUMMARY +
+                    CODEX_COST_HYBRID)
     for token, reason in cost_contracts.items():
         require(cost_sources, token, reason)
     reject(struct_body(CODEX_WORKER_HEADER, "CodexCostRefresh"),
@@ -758,6 +768,12 @@ def main() -> None:
             "local cost history is gated independently by visible-card demand",
         "costHistoryEpoch_":
             "disabled or hidden cost results cannot be published later",
+        "!scan.discoveryIncomplete && previous.size() != scan.files.size()":
+            "partial discovery does not rewrite an unchanged preserved cache",
+        "costHistoryCacheDirty":
+            "a failed restart-cache write remains pending for a later retry",
+        "costHistoryCacheWriteBlocked":
+            "a newer cache version is not retried or downgraded every refresh",
         "MoveFileExW": "Windows history replacement is atomic and replaces an old file",
         "fetch_add": "pause and stop permanently invalidate an old generation",
         "PauseAndInvalidate": "no-demand states invalidate in-flight work",
@@ -917,6 +933,8 @@ def main() -> None:
             "the HUD does not fabricate a monthly projection when evidence is missing",
         "codexWorker.ActivateAndRefresh": "new demand refreshes immediately",
         "codexWorker.Start": "the app-server worker starts with the window",
+        "codex-cost-history-cache.txt":
+            "the worker receives an independent restart cache path",
         "kCodexReadyMessage": "worker completion has a dedicated UI message",
         "codexWorker.TakeLatest": "the UI takes a copied privacy-trimmed result",
         "codexWorker.StopAndJoin": "window teardown reaps the Codex worker",
@@ -969,6 +987,8 @@ def main() -> None:
         "src/codex/codex_refresh_schedule.cpp": "Codex request coalescing is compiled into the HUD",
         "src/codex/codex_usage_math.cpp": "official daily usage math is compiled into the HUD",
         "src/codex/codex_worker.cpp": "the serial Codex worker is compiled into the HUD",
+        "src/codex/codex_cost_history_store.cpp":
+            "the bounded restart cache is compiled into the HUD",
         "src/service_status_fetch_win32.cpp":
             "the bounded official status transport is compiled into the HUD",
         "src/service_status_json_win32.cpp":
@@ -1042,6 +1062,8 @@ def main() -> None:
             "bounded local file scan tests are registered with CTest",
         "add_test(NAME windows_codex_cost_history_state":
             "incremental history state tests are registered with CTest",
+        "add_test(NAME windows_codex_cost_history_store":
+            "restart cache persistence tests are registered with CTest",
         "add_executable(CodexMonitorQuotaForecastTests":
             "portable quota forecast tests are buildable",
         "add_test(NAME windows_quota_forecast":

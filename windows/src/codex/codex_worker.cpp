@@ -3,6 +3,7 @@
 #include "codex_executable.h"
 #include "codex_cost_file_scan.h"
 #include "codex_cost_history_state.h"
+#include "codex_cost_history_store.h"
 #include "quota_history_store.h"
 
 #include <winrt/base.h>
@@ -16,6 +17,7 @@
 #include <functional>
 #include <limits>
 #include <system_error>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -213,12 +215,48 @@ std::optional<std::string> CurrentLocalDateString() noexcept {
     return LocalDateFromUnixMilliseconds(now.count());
 }
 
+bool SamePersistedCursorState(const CodexCostFileCursor& lhs,
+                              const CodexCostFileCursor& rhs) noexcept {
+    return lhs.fileId == rhs.fileId &&
+           lhs.observedSizeBytes == rhs.observedSizeBytes &&
+           lhs.modifiedUnixNanoseconds == rhs.modifiedUnixNanoseconds &&
+           lhs.parsedOffsetBytes == rhs.parsedOffsetBytes &&
+           lhs.discardingOversizedLine == rhs.discardingOversizedLine &&
+           lhs.hasSkippedOversizedLine == rhs.hasSkippedOversizedLine &&
+           lhs.complete == rhs.complete && !rhs.resetAfterTruncation;
+}
+
+bool CostHistoryStateChanged(
+    const std::vector<CodexCostFileCursor>& previous,
+    const CodexCostFileScanResult& scan) {
+    if (!scan.ok()) return false;
+    if (!scan.lines.empty()) return true;
+
+    std::unordered_map<std::string_view, const CodexCostFileCursor*> byId;
+    byId.reserve(previous.size());
+    for (const CodexCostFileCursor& cursor : previous) {
+        byId.emplace(cursor.fileId, &cursor);
+    }
+    for (const CodexCostFileCursor& cursor : scan.files) {
+        const auto found = byId.find(cursor.fileId);
+        if (found == byId.end() ||
+            !SamePersistedCursorState(*found->second, cursor)) {
+            return true;
+        }
+    }
+    // A partial discovery cannot prove that a previously cached file was
+    // deleted. CodexCostHistoryState preserves those rows, so the durable
+    // snapshot has changed by removal only after a complete discovery.
+    return !scan.discoveryIncomplete && previous.size() != scan.files.size();
+}
+
 CodexCostRefresh RefreshCostHistory(
     const std::optional<std::filesystem::path>& codexHome,
     CodexCostHistoryState& historyState,
     const std::function<bool()>& shouldCancel) {
     CodexCostRefresh output;
     CodexCostFileScanResult scan;
+    std::vector<CodexCostFileCursor> previousFiles;
     if (codexHome) {
         CodexCostFileScanRequest request;
         request.codexHome = *codexHome;
@@ -226,7 +264,8 @@ CodexCostRefresh RefreshCostHistory(
             std::chrono::duration_cast<std::chrono::seconds>(
                 std::chrono::system_clock::now().time_since_epoch())
                 .count();
-        request.previousFiles = historyState.Cursors();
+        previousFiles = historyState.Cursors();
+        request.previousFiles = previousFiles;
         request.shouldCancel = shouldCancel;
         scan = ScanCodexCostRolloutFiles(request);
         output.status = scan.ok() ? CodexCostRefreshStatus::kNoTokenEvents
@@ -235,6 +274,8 @@ CodexCostRefresh RefreshCostHistory(
         output.skippedCompressedFiles = scan.skippedCompressedFiles;
         output.skippedOversizedLines = scan.skippedOversizedLines;
         output.rejectedUnsafeEntries = scan.rejectedUnsafeEntries;
+        output.historyStateChanged =
+            CostHistoryStateChanged(previousFiles, scan);
     } else {
         scan.status = CodexCostFileScanStatus::kInvalidArgument;
         output.status = CodexCostRefreshStatus::kCodexHomeUnavailable;
@@ -288,7 +329,8 @@ CodexWorker::~CodexWorker() {
 bool CodexWorker::Start(HWND completionWindow,
                         UINT completionMessage,
                         std::string_view clientVersion,
-                        std::filesystem::path quotaHistoryPath) {
+                        std::filesystem::path quotaHistoryPath,
+                        std::filesystem::path costHistoryCachePath) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (started_ || thread_.joinable() || schedule_.IsStopped() ||
         !completionWindow || completionMessage < WM_APP ||
@@ -301,12 +343,14 @@ bool CodexWorker::Start(HWND completionWindow,
     try {
         clientVersion_.assign(clientVersion);
         quotaHistoryPath_ = std::move(quotaHistoryPath);
+        costHistoryCachePath_ = std::move(costHistoryCachePath);
         thread_ = std::thread(&CodexWorker::Run, this);
     } catch (...) {
         completionWindow_ = nullptr;
         completionMessage_ = 0;
         clientVersion_.clear();
         quotaHistoryPath_.clear();
+        costHistoryCachePath_.clear();
         return false;
     }
     started_ = true;
@@ -411,6 +455,7 @@ void CodexWorker::StopAndJoin() {
         completionMessage_ = 0;
         clientVersion_.clear();
         quotaHistoryPath_.clear();
+        costHistoryCachePath_.clear();
         quotaForecastEnabled_ = false;
         costHistoryEnabled_ = false;
         started_ = false;
@@ -437,6 +482,10 @@ void CodexWorker::Run() {
     // The client and its retained parsed state never leave this thread.
     CodexAppServerClient client;
     CodexCostHistoryState costHistoryState;
+    bool costHistoryCacheLoadAttempted = false;
+    bool costHistoryCacheDirty = false;
+    bool costHistoryCacheWriteBlocked = false;
+    bool costHistoryCacheSaveFailed = false;
     std::size_t consecutiveFailureCount = 0;
     for (;;) {
         std::optional<::codex_monitor::CodexRefreshWorkItem> item;
@@ -447,6 +496,7 @@ void CodexWorker::Run() {
         bool costEnabled = false;
         std::string clientVersion;
         std::filesystem::path quotaHistoryPath;
+        std::filesystem::path costHistoryCachePath;
         {
             std::unique_lock<std::mutex> lock(mutex_);
             for (;;) {
@@ -472,6 +522,7 @@ void CodexWorker::Run() {
                     costEpoch =
                         costHistoryEpoch_.load(std::memory_order_acquire);
                     quotaHistoryPath = quotaHistoryPath_;
+                    costHistoryCachePath = costHistoryCachePath_;
                     break;
                 }
 
@@ -550,6 +601,30 @@ void CodexWorker::Run() {
         if (costEnabled &&
             cancellationEpoch_.load(std::memory_order_acquire) == refreshEpoch &&
             costHistoryEpoch_.load(std::memory_order_acquire) == costEpoch) {
+            if (!costHistoryCacheLoadAttempted) {
+                CodexCostHistoryLoadResult loaded;
+                if (costHistoryCachePath.empty()) {
+                    loaded.status = CodexCostHistoryLoadStatus::kNotFound;
+                } else {
+                    loaded = CodexCostHistoryStore(costHistoryCachePath).Load();
+                }
+                if (cancellationEpoch_.load(std::memory_order_acquire) ==
+                        refreshEpoch &&
+                    costHistoryEpoch_.load(std::memory_order_acquire) ==
+                        costEpoch) {
+                    costHistoryCacheLoadAttempted = true;
+                    if (loaded.status == CodexCostHistoryLoadStatus::kOk) {
+                        static_cast<void>(
+                            costHistoryState.ImportSnapshot(loaded.snapshot));
+                    } else if (loaded.status ==
+                               CodexCostHistoryLoadStatus::kUnsupportedVersion) {
+                        // Never downgrade a cache written by a newer build.
+                        // This is terminal for this process, so it also avoids
+                        // retrying a guaranteed refusal every five minutes.
+                        costHistoryCacheWriteBlocked = true;
+                    }
+                }
+            }
             costHistoryUpdate =
                 RefreshCostHistory(
                     refreshedCodexHome, costHistoryState,
@@ -559,6 +634,76 @@ void CodexWorker::Run() {
                                costHistoryEpoch_.load(
                                    std::memory_order_acquire) != costEpoch;
                     });
+
+            const bool refreshedState =
+                costHistoryUpdate &&
+                (costHistoryUpdate->status == CodexCostRefreshStatus::kAvailable ||
+                 costHistoryUpdate->status ==
+                     CodexCostRefreshStatus::kNoTokenEvents);
+            if (costHistoryUpdate) {
+                costHistoryCacheDirty =
+                    costHistoryCacheDirty ||
+                    costHistoryUpdate->historyStateChanged;
+            }
+            if (refreshedState && costHistoryCacheDirty &&
+                !costHistoryCacheWriteBlocked &&
+                !costHistoryCachePath.empty() &&
+                cancellationEpoch_.load(std::memory_order_acquire) ==
+                    refreshEpoch &&
+                costHistoryEpoch_.load(std::memory_order_acquire) == costEpoch) {
+                const std::int64_t nowUnixSeconds =
+                    std::chrono::duration_cast<std::chrono::seconds>(
+                        std::chrono::system_clock::now().time_since_epoch())
+                        .count();
+                const std::optional<CodexCostHistorySnapshot> snapshot =
+                    costHistoryState.ExportSnapshot(nowUnixSeconds);
+                if (!snapshot.has_value()) {
+                    costHistoryCacheSaveFailed = true;
+                } else {
+                    const CodexCostHistoryAtomicReplace replace =
+                        [this, costEpoch](
+                            const std::filesystem::path& temporary,
+                            const std::filesystem::path& destination) {
+                            std::lock_guard<std::mutex> lock(mutex_);
+                            if (!started_ || !costHistoryEnabled_ ||
+                                costHistoryEpoch_.load(
+                                    std::memory_order_acquire) != costEpoch) {
+                                return std::make_error_code(
+                                    std::errc::operation_canceled);
+                            }
+                            if (MoveFileExW(
+                                    temporary.c_str(), destination.c_str(),
+                                    MOVEFILE_REPLACE_EXISTING |
+                                        MOVEFILE_WRITE_THROUGH)) {
+                                return std::error_code{};
+                            }
+                            return std::error_code(
+                                static_cast<int>(GetLastError()),
+                                std::system_category());
+                        };
+                    const CodexCostHistorySaveResult saved =
+                        CodexCostHistoryStore(
+                            costHistoryCachePath, replace).Save(*snapshot);
+                    if (saved.written()) {
+                        costHistoryCacheDirty = false;
+                        costHistoryCacheSaveFailed = false;
+                    } else if (saved.status ==
+                               CodexCostHistorySaveStatus::kUnsupportedVersion) {
+                        costHistoryCacheWriteBlocked = true;
+                        costHistoryCacheSaveFailed = true;
+                    } else if (saved.status !=
+                               CodexCostHistorySaveStatus::kCancelled) {
+                        // Keep the dirty bit so an unchanged later refresh
+                        // retries instead of silently losing the new cursor.
+                        costHistoryCacheSaveFailed = true;
+                    }
+                }
+            }
+            if (costHistoryUpdate) {
+                costHistoryUpdate->historyCacheSaveFailed =
+                    costHistoryCacheSaveFailed ||
+                    (costHistoryCacheWriteBlocked && costHistoryCacheDirty);
+            }
         }
 
         const bool succeeded = RefreshSucceeded(refresh.report, refresh.data);

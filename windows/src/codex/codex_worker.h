@@ -43,6 +43,8 @@ struct CodexCostRefresh {
     CodexCostRefreshStatus status = CodexCostRefreshStatus::kScanFailed;
     std::optional<CodexCostSummary> localSummary;
     bool showingLastKnown = false;
+    bool historyStateChanged = false;
+    bool historyCacheSaveFailed = false;
     bool coverageIncomplete = false;
     std::size_t skippedCompressedFiles = 0;
     std::size_t skippedOversizedLines = 0;
@@ -73,7 +75,8 @@ public:
     bool Start(HWND completionWindow,
                UINT completionMessage,
                std::string_view clientVersion,
-               std::filesystem::path quotaHistoryPath = {});
+               std::filesystem::path quotaHistoryPath = {},
+               std::filesystem::path costHistoryCachePath = {});
     bool SetQuotaForecastEnabled(bool enabled);
     bool SetCostHistoryEnabled(bool enabled);
     bool ActivateAndRefresh();
@@ -98,6 +101,7 @@ private:
     UINT completionMessage_ = 0;
     std::string clientVersion_;
     std::filesystem::path quotaHistoryPath_;
+    std::filesystem::path costHistoryCachePath_;
     bool quotaForecastEnabled_ = false;
     bool costHistoryEnabled_ = false;
     bool started_ = false;

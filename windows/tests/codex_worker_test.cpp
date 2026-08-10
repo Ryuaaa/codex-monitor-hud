@@ -7,6 +7,7 @@
 #include <tlhelp32.h>
 
 #include "codex/codex_worker.h"
+#include "codex/codex_cost_history_store.h"
 #include "codex/codex_cost_file_scan.h"
 
 #include <winrt/base.h>
@@ -542,19 +543,26 @@ void TestCostHistoryDemandGating(HWND window,
         "\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\","
         "\"info\":{\"last_token_usage\":{\"input_tokens\":1000,"
         "\"cached_input_tokens\":200,\"output_tokens\":100}}}}\n";
-    Expect(WriteTextFile(sessionDirectory / L"rollout-cost.jsonl", fixture),
+    const std::filesystem::path rolloutPath =
+        sessionDirectory / L"rollout-cost.jsonl";
+    Expect(WriteTextFile(rolloutPath, fixture),
            "the cost test rollout must be written");
     ScopedEnvironmentVariable configuredHome(L"CODEX_FAKE_CODEX_HOME",
                                                codexHome.wstring());
+    const std::filesystem::path cachePath =
+        testRoot / L"codex-cost-history-cache.txt";
 
     CodexWorker worker;
-    Expect(worker.Start(window, kWorkerReadyMessage, "test-version"),
+    Expect(worker.Start(window, kWorkerReadyMessage, "test-version", {},
+                        cachePath),
            "the cost worker must start");
     Expect(worker.ActivateAndRefresh(),
            "the cost worker must queue a default-disabled refresh");
     const auto disabled = WaitForRefresh(window, worker, 10s);
     Expect(disabled && disabled->succeeded && !disabled->costHistoryUpdate,
            "default-disabled cost history must not scan or publish output");
+    Expect(!std::filesystem::exists(cachePath),
+           "default-disabled cost history must not create a restart cache");
 
     Expect(worker.SetCostHistoryEnabled(true),
            "explicitly enabling cost history must change demand");
@@ -577,6 +585,22 @@ void TestCostHistoryDemandGating(HWND window,
                    update.localSummary->pricedTokenPercent == 100.0,
                "the known model must have complete price coverage");
     }
+    Expect(std::filesystem::exists(cachePath),
+           "the first successful enabled scan must create a restart cache");
+    const auto firstCacheWrite = std::filesystem::last_write_time(
+        cachePath, error);
+    Expect(!error, "the restart cache write time must be readable");
+    Expect(worker.RequestRefresh(),
+           "the cost test must request an unchanged incremental refresh");
+    const auto unchanged = WaitForRefresh(window, worker, 10s);
+    Expect(unchanged && unchanged->succeeded &&
+               unchanged->costHistoryUpdate &&
+               !unchanged->costHistoryUpdate->historyStateChanged,
+           "an unchanged source must not mark the persisted history dirty");
+    const auto secondCacheWrite = std::filesystem::last_write_time(
+        cachePath, error);
+    Expect(!error && secondCacheWrite == firstCacheWrite,
+           "an unchanged refresh must not rewrite the restart cache");
 
     Expect(worker.SetCostHistoryEnabled(false),
            "disabling cost history must change demand");
@@ -587,6 +611,89 @@ void TestCostHistoryDemandGating(HWND window,
                !disabledAgain->costHistoryUpdate,
            "disabled cost history must not publish retained output");
     worker.StopAndJoin();
+    const auto cached =
+        codex_monitor::codex::CodexCostHistoryStore(cachePath).Load();
+    Expect(cached.status ==
+               codex_monitor::codex::CodexCostHistoryLoadStatus::kOk &&
+               !cached.snapshot.files.empty(),
+           "an enabled successful scan must persist a validated restart cache");
+
+    // Damage an already-consumed byte, then append one valid event. A second
+    // worker must restore the durable cursor and parser model before scanning:
+    // a full rescan would report the damaged first line and lose the model.
+    std::string resumedFixture = fixture;
+    Expect(!resumedFixture.empty(),
+           "the restart fixture must have an already-consumed prefix");
+    if (!resumedFixture.empty()) resumedFixture.front() = '!';
+    resumedFixture +=
+        "{\"timestamp\":\"" + timestamp +
+        "\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\","
+        "\"info\":{\"last_token_usage\":{\"input_tokens\":500,"
+        "\"cached_input_tokens\":100,\"output_tokens\":50}}}}\n";
+    Expect(WriteTextFile(rolloutPath, resumedFixture),
+           "the restart fixture must append a new Token event");
+
+    CodexWorker resumedWorker;
+    Expect(resumedWorker.Start(window, kWorkerReadyMessage, "test-version", {},
+                               cachePath),
+           "the restarted cost worker must start with the saved cache");
+    Expect(resumedWorker.SetCostHistoryEnabled(true),
+           "the restarted cost worker must enable history");
+    Expect(resumedWorker.ActivateAndRefresh(),
+           "the restarted cost worker must queue a refresh");
+    const auto resumed = WaitForRefresh(window, resumedWorker, 10s);
+    Expect(resumed && resumed->succeeded && resumed->costHistoryUpdate &&
+               resumed->costHistoryUpdate->localSummary &&
+               resumed->costHistoryUpdate->localSummary->available &&
+               resumed->costHistoryUpdate->localSummary->today.tokens == 1650 &&
+               resumed->costHistoryUpdate->localSummary->pricedTokenPercent ==
+                   100.0 &&
+               resumed->costHistoryUpdate->malformedLineCount == 0,
+           "restart recovery must add only the appended event without rereading the consumed prefix");
+    resumedWorker.StopAndJoin();
+
+    // Make the cache destination temporarily unwritable by occupying the file
+    // path with a directory. Once repaired, an unchanged refresh must retry
+    // because the in-memory cursor is still dirty.
+    Expect(WriteTextFile(rolloutPath, fixture),
+           "the retry fixture must restore a valid rollout");
+    const std::filesystem::path retryCachePath =
+        testRoot / L"codex-cost-history-retry.txt";
+    std::filesystem::create_directories(retryCachePath, error);
+    Expect(!error, "the retry cache blocker directory must be created");
+
+    CodexWorker retryWorker;
+    Expect(retryWorker.Start(window, kWorkerReadyMessage, "test-version", {},
+                             retryCachePath),
+           "the retry cost worker must start");
+    Expect(retryWorker.SetCostHistoryEnabled(true),
+           "the retry cost worker must enable history");
+    Expect(retryWorker.ActivateAndRefresh(),
+           "the retry cost worker must queue its first refresh");
+    const auto failedSave = WaitForRefresh(window, retryWorker, 10s);
+    Expect(failedSave && failedSave->succeeded &&
+               failedSave->costHistoryUpdate &&
+               failedSave->costHistoryUpdate->historyCacheSaveFailed,
+           "a cache write failure must remain visible while the data is dirty");
+
+    error.clear();
+    Expect(std::filesystem::remove(retryCachePath, error) && !error,
+           "the retry cache blocker directory must be removable");
+    Expect(retryWorker.RequestRefresh(),
+           "the retry cost worker must queue an unchanged refresh");
+    const auto retriedSave = WaitForRefresh(window, retryWorker, 10s);
+    Expect(retriedSave && retriedSave->succeeded &&
+               retriedSave->costHistoryUpdate &&
+               !retriedSave->costHistoryUpdate->historyStateChanged &&
+               !retriedSave->costHistoryUpdate->historyCacheSaveFailed &&
+               std::filesystem::is_regular_file(retryCachePath),
+           "an unchanged refresh must retry and clear a prior cache write failure");
+    retryWorker.StopAndJoin();
+    const auto retriedCache =
+        codex_monitor::codex::CodexCostHistoryStore(retryCachePath).Load();
+    Expect(retriedCache.status ==
+               codex_monitor::codex::CodexCostHistoryLoadStatus::kOk,
+           "the successful retry must leave a valid restart cache");
     Stage("cost_end");
 }
 

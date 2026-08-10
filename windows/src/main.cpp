@@ -1013,6 +1013,9 @@ std::wstring BuildTokenCostCardText(const AppState& state) {
         if (state.latestCostHistory->showingLastKnown) {
             output << L"\r\n本次读取失败，显示上次历史";
         }
+        if (state.latestCostHistory->historyCacheSaveFailed) {
+            output << L"\r\n历史缓存保存失败；下次启动将重新扫描";
+        }
     }
     if (summary.saturated) output << L"\r\n数值达到显示上限";
     const auto UsesOfficial = [](const auto& period) {
@@ -2373,7 +2376,11 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
                     state->settingsPath.empty()
                         ? std::filesystem::path{}
                         : state->settingsPath.parent_path() /
-                              L"quota-usage-history.txt");
+                              L"quota-usage-history.txt",
+                    state->settingsPath.empty()
+                        ? std::filesystem::path{}
+                        : state->settingsPath.parent_path() /
+                              L"codex-cost-history-cache.txt");
             state->serviceStatusWorkerAvailable =
                 state->serviceStatusWorker.Start(window,
                                                  kServiceStatusReadyMessage);
