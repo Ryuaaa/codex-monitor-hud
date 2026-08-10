@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.21)
 
-project(CodexMonitorHUDWindows VERSION 0.2.0 LANGUAGES CXX)
+project(CodexMonitorHUDWindows VERSION 0.3.0 LANGUAGES CXX)
 
 include(CTest)
 
@@ -22,11 +22,20 @@ if(BUILD_TESTING)
     )
     configure_codex_monitor_target(CodexMonitorSnapshotMathTests)
     add_test(NAME windows_snapshot_math COMMAND CodexMonitorSnapshotMathTests)
+
+    add_executable(CodexMonitorModuleStateTests
+        src/module_state.cpp
+        tests/module_state_test.cpp
+    )
+    configure_codex_monitor_target(CodexMonitorModuleStateTests)
+    add_test(NAME windows_module_state COMMAND CodexMonitorModuleStateTests)
 endif()
 
 if(WIN32)
     add_executable(CodexMonitorHUD WIN32
         src/main.cpp
+        src/module_state.cpp
+        src/settings_store_win32.cpp
         src/windows_sampler.cpp
     )
     configure_codex_monitor_target(CodexMonitorHUD)
@@ -38,7 +47,7 @@ if(WIN32)
         WINVER=0x0A00
         _WIN32_WINNT=0x0A00
     )
-    target_link_libraries(CodexMonitorHUD PRIVATE user32 gdi32 psapi)
+    target_link_libraries(CodexMonitorHUD PRIVATE user32 gdi32 psapi shell32 ole32)
 else()
-    message(STATUS "Non-Windows host: configuring portable snapshot tests only.")
+    message(STATUS "Non-Windows host: configuring portable snapshot and state tests only.")
 endif()

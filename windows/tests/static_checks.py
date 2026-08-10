@@ -1,16 +1,20 @@
 #!/usr/bin/env python3
-"""Source-level contracts for the native Windows performance milestone."""
+"""Source-level contracts for the native Windows product-shell milestone."""
 
 from pathlib import Path
 
 
 WINDOWS_ROOT = Path(__file__).resolve().parents[1]
 MAIN = (WINDOWS_ROOT / "src" / "main.cpp").read_text(encoding="utf-8")
+MODULE_STATE = (WINDOWS_ROOT / "src" / "module_state.cpp").read_text(encoding="utf-8")
+MODULE_STATE_HEADER = (WINDOWS_ROOT / "src" / "module_state.h").read_text(encoding="utf-8")
+SETTINGS_STORE = (WINDOWS_ROOT / "src" / "settings_store_win32.cpp").read_text(encoding="utf-8")
 SAMPLER = (WINDOWS_ROOT / "src" / "windows_sampler.cpp").read_text(encoding="utf-8")
 SAMPLER_HEADER = (WINDOWS_ROOT / "src" / "windows_sampler.h").read_text(encoding="utf-8")
 SNAPSHOT = (WINDOWS_ROOT / "src" / "performance_snapshot.h").read_text(encoding="utf-8")
 MATH = (WINDOWS_ROOT / "src" / "snapshot_math.h").read_text(encoding="utf-8")
 TEST = (WINDOWS_ROOT / "tests" / "snapshot_math_test.cpp").read_text(encoding="utf-8")
+STATE_TEST = (WINDOWS_ROOT / "tests" / "module_state_test.cpp").read_text(encoding="utf-8")
 CMAKE = (WINDOWS_ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
 
 
@@ -41,6 +45,21 @@ def main() -> None:
         "SIZE_MINIMIZED": "minimization has an explicit low-burden path",
         "KillTimer(window, kSampleTimerId)": "minimization stops periodic sampling",
         "ResetCpuBaseline": "restoring cannot report a stale long-interval CPU delta",
+        "HomeNeedsPerformance": "homepage sampling follows visible module dependencies",
+        "CurrentPageNeedsPerformance": "page-level sampling demand is centralized",
+        "case codex_monitor::Page::kCodex:\n            return false":
+            "the disconnected Codex page stops performance sampling",
+        "本机 Codex 数据尚未连接": "the Codex page states the real connection boundary",
+        "does not simulate account, usage, task, token":
+            "the disconnected Codex page cannot imply fabricated data",
+        "kHomePageButtonId": "the shell exposes a homepage",
+        "kCodexPageButtonId": "the shell exposes a Codex page",
+        "kComputerPageButtonId": "the shell exposes a computer-performance page",
+        "kSettingsButtonId": "the shell exposes settings",
+        "ModuleRegistry()": "module controls are created from the registry",
+        "VisibleHomeModules": "homepage cards follow saved visibility and order",
+        "WM_EXITSIZEMOVE": "window placement is persisted after interactive movement",
+        "WM_DISPLAYCHANGE": "saved placement is repaired after monitor changes",
         "CODEX / CHATGPT PROCESS TREE": "the first card displays target aggregation",
         "SYSTEM CPU & PHYSICAL MEMORY": "the second card displays system metrics",
         "COMMIT & PAGE FILE": "the third card displays commit and page-file metrics",
@@ -91,8 +110,8 @@ def main() -> None:
     require(SAMPLER_HEADER, "class WindowsSampler", "native collection has a sampler module")
     require(SAMPLER_HEADER, "enum class SampleMode", "fast and slow sampling are explicit")
 
-    if MAIN.count("SampleMode::kFastAndSlow") < 3:
-        raise AssertionError("initial startup, scheduled refresh, and restore must request slow metrics")
+    if MAIN.count("SampleMode::kFastAndSlow") < 2:
+        raise AssertionError("scheduled full refresh and demand restart must request slow metrics")
     if SAMPLER.count("GetProcessTimes") != 1:
         raise AssertionError("process CPU should have one target-gated native query site")
 
@@ -119,16 +138,54 @@ def main() -> None:
     for token, reason in test_contracts.items():
         require(TEST, token, reason)
 
+    state_contracts = {
+        "struct ModuleDefinition": "module metadata has a single registry model",
+        "requiresPerformanceSampling": "sampling demand is declared per module",
+        "SanitizeHomeOrder": "saved order is repaired against the current registry",
+        "VisibleHomeModules": "homepage visibility is derived in the portable model",
+        "MoveHomeModule": "settings reorder behavior is portable and testable",
+        "SerializeSettings": "settings use an explicit whitelist serializer",
+        "ParseSettings": "settings parsing has a portable boundary",
+        "ClampWindowPlacement": "off-screen recovery is portable and testable",
+    }
+    for token, reason in state_contracts.items():
+        require(MODULE_STATE_HEADER + MODULE_STATE, token, reason)
+    reject(MODULE_STATE, "windows.h", "the state model must remain portable")
+
+    state_test_contracts = {
+        "duplicate order entries must be removed": "registry migration behavior is fixed",
+        "intentionally empty homepage": "all-hidden homepage intent is fixed",
+        "unknown page must fall back to home": "damaged settings have a safe fallback",
+        "off-screen saved window must return": "monitor removal recovery is fixed",
+    }
+    for token, reason in state_test_contracts.items():
+        require(STATE_TEST, token, reason)
+
+    persistence_contracts = {
+        "FOLDERID_LocalAppData": "settings live in the per-user Windows data directory",
+        "CodexMonitorHUD": "settings have an app-specific directory",
+        "settings.ini": "settings use a deterministic filename",
+        "MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH":
+            "settings replacement is atomic and flushed",
+    }
+    for token, reason in persistence_contracts.items():
+        require(SETTINGS_STORE, token, reason)
+    reject(SETTINGS_STORE, "GetEnvironmentVariable", "settings paths must not be environment-spliced")
+
     cmake_contracts = {
         "add_executable(CodexMonitorHUD WIN32": "the executable uses the Windows GUI subsystem",
         "src/windows_sampler.cpp": "the native sampler is compiled into the HUD",
+        "src/module_state.cpp": "the module state model is compiled into the HUD",
+        "src/settings_store_win32.cpp": "the per-user settings store is compiled into the HUD",
         "add_executable(CodexMonitorSnapshotMathTests": "portable fixed tests are buildable",
         "add_test(NAME windows_snapshot_math": "portable tests are registered with CTest",
+        "add_executable(CodexMonitorModuleStateTests": "portable state tests are buildable",
+        "add_test(NAME windows_module_state": "portable state tests are registered with CTest",
         "cxx_std_17": "the implementation has an explicit language baseline",
         "MSVC_RUNTIME_LIBRARY": "the release binary does not require a separate VC runtime install",
         "PSAPI_VERSION=1": "PSAPI names resolve consistently through Psapi.lib",
         "NOMINMAX": "the existing Win32 shell's std::max calls compile under Windows headers",
-        "user32 gdi32 psapi": "only documented Windows system libraries are linked",
+        "user32 gdi32 psapi shell32 ole32": "only documented Windows system libraries are linked",
     }
     for token, reason in cmake_contracts.items():
         require(CMAKE, token, reason)
