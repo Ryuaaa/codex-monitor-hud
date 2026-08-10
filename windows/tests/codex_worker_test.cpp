@@ -246,8 +246,11 @@ int wmain(int argc, wchar_t** argv) {
     Stage("main_begin");
     const std::filesystem::path fakeServer =
         argc >= 2 ? std::filesystem::path(argv[1]) : std::filesystem::path{};
+    const std::wstring mode = argc >= 3 ? argv[2] : L"all";
+    const bool validMode = mode == L"all" || mode == L"success" ||
+                           mode == L"pause" || mode == L"backoff";
     const std::filesystem::path testRoot = CreateTestDirectory();
-    if (fakeServer.empty() || testRoot.empty()) {
+    if (fakeServer.empty() || testRoot.empty() || !validMode) {
         std::cerr << "FAIL: worker test requires a fake app-server and temp directory\n";
         return 1;
     }
@@ -269,11 +272,17 @@ int wmain(int argc, wchar_t** argv) {
         return 1;
     }
 
-    TestSuccessfulBackgroundRefresh(window);
-    DrainRefreshMessages(window);
-    TestPauseCancelsAndResumeRefreshes(window, executable);
-    DrainRefreshMessages(window);
-    TestFailureBackoffAndRecovery(window);
+    if (mode == L"all" || mode == L"success") {
+        TestSuccessfulBackgroundRefresh(window);
+        DrainRefreshMessages(window);
+    }
+    if (mode == L"all" || mode == L"pause") {
+        TestPauseCancelsAndResumeRefreshes(window, executable);
+        DrainRefreshMessages(window);
+    }
+    if (mode == L"all" || mode == L"backoff") {
+        TestFailureBackoffAndRecovery(window);
+    }
 
     Stage("cleanup_begin");
     DestroyWindow(window);

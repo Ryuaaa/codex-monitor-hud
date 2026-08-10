@@ -152,6 +152,15 @@ if(WIN32)
         add_test(NAME windows_codex_worker
             COMMAND CodexMonitorCodexWorkerTests
                     $<TARGET_FILE:CodexMonitorFakeCodexAppServer>)
+        add_test(NAME windows_codex_worker_success
+            COMMAND CodexMonitorCodexWorkerTests
+                    $<TARGET_FILE:CodexMonitorFakeCodexAppServer> success)
+        add_test(NAME windows_codex_worker_pause
+            COMMAND CodexMonitorCodexWorkerTests
+                    $<TARGET_FILE:CodexMonitorFakeCodexAppServer> pause)
+        add_test(NAME windows_codex_worker_backoff
+            COMMAND CodexMonitorCodexWorkerTests
+                    $<TARGET_FILE:CodexMonitorFakeCodexAppServer> backoff)
     endif()
 
     add_executable(CodexMonitorHUD WIN32
