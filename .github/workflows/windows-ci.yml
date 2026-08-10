@@ -169,7 +169,13 @@ jobs:
             Get-Content -LiteralPath $uninstallLog -Tail 100
             throw "Silent MSI uninstall failed with exit code $($uninstall.ExitCode)"
           }
+          $uninstallDeadline = [DateTime]::UtcNow.AddSeconds(10)
+          while ((Test-Path -LiteralPath $installedBinary) -and
+                 [DateTime]::UtcNow -lt $uninstallDeadline) {
+            Start-Sleep -Milliseconds 250
+          }
           if (Test-Path -LiteralPath $installedBinary) {
+            Get-Content -LiteralPath $uninstallLog -Tail 100
             throw "MSI uninstall left the application executable behind"
           }
 

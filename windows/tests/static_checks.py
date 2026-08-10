@@ -389,6 +389,8 @@ def main() -> None:
         'Id="ApplicationStartMenuShortcut"': "the MSI creates a Start menu entry",
         'Name="InstallFolder"':
             "a per-user registry value is the application component key path",
+        'Id="PreviousInstallFolderSearch"':
+            "maintenance and uninstall recover a customized installation directory",
         'Id="RemoveInstallFolder"': "uninstall removes the empty application directory",
         'Id="RemoveLocalProgramsFolder"':
             "the per-user parent directory is represented in the RemoveFile table",

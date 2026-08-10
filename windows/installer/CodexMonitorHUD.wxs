@@ -20,6 +20,15 @@
 
     <Icon Id="CodexMonitorIcon" SourceFile="$(var.IconPath)" />
     <Property Id="ARPPRODUCTICON" Value="CodexMonitorIcon" />
+    <Property Id="INSTALLFOLDER">
+      <RegistrySearch
+          Id="PreviousInstallFolderSearch"
+          Root="HKCU"
+          Key="Software\CodexMonitorHUD"
+          Name="InstallFolder"
+          Type="directory"
+          Win64="yes" />
+    </Property>
 
     <Directory Id="TARGETDIR" Name="SourceDir">
       <Directory Id="LocalAppDataFolder">
