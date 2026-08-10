@@ -15,7 +15,6 @@
         Description="Low-overhead Codex and computer performance monitor" />
 
     <MajorUpgrade
-        AllowSameVersionUpgrades="yes"
         DowngradeErrorMessage="A newer version of Codex Monitor HUD is already installed." />
     <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
 
@@ -42,11 +41,22 @@
             Id="CodexMonitorExecutable"
             Source="$(var.BinaryPath)"
             Name="CodexMonitorHUD.exe"
-            KeyPath="yes"
             Vital="yes"
             Checksum="yes" />
         <File Id="LicenseFile" Source="$(var.LicensePath)" Name="LICENSE" />
         <File Id="WindowsReadme" Source="$(var.ReadmePath)" Name="README.md" />
+        <RegistryValue
+            Root="HKCU"
+            Key="Software\CodexMonitorHUD"
+            Name="InstallFolder"
+            Type="string"
+            Value="[INSTALLFOLDER]"
+            KeyPath="yes" />
+        <RemoveFolder Id="RemoveInstallFolder" Directory="INSTALLFOLDER" On="uninstall" />
+        <RemoveFolder
+            Id="RemoveLocalProgramsFolder"
+            Directory="LocalProgramsFolder"
+            On="uninstall" />
       </Component>
     </DirectoryRef>
 

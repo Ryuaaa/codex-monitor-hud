@@ -383,11 +383,15 @@ def main() -> None:
     installer_contracts = {
         'InstallScope="perUser"': "the MSI defaults to a no-admin per-user install",
         'Platform="x64"': "the MSI declares its x64 platform",
-        "AllowSameVersionUpgrades": "development builds can replace an earlier same-version MSI",
         'Id="CodexMonitorExecutable"': "the tested HUD executable is the MSI key file",
         'Id="LicenseFile"': "the installed application carries its license",
         'Id="WindowsReadme"': "the installed application carries Windows instructions",
         'Id="ApplicationStartMenuShortcut"': "the MSI creates a Start menu entry",
+        'Name="InstallFolder"':
+            "a per-user registry value is the application component key path",
+        'Id="RemoveInstallFolder"': "uninstall removes the empty application directory",
+        'Id="RemoveLocalProgramsFolder"':
+            "the per-user parent directory is represented in the RemoveFile table",
         'On="uninstall"': "the MSI removes its Start menu directory",
     }
     for token, reason in installer_contracts.items():
