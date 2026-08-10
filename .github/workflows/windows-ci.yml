@@ -111,6 +111,68 @@ jobs:
             throw "Packaged executable does not match the tested build output"
           }
 
+      - name: Build per-user Windows MSI
+        shell: pwsh
+        run: |
+          ./windows/build-installer.ps1 `
+            -BinaryPath "windows/out/build/Release/CodexMonitorHUD.exe" `
+            -OutputDirectory "windows/out/installer"
+
+      - name: Test MSI install and uninstall
+        shell: pwsh
+        run: |
+          $installers = @(Get-ChildItem -LiteralPath "windows/out/installer" `
+            -Filter "CodexMonitorHUD-windows-x64-*.msi" -File)
+          if ($installers.Count -ne 1) {
+            throw "Expected exactly one Windows MSI, found $($installers.Count)"
+          }
+          $installer = $installers[0]
+          $checksum = "$($installer.FullName).sha256"
+          if (-not (Test-Path -LiteralPath $checksum -PathType Leaf)) {
+            throw "Expected MSI SHA-256 file was not produced"
+          }
+          $expectedHash = ((Get-Content -LiteralPath $checksum -Raw).Trim() -split '\s+')[0]
+          $actualHash = (Get-FileHash -LiteralPath $installer.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($expectedHash -ne $actualHash) {
+            throw "Windows MSI SHA-256 verification failed"
+          }
+
+          $installDirectory = Join-Path $env:RUNNER_TEMP "Codex Monitor HUD"
+          $installLog = Join-Path $env:RUNNER_TEMP "codex-monitor-msi-install.log"
+          $installArguments = "/i `"$($installer.FullName)`" /qn /norestart " +
+            "INSTALLFOLDER=`"$installDirectory`" /L*v `"$installLog`""
+          $install = Start-Process msiexec.exe -Wait -PassThru `
+            -ArgumentList $installArguments
+          if ($install.ExitCode -notin @(0, 3010)) {
+            Get-Content -LiteralPath $installLog -Tail 100
+            throw "Silent MSI installation failed with exit code $($install.ExitCode)"
+          }
+
+          $installedBinary = Join-Path $installDirectory "CodexMonitorHUD.exe"
+          foreach ($required in @("CodexMonitorHUD.exe", "LICENSE", "README.md")) {
+            if (-not (Test-Path -LiteralPath (Join-Path $installDirectory $required) -PathType Leaf)) {
+              throw "MSI installation is missing required file: $required"
+            }
+          }
+          $sourceHash = (Get-FileHash -LiteralPath "windows/out/build/Release/CodexMonitorHUD.exe" -Algorithm SHA256).Hash
+          $installedHash = (Get-FileHash -LiteralPath $installedBinary -Algorithm SHA256).Hash
+          if ($sourceHash -ne $installedHash) {
+            throw "Installed executable does not match the tested build output"
+          }
+
+          $uninstallLog = Join-Path $env:RUNNER_TEMP "codex-monitor-msi-uninstall.log"
+          $uninstallArguments = "/x `"$($installer.FullName)`" /qn /norestart " +
+            "/L*v `"$uninstallLog`""
+          $uninstall = Start-Process msiexec.exe -Wait -PassThru `
+            -ArgumentList $uninstallArguments
+          if ($uninstall.ExitCode -notin @(0, 3010)) {
+            Get-Content -LiteralPath $uninstallLog -Tail 100
+            throw "Silent MSI uninstall failed with exit code $($uninstall.ExitCode)"
+          }
+          if (Test-Path -LiteralPath $installedBinary) {
+            throw "MSI uninstall left the application executable behind"
+          }
+
       - name: Upload Windows executable
         uses: actions/upload-artifact@v4
         with:
@@ -126,5 +188,15 @@ jobs:
           path: |
             windows/out/release/CodexMonitorHUD-windows-x64.zip
             windows/out/release/CodexMonitorHUD-windows-x64.zip.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload unsigned Windows MSI
+        uses: actions/upload-artifact@v4
+        with:
+          name: CodexMonitorHUD-windows-x64-msi-unsigned
+          path: |
+            windows/out/installer/CodexMonitorHUD-windows-x64-*.msi
+            windows/out/installer/CodexMonitorHUD-windows-x64-*.msi.sha256
           if-no-files-found: error
           retention-days: 14

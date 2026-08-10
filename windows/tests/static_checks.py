@@ -28,6 +28,10 @@ DIAGNOSIS_TEST = (WINDOWS_ROOT / "tests" / "performance_diagnosis_test.cpp").rea
 SCHEDULE_TEST = (WINDOWS_ROOT / "tests" / "sampling_schedule_test.cpp").read_text(encoding="utf-8")
 CMAKE = (WINDOWS_ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
 PACKAGE_SCRIPT = (WINDOWS_ROOT / "package-release.ps1").read_text(encoding="utf-8")
+INSTALLER_SCRIPT = (WINDOWS_ROOT / "build-installer.ps1").read_text(encoding="utf-8")
+INSTALLER_SOURCE = (
+    WINDOWS_ROOT / "installer" / "CodexMonitorHUD.wxs"
+).read_text(encoding="utf-8")
 WINDOWS_WORKFLOW = (
     REPOSITORY_ROOT / ".github" / "workflows" / "windows-ci.yml"
 ).read_text(encoding="utf-8")
@@ -374,6 +378,43 @@ def main() -> None:
             "Windows CI publishes the archive and checksum together",
     }
     for token, reason in package_workflow_contracts.items():
+        require(WINDOWS_WORKFLOW, token, reason)
+
+    installer_contracts = {
+        'InstallScope="perUser"': "the MSI defaults to a no-admin per-user install",
+        'Platform="x64"': "the MSI declares its x64 platform",
+        "AllowSameVersionUpgrades": "development builds can replace an earlier same-version MSI",
+        'Id="CodexMonitorExecutable"': "the tested HUD executable is the MSI key file",
+        'Id="LicenseFile"': "the installed application carries its license",
+        'Id="WindowsReadme"': "the installed application carries Windows instructions",
+        'Id="ApplicationStartMenuShortcut"': "the MSI creates a Start menu entry",
+        'On="uninstall"': "the MSI removes its Start menu directory",
+    }
+    for token, reason in installer_contracts.items():
+        require(INSTALLER_SOURCE, token, reason)
+
+    installer_script_contracts = {
+        "Could not read the Windows app version from CMakeLists.txt":
+            "the MSI version is derived from the Windows project version",
+        "candle.exe": "the MSI source is compiled with the pinned runner WiX toolset",
+        "light.exe": "the MSI object is linked with the pinned runner WiX toolset",
+        "Get-FileHash -LiteralPath $installerPath -Algorithm SHA256":
+            "the MSI receives a SHA-256 checksum",
+    }
+    for token, reason in installer_script_contracts.items():
+        require(INSTALLER_SCRIPT, token, reason)
+
+    installer_workflow_contracts = {
+        "./windows/build-installer.ps1": "Windows CI builds the MSI",
+        "Test MSI install and uninstall": "Windows CI exercises the real MSI lifecycle",
+        "Installed executable does not match the tested build output":
+            "Windows CI verifies the installed EXE identity",
+        "MSI uninstall left the application executable behind":
+            "Windows CI verifies that uninstall removes the app",
+        "CodexMonitorHUD-windows-x64-msi-unsigned":
+            "the unsigned status is explicit on the development artifact",
+    }
+    for token, reason in installer_workflow_contracts.items():
         require(WINDOWS_WORKFLOW, token, reason)
 
     persistence_contracts = {

@@ -99,6 +99,16 @@ CI 还会生成 `CodexMonitorHUD-windows-x64.zip`，其中包含 EXE、许可证
   -OutputDirectory "windows/out/release"
 ```
 
+Windows CI 还会使用 WiX 生成当前用户范围的 MSI，静默安装到临时目录，核对已安装 EXE 与测试产物一致，再执行卸载并确认程序文件已移除。开发分支产物会明确标为 `unsigned`，签名前不作为正式公开安装包。
+
+本机装有 WiX Toolset 3 时可运行：
+
+```powershell
+./windows/build-installer.ps1 `
+  -BinaryPath "windows/out/build/Release/CodexMonitorHUD.exe" `
+  -OutputDirectory "windows/out/installer"
+```
+
 ## 测试范围
 
 不依赖 Windows 的源码契约与算法测试：
@@ -119,6 +129,7 @@ Windows CI 还包含以下原生集成测试：
 - 官方 `app-server` 握手、乱序响应、单方法失败保留、异常消息隔离、响应洪水上限；
 - Codex 工作线程的成功刷新、暂停取消、不遗留进程和恢复后立即刷新；
 - Token 日汇总的延迟结算、重复日期、闰年/月边界、无效/未来数据和整数溢出保护。
+- MSI 的真实静默安装、安装文件一致性和静默卸载。
 
 这些测试证明编译、算法和进程边界，不替代真实 Windows 上的视觉、交互、账号数据和任务管理器对照验收。
 
@@ -139,7 +150,7 @@ Windows CI 还包含以下原生集成测试：
 - 尚未在真实 Windows x64 上完成视觉/交互验收，也未与真实任务管理器和真实 Codex 账号数据做逐项对照。
 - 尚未实现网络速度、磁盘读写、历史曲线与持久化、Token 成本/预测、OpenAI 服务状态和额度通知。
 - 尚未移植颜色、透明度、角落预设，以及锁定窗口位置/大小。
-- 已有 CI 便携 ZIP 与 SHA-256 校验文件；尚未实现登录后自动启动、检查更新/一键更新、安装包、Windows 代码签名和正式发布流程。
+- 已有 CI 便携 ZIP、SHA-256 和经过安装/卸载测试的未签名 MSI；尚未实现登录后自动启动、检查更新/一键更新、Windows 代码签名和正式发布流程。
 - 尚未支持或验证 Windows ARM64。
 - 热压力仍只显示 Windows 没有统一接口，不会通过不可靠的通用传感器模拟 macOS 热压力。
 - 当前仍使用标准 Windows 标题栏；视觉细节尚未达到 macOS 版的完整等价。

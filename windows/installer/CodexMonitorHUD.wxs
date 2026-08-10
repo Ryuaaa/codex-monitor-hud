@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product
+      Id="*"
+      Name="Codex Monitor HUD"
+      Language="1033"
+      Version="$(var.AppVersion)"
+      Manufacturer="Codex Monitor HUD contributors"
+      UpgradeCode="0CA9E00B-2AAF-4393-B466-1AF0F8C2C21F">
+    <Package
+        InstallerVersion="500"
+        Compressed="yes"
+        InstallScope="perUser"
+        Platform="x64"
+        Description="Low-overhead Codex and computer performance monitor" />
+
+    <MajorUpgrade
+        AllowSameVersionUpgrades="yes"
+        DowngradeErrorMessage="A newer version of Codex Monitor HUD is already installed." />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <Icon Id="CodexMonitorIcon" SourceFile="$(var.IconPath)" />
+    <Property Id="ARPPRODUCTICON" Value="CodexMonitorIcon" />
+
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="LocalAppDataFolder">
+        <Directory Id="LocalProgramsFolder" Name="Programs">
+          <Directory Id="INSTALLFOLDER" Name="Codex Monitor HUD" />
+        </Directory>
+      </Directory>
+      <Directory Id="ProgramMenuFolder">
+        <Directory Id="ApplicationProgramsFolder" Name="Codex Monitor HUD" />
+      </Directory>
+    </Directory>
+
+    <DirectoryRef Id="INSTALLFOLDER">
+      <Component
+          Id="ApplicationFiles"
+          Guid="AAB1D750-1879-4A6A-A398-6D9C369F5BFA"
+          Win64="yes">
+        <File
+            Id="CodexMonitorExecutable"
+            Source="$(var.BinaryPath)"
+            Name="CodexMonitorHUD.exe"
+            KeyPath="yes"
+            Vital="yes"
+            Checksum="yes" />
+        <File Id="LicenseFile" Source="$(var.LicensePath)" Name="LICENSE" />
+        <File Id="WindowsReadme" Source="$(var.ReadmePath)" Name="README.md" />
+      </Component>
+    </DirectoryRef>
+
+    <DirectoryRef Id="ApplicationProgramsFolder">
+      <Component
+          Id="StartMenuShortcut"
+          Guid="F5792554-7AAF-41A6-9356-2FBB6866B584">
+        <Shortcut
+            Id="ApplicationStartMenuShortcut"
+            Name="Codex Monitor HUD"
+            Description="Open Codex Monitor HUD"
+            Target="[INSTALLFOLDER]CodexMonitorHUD.exe"
+            WorkingDirectory="INSTALLFOLDER" />
+        <RemoveFolder Id="RemoveApplicationProgramsFolder" On="uninstall" />
+        <RegistryValue
+            Root="HKCU"
+            Key="Software\CodexMonitorHUD"
+            Name="StartMenuShortcut"
+            Type="integer"
+            Value="1"
+            KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+
+    <Feature Id="ProductFeature" Title="Codex Monitor HUD" Level="1">
+      <ComponentRef Id="ApplicationFiles" />
+      <ComponentRef Id="StartMenuShortcut" />
+    </Feature>
+  </Product>
+</Wix>
