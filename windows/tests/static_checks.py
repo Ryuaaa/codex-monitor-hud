@@ -60,6 +60,8 @@ def main() -> None:
         "VisibleHomeModules": "homepage cards follow saved visibility and order",
         "WM_EXITSIZEMOVE": "window placement is persisted after interactive movement",
         "WM_DISPLAYCHANGE": "saved placement is repaired after monitor changes",
+        "RecreateSettingsFonts(window, *state)":
+            "the settings window owns fonts at its current monitor DPI",
         "CODEX / CHATGPT PROCESS TREE": "the first card displays target aggregation",
         "SYSTEM CPU & PHYSICAL MEMORY": "the second card displays system metrics",
         "COMMIT & PAGE FILE": "the third card displays commit and page-file metrics",

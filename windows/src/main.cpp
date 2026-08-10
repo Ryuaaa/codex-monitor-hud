@@ -84,6 +84,8 @@ struct AppState {
     HFONT headingFont = nullptr;
     HFONT bodyFont = nullptr;
     HFONT smallFont = nullptr;
+    HFONT settingsBodyFont = nullptr;
+    HFONT settingsSmallFont = nullptr;
     HBRUSH backgroundBrush = nullptr;
     HBRUSH cardBrush = nullptr;
     bool samplingPaused = true;
@@ -123,9 +125,13 @@ void DeleteFonts(AppState& state) {
     if (state.headingFont) DeleteObject(state.headingFont);
     if (state.bodyFont) DeleteObject(state.bodyFont);
     if (state.smallFont) DeleteObject(state.smallFont);
+    if (state.settingsBodyFont) DeleteObject(state.settingsBodyFont);
+    if (state.settingsSmallFont) DeleteObject(state.settingsSmallFont);
     state.headingFont = nullptr;
     state.bodyFont = nullptr;
     state.smallFont = nullptr;
+    state.settingsBodyFont = nullptr;
+    state.settingsSmallFont = nullptr;
 }
 
 void RecreateFonts(HWND window, AppState& state) {
@@ -151,16 +157,26 @@ void RecreateFonts(HWND window, AppState& state) {
         ApplyFont(views.homeCard, state.bodyFont);
         ApplyFont(views.computerCard, state.bodyFont);
     }
-    ApplyFont(state.settingsHeading, state.bodyFont);
-    ApplyFont(state.settingsTopmostCheck, state.smallFont);
-    ApplyFont(state.settingsCloseButton, state.smallFont);
+    if (oldHeadingFont) DeleteObject(oldHeadingFont);
+    if (oldBodyFont) DeleteObject(oldBodyFont);
+    if (oldSmallFont) DeleteObject(oldSmallFont);
+}
+
+void RecreateSettingsFonts(HWND window, AppState& state) {
+    const HFONT oldBodyFont = state.settingsBodyFont;
+    const HFONT oldSmallFont = state.settingsSmallFont;
+    state.settingsBodyFont = CreateUiFont(window, 10, FW_MEDIUM);
+    state.settingsSmallFont = CreateUiFont(window, 9, FW_NORMAL);
+
+    ApplyFont(state.settingsHeading, state.settingsBodyFont);
+    ApplyFont(state.settingsTopmostCheck, state.settingsSmallFont);
+    ApplyFont(state.settingsCloseButton, state.settingsSmallFont);
     for (const SettingsRow& row : state.settingsRows) {
-        ApplyFont(row.visibleCheck, state.smallFont);
-        ApplyFont(row.moveUpButton, state.smallFont);
-        ApplyFont(row.moveDownButton, state.smallFont);
+        ApplyFont(row.visibleCheck, state.settingsSmallFont);
+        ApplyFont(row.moveUpButton, state.settingsSmallFont);
+        ApplyFont(row.moveDownButton, state.settingsSmallFont);
     }
 
-    if (oldHeadingFont) DeleteObject(oldHeadingFont);
     if (oldBodyFont) DeleteObject(oldBodyFont);
     if (oldSmallFont) DeleteObject(oldSmallFont);
 }
@@ -785,14 +801,7 @@ bool CreateSettingsControls(HWND window, AppState& state) {
         if (!row.visibleCheck || !row.moveUpButton || !row.moveDownButton) return false;
     }
 
-    ApplyFont(state.settingsHeading, state.bodyFont);
-    ApplyFont(state.settingsTopmostCheck, state.smallFont);
-    ApplyFont(state.settingsCloseButton, state.smallFont);
-    for (const SettingsRow& row : state.settingsRows) {
-        ApplyFont(row.visibleCheck, state.smallFont);
-        ApplyFont(row.moveUpButton, state.smallFont);
-        ApplyFont(row.moveDownButton, state.smallFont);
-    }
+    RecreateSettingsFonts(window, state);
     RefreshSettingsControls(state);
     return true;
 }
@@ -909,6 +918,7 @@ LRESULT CALLBACK SettingsWindowProcedure(HWND window, UINT message,
                              suggested->right - suggested->left,
                              suggested->bottom - suggested->top,
                              SWP_NOACTIVATE | SWP_NOZORDER);
+                RecreateSettingsFonts(window, *state);
                 LayoutSettingsControls(window, *state);
             }
             return 0;
@@ -919,6 +929,10 @@ LRESULT CALLBACK SettingsWindowProcedure(HWND window, UINT message,
 
         case WM_DESTROY:
             if (state) {
+                if (state->settingsBodyFont) DeleteObject(state->settingsBodyFont);
+                if (state->settingsSmallFont) DeleteObject(state->settingsSmallFont);
+                state->settingsBodyFont = nullptr;
+                state->settingsSmallFont = nullptr;
                 state->settingsWindow = nullptr;
                 state->settingsHeading = nullptr;
                 state->settingsTopmostCheck = nullptr;
