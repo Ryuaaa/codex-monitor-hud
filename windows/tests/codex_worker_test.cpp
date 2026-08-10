@@ -167,11 +167,18 @@ void TestPauseCancelsAndResumeRefreshes(HWND window,
                                         const std::filesystem::path& executable) {
     Stage("pause_begin");
     ScopedEnvironmentVariable scenario(L"CODEX_FAKE_SCENARIO", L"app-cancel");
+    Stage("pause_environment_ready");
     CodexWorker worker;
-    Expect(worker.Start(window, kWorkerReadyMessage, "test-version"),
+    Stage("pause_worker_constructed");
+    const bool started = worker.Start(window, kWorkerReadyMessage, "test-version");
+    Stage("pause_worker_start_returned");
+    Expect(started,
            "the cancellation worker must start");
-    Expect(worker.ActivateAndRefresh(),
+    const bool activated = worker.ActivateAndRefresh();
+    Stage("pause_worker_activate_returned");
+    Expect(activated,
            "the cancellation worker must queue an immediate refresh");
+    Stage("pause_process_scan_begin");
     Expect(WaitUntil([&] { return ProcessWithImagePathExists(executable); }, 5s),
            "the hanging fake app-server must start before pause");
     Stage("pause_process_started");
