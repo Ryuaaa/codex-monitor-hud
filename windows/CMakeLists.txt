@@ -4,6 +4,19 @@ project(CodexMonitorHUDWindows VERSION 0.3.0 LANGUAGES CXX)
 
 include(CTest)
 
+set(CODEX_MONITOR_WINDOWS_PUBLISHER_SHA256 "" CACHE STRING
+    "SHA-256 fingerprint of the trusted Windows release signing certificate")
+if(NOT CODEX_MONITOR_WINDOWS_PUBLISHER_SHA256 STREQUAL "")
+    string(LENGTH "${CODEX_MONITOR_WINDOWS_PUBLISHER_SHA256}"
+        CODEX_MONITOR_WINDOWS_PUBLISHER_SHA256_LENGTH)
+    if(NOT CODEX_MONITOR_WINDOWS_PUBLISHER_SHA256_LENGTH EQUAL 64 OR
+       NOT CODEX_MONITOR_WINDOWS_PUBLISHER_SHA256 MATCHES
+           "^[0-9A-Fa-f]+$")
+        message(FATAL_ERROR
+            "CODEX_MONITOR_WINDOWS_PUBLISHER_SHA256 must be exactly 64 hexadecimal characters")
+    endif()
+endif()
+
 if(WIN32)
     enable_language(RC)
 endif()
@@ -271,6 +284,35 @@ if(BUILD_TESTING)
     endif()
     add_test(NAME windows_update_apply_transaction
         COMMAND CodexMonitorUpdateApplyTransactionTests)
+
+    add_executable(CodexMonitorUpdateHelperTests
+        src/update/update_apply_transaction_win32.cpp
+        src/update/update_helper_win32.cpp
+        src/update/update_installed_hud_win32.cpp
+        src/update/update_installer_verifier_win32.cpp
+        src/update/update_msi_identity_win32.cpp
+        tests/update_helper_test.cpp
+    )
+    configure_codex_monitor_target(CodexMonitorUpdateHelperTests)
+    target_compile_definitions(
+        CodexMonitorUpdateHelperTests PRIVATE
+        CODEX_MONITOR_UPDATE_HELPER_TESTING=1
+    )
+    if(WIN32)
+        target_compile_definitions(
+            CodexMonitorUpdateHelperTests PRIVATE
+            UNICODE
+            _UNICODE
+            NOMINMAX
+            WINVER=0x0A00
+            _WIN32_WINNT=0x0A00
+        )
+        target_link_libraries(CodexMonitorUpdateHelperTests PRIVATE
+            advapi32 bcrypt crypt32 msi shell32 user32 version wintrust)
+    endif()
+    add_test(NAME windows_update_helper
+        COMMAND CodexMonitorUpdateHelperTests)
+    set_tests_properties(windows_update_helper PROPERTIES TIMEOUT 20)
 endif()
 
 if(WIN32)
@@ -533,6 +575,8 @@ if(WIN32)
         src/update/update_asset_download_win32.cpp
         src/update/update_apply_transaction_win32.cpp
         src/update/update_fetch_win32.cpp
+        src/update/update_helper_win32.cpp
+        src/update/update_installed_hud_win32.cpp
         src/update/update_installer_verifier_win32.cpp
         src/update/update_msi_identity_win32.cpp
         src/update/update_state_store.cpp
@@ -549,9 +593,13 @@ if(WIN32)
         WINVER=0x0A00
         _WIN32_WINNT=0x0A00
     )
+    if(NOT CODEX_MONITOR_WINDOWS_PUBLISHER_SHA256 STREQUAL "")
+        target_compile_definitions(CodexMonitorHUD PRIVATE
+            "CODEX_MONITOR_WINDOWS_PUBLISHER_SHA256=\"${CODEX_MONITOR_WINDOWS_PUBLISHER_SHA256}\"")
+    endif()
     target_link_libraries(CodexMonitorHUD PRIVATE
         user32 gdi32 psapi shell32 ole32 winhttp windowsapp bcrypt
-        wintrust crypt32 msi)
+        wintrust crypt32 msi advapi32 version)
 else()
     message(STATUS "Non-Windows host: configuring portable snapshot and state tests only.")
 endif()

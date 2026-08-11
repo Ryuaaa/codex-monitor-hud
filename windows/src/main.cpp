@@ -24,6 +24,7 @@
 #include "settings_store_win32.h"
 #include "snapshot_math.h"
 #include "update/update_worker.h"
+#include "update/update_helper_win32.h"
 
 #include <algorithm>
 #include <chrono>
@@ -2718,6 +2719,12 @@ codex_monitor::WindowPlacement InitialWindowPlacement(const AppState& state, UIN
 }  // namespace
 
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand) {
+    if (const std::optional<int> helperExitCode =
+            codex_monitor::update::
+                TryRunWindowsUpdateHelperCommandLine()) {
+        return *helperExitCode;
+    }
+
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
 
     // Keep Windows Runtime initialized for the application lifetime while
