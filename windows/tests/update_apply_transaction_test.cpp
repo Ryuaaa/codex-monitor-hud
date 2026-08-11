@@ -52,6 +52,19 @@ std::string Manifest(std::string_view digest,
 
 #ifdef _WIN32
 
+std::filesystem::path CanonicalWindowsTemporaryDirectory() {
+    const std::filesystem::path temporary =
+        std::filesystem::temp_directory_path();
+    std::wstring expanded(32768U, L'\0');
+    const DWORD written = GetLongPathNameW(
+        temporary.c_str(), expanded.data(),
+        static_cast<DWORD>(expanded.size()));
+    Require(written > 0U && written < expanded.size(),
+            "the Windows temporary directory must resolve to a long path");
+    expanded.resize(written);
+    return std::filesystem::path(std::move(expanded));
+}
+
 int HexValue(char value) noexcept {
     if (value >= '0' && value <= '9') return value - '0';
     if (value >= 'a' && value <= 'f') return value - 'a' + 10;
@@ -120,11 +133,10 @@ void TestPlatformVerificationBoundary() {
 
 #ifdef _WIN32
     // The hosted Windows runner can expose %TEMP% through an 8.3 alias
-    // (RUNNER~1). The production boundary intentionally rejects aliases after
-    // resolving handles, so build this fixture below CTest's canonical working
-    // directory instead of testing an unrelated alias rejection here.
+    // (RUNNER~1). Expand it first because the production boundary intentionally
+    // rejects aliases after resolving handles.
     const std::filesystem::path root =
-        std::filesystem::current_path() /
+        CanonicalWindowsTemporaryDirectory() /
         ("codex-monitor-update-apply-" +
          std::to_string(static_cast<long long>(
              std::filesystem::file_time_type::clock::now()
