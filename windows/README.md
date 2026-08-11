@@ -105,7 +105,7 @@ ctest --test-dir windows/out/build -C Release --output-on-failure
 
 仓库的 Windows x64 CI 会执行源码契约检查、MSVC Release 编译、全部测试、EXE 存在性验证并上传临时构建产物。ARM64 尚未进入支持和发布范围。
 
-CI 还会生成 `CodexMonitorHUD-windows-x64.zip`，其中包含 EXE、许可证和本说明，并同时生成 `.zip.sha256` 校验文件。这个便携包尚未进行 Windows 代码签名，不等同于正式安装包。
+CI 还会生成 `CodexMonitorHUD-windows-x64.zip`，其中包含 EXE、许可证和本说明，并同时生成 `.zip.sha256` 校验文件。这个便携包尚未进行 Windows 代码签名，不等同于正式安装包。便携版可以检查新版，但不会启用“安装更新”；一键安装只对从 MSI 安装目录启动的版本开放。
 
 在 Windows 本机完成 Release 编译后，也可运行：
 

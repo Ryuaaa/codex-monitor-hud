@@ -121,6 +121,28 @@ void TestPublisherGateStopsBeforeDiskAndNetwork() {
             "a build without a publisher pin must not download anything");
 }
 
+void TestPortableUiPreflightStopsBeforeDownload() {
+    WindowsUpdateInstallPreflight preflight;
+    preflight.installWorkerAvailable = true;
+    preflight.publisherConfigured = true;
+    preflight.freshReleaseAvailable = true;
+    preflight.settingsPathAvailable = true;
+
+    Require(!CanRequestWindowsUpdateInstall(preflight),
+            "a signed portable HUD must not enqueue an update download");
+    preflight.runningFromMsiInstalledHud = true;
+    Require(CanRequestWindowsUpdateInstall(preflight),
+            "the same ready state must remain available to the MSI install");
+
+    preflight.updateCheckBusy = true;
+    Require(!CanRequestWindowsUpdateInstall(preflight),
+            "an MSI install cannot start while its update check is busy");
+    preflight.updateCheckBusy = false;
+    preflight.updateInstallBusy = true;
+    Require(!CanRequestWindowsUpdateInstall(preflight),
+            "an MSI install cannot enqueue a second update operation");
+}
+
 void TestEveryPreparationFailureStopsBeforeHelper() {
     WindowsUpdateInstallRequest request = ValidRequest();
 
@@ -217,6 +239,7 @@ void TestCancellationAndInvalidPathsFailClosed() {
 int main() {
     TestSuccessfulPlanIsStrictlyOrdered();
     TestPublisherGateStopsBeforeDiskAndNetwork();
+    TestPortableUiPreflightStopsBeforeDownload();
     TestEveryPreparationFailureStopsBeforeHelper();
     TestCancellationAndInvalidPathsFailClosed();
     std::cout << "update_install_tests=pass\n";

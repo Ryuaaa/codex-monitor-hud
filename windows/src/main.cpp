@@ -24,6 +24,7 @@
 #include "settings_store_win32.h"
 #include "snapshot_math.h"
 #include "update/update_helper_win32.h"
+#include "update/update_helper_launcher_win32.h"
 #include "update/update_install_worker.h"
 #include "update/update_worker.h"
 
@@ -142,6 +143,7 @@ struct AppState {
     bool serviceStatusShowingLastKnown = false;
     bool updateWorkerAvailable = false;
     bool updateInstallWorkerAvailable = false;
+    bool runningFromMsiInstalledHud = false;
     int contentScrollRow = 0;
     int contentScrollMaximumRow = 0;
     int contentVisibleRows = 1;
@@ -1908,6 +1910,26 @@ FreshWindowsReleaseForInstall(const AppState& state) {
     return &*state.latestUpdateCheck->result.release;
 }
 
+codex_monitor::update::WindowsUpdateInstallPreflight
+CurrentWindowsUpdateInstallPreflight(const AppState& state) {
+    codex_monitor::update::WindowsUpdateInstallPreflight preflight;
+    preflight.installWorkerAvailable = state.updateInstallWorkerAvailable;
+    preflight.publisherConfigured =
+        codex_monitor::update::
+            ConfiguredWindowsUpdatePublisherFingerprint().has_value();
+    preflight.runningFromMsiInstalledHud =
+        state.runningFromMsiInstalledHud;
+    preflight.freshReleaseAvailable =
+        FreshWindowsReleaseForInstall(state) != nullptr;
+    preflight.settingsPathAvailable = !state.settingsPath.empty();
+    preflight.updateCheckBusy =
+        state.updateWorkerAvailable && state.updateWorker.IsBusy();
+    preflight.updateInstallBusy =
+        state.updateInstallWorkerAvailable &&
+        state.updateInstallWorker.IsBusy();
+    return preflight;
+}
+
 std::wstring WindowsUpdateInstallFailureText(
     codex_monitor::update::WindowsUpdateInstallStatus status) {
     using codex_monitor::update::WindowsUpdateInstallStatus;
@@ -1943,14 +1965,9 @@ void RefreshUpdateControls(AppState& state) {
         !state.settingsInstallUpdateButton) {
         return;
     }
-    const bool checking =
-        state.updateWorkerAvailable && state.updateWorker.IsBusy();
-    const bool installing = state.updateInstallWorkerAvailable &&
-                            state.updateInstallWorker.IsBusy();
-    const bool publisherConfigured =
-        codex_monitor::update::
-            ConfiguredWindowsUpdatePublisherFingerprint().has_value();
-    const auto* freshRelease = FreshWindowsReleaseForInstall(state);
+    const auto preflight = CurrentWindowsUpdateInstallPreflight(state);
+    const bool checking = preflight.updateCheckBusy;
+    const bool installing = preflight.updateInstallBusy;
     std::wstring message;
     if (installing) {
         message = L"正在下载并校验 Windows 更新…";
@@ -1992,19 +2009,23 @@ void RefreshUpdateControls(AppState& state) {
         }
         if (completed.stateSaveFailed) message += L"；检查记录未保存";
     }
+    if (!preflight.runningFromMsiInstalledHud && !installing) {
+        message += L"；便携版请下载 MSI 安装包更新";
+    }
     SetWindowTextW(state.settingsUpdateStatus, message.c_str());
     EnableWindow(state.settingsCheckUpdatesButton,
                  state.updateWorkerAvailable && !checking && !installing);
     const bool installEnabled =
-        state.updateInstallWorkerAvailable && publisherConfigured &&
-        freshRelease != nullptr && !state.settingsPath.empty() &&
-        !checking && !installing;
+        codex_monitor::update::CanRequestWindowsUpdateInstall(preflight);
     EnableWindow(state.settingsInstallUpdateButton, installEnabled);
     SetWindowTextW(
         state.settingsInstallUpdateButton,
         installing ? L"正在准备…"
-                   : (!publisherConfigured ? L"签名后启用"
-                                           : L"安装更新"));
+                   : (!preflight.runningFromMsiInstalledHud
+                          ? L"便携版不可安装"
+                          : (!preflight.publisherConfigured
+                                 ? L"签名后启用"
+                                 : L"安装更新")));
 }
 
 void RefreshSettingsControls(AppState& state) {
@@ -2322,9 +2343,11 @@ LRESULT CALLBACK SettingsWindowProcedure(HWND window, UINT message,
             }
             if (controlId == kSettingsInstallUpdateId) {
                 const auto* release = FreshWindowsReleaseForInstall(*state);
-                if (release && !state->settingsPath.empty() &&
-                    state->updateInstallWorkerAvailable &&
-                    !state->updateWorker.IsBusy()) {
+                const auto preflight =
+                    CurrentWindowsUpdateInstallPreflight(*state);
+                if (release &&
+                    codex_monitor::update::CanRequestWindowsUpdateInstall(
+                        preflight)) {
                     codex_monitor::update::WindowsUpdateInstallRequest request;
                     request.release = *release;
                     request.currentVersion = kApplicationVersion;
@@ -2479,6 +2502,9 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
     switch (message) {
         case WM_CREATE:
             if (!state || !CreateControls(window, *state)) return -1;
+            state->runningFromMsiInstalledHud =
+                codex_monitor::update::
+                    IsRunningFromMsiInstalledWindowsHud();
             if (!state->performanceWorker.Start(window, kSampleReadyMessage)) return -1;
             state->codexWorkerAvailable =
                 state->codexWorker.Start(

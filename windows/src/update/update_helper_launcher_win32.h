@@ -41,6 +41,12 @@ struct WindowsUpdateHelperLauncherResult {
     }
 };
 
+// UI preflight for one-click installation. Returns true only when the current
+// process path exactly matches the per-user MSI installation recorded for this
+// product. LaunchPreparedWindowsUpdateHelper repeats this check independently
+// after download; this early result must never replace the security boundary.
+[[nodiscard]] bool IsRunningFromMsiInstalledWindowsHud() noexcept;
+
 // Copies the currently running, installed HUD into the prepared private update
 // directory, re-verifies that copy against the compiled publisher and current
 // version, and launches its internal helper mode with only an inherited handle

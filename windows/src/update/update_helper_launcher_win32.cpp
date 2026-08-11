@@ -106,6 +106,25 @@ bool IsCurrentInstalledHud(
 
 }  // namespace
 
+bool IsRunningFromMsiInstalledWindowsHud() noexcept {
+#ifdef _WIN32
+    try {
+        const std::optional<std::filesystem::path> currentExecutable =
+            CurrentExecutablePath();
+        const std::optional<std::filesystem::path> installedExecutable =
+            InstalledWindowsHudExecutablePath();
+        return currentExecutable.has_value() &&
+               installedExecutable.has_value() &&
+               IsCurrentInstalledHud(*currentExecutable,
+                                     *installedExecutable);
+    } catch (...) {
+        return false;
+    }
+#else
+    return false;
+#endif
+}
+
 WindowsUpdateHelperLauncherResult LaunchPreparedWindowsUpdateHelper(
     const WindowsUpdateHelperLauncherRequest& request) noexcept {
     try {

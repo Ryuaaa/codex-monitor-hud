@@ -219,6 +219,17 @@ void BestEffortRemoveFailedPreparation(
 
 }  // namespace
 
+bool CanRequestWindowsUpdateInstall(
+    const WindowsUpdateInstallPreflight& preflight) noexcept {
+    return preflight.installWorkerAvailable &&
+           preflight.publisherConfigured &&
+           preflight.runningFromMsiInstalledHud &&
+           preflight.freshReleaseAvailable &&
+           preflight.settingsPathAvailable &&
+           !preflight.updateCheckBusy &&
+           !preflight.updateInstallBusy;
+}
+
 WindowsUpdateInstallResult RunWindowsUpdateInstallPlan(
     const WindowsUpdateInstallRequest& request,
     const WindowsUpdateInstallOperations& operations,

@@ -53,6 +53,21 @@ struct WindowsUpdateInstallResult {
     }
 };
 
+struct WindowsUpdateInstallPreflight {
+    bool installWorkerAvailable = false;
+    bool publisherConfigured = false;
+    bool runningFromMsiInstalledHud = false;
+    bool freshReleaseAvailable = false;
+    bool settingsPathAvailable = false;
+    bool updateCheckBusy = false;
+    bool updateInstallBusy = false;
+};
+
+// Shared UI and command-entry gate. In particular, a signed portable build
+// must fail here before it can enqueue any checksum or MSI download.
+[[nodiscard]] bool CanRequestWindowsUpdateInstall(
+    const WindowsUpdateInstallPreflight& preflight) noexcept;
+
 using WindowsUpdateInstallCancellationCheck = std::function<bool()>;
 using WindowsUpdatePublisherConfiguredCheck = std::function<bool()>;
 using WindowsUpdatePrivateDirectoryCreator =

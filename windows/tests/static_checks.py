@@ -1200,6 +1200,14 @@ def main() -> None:
             "window teardown joins the cancellable install worker",
         "FreshWindowsReleaseForInstall":
             "cached version notices cannot install without a fresh checked release",
+        "IsRunningFromMsiInstalledWindowsHud":
+            "the settings UI identifies portable launches before download",
+        "CanRequestWindowsUpdateInstall":
+            "button and command entry share the same MSI-only preflight",
+        "便携版请下载 MSI 安装包更新":
+            "portable users receive a clear update path instead of a late failure",
+        "便携版不可安装":
+            "the disabled one-click button explains why it is unavailable",
         "BS_AUTOCHECKBOX": "visibility controls have visible native check states",
         "BM_GETCHECK": "visibility changes read the actual checkbox state",
         "settingsScrollMaximum": "small high-DPI screens have bounded settings scrolling",
