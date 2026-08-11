@@ -26,12 +26,12 @@ jobs:
 
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -528,7 +528,7 @@ jobs:
           }
 
       - name: Upload Windows executable
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: CodexMonitorHUD-windows-x64-release
           path: windows/out/build/Release/CodexMonitorHUD.exe
@@ -536,7 +536,7 @@ jobs:
           retention-days: 14
 
       - name: Upload portable Windows package
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: CodexMonitorHUD-windows-x64-portable
           path: |
@@ -546,7 +546,7 @@ jobs:
           retention-days: 14
 
       - name: Upload unsigned Windows MSI
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: CodexMonitorHUD-windows-x64-msi-unsigned
           path: |
