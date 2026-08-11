@@ -558,24 +558,30 @@ def main() -> None:
            "fixed I/O rate algorithms must not depend on Windows headers")
 
     system_io_native_contracts = {
+        "#include <sdkddkver.h>":
+            "the Windows target version is visible before IP Helper gates netioapi declarations",
         "GetIfTable2": "network bytes come from documented cumulative interface counters",
         "FreeMibTable": "the native interface table is always released",
         "IF_TYPE_SOFTWARE_LOOPBACK": "loopback traffic is not counted as external machine traffic",
         "row.InterfaceAndOperStatusFlags.FilterInterface":
             "filter interfaces are excluded from aggregate traffic",
+        "row.InterfaceAndOperStatusFlags.HardwareInterface":
+            "VPN and virtual interfaces are not double-counted with physical adapters",
         "PdhAddEnglishCounterW": "localized systems use stable English physical-disk counter paths",
         "PdhCollectQueryData": "physical-disk cumulative counters are sampled in one persistent query",
         "PdhGetRawCounterValue": "disk rates are derived from raw cumulative byte counters",
         "PERF_COUNTER_BULK_COUNT": "disk raw values are accepted only with cumulative-byte semantics",
         "raw FirstValue is the": "the misleading Bytes/sec display name is documented as raw cumulative data",
         "PdhCloseQuery": "the persistent native disk query is released",
+        "kDiskQueryRetryInterval100ns":
+            "a transient PDH startup failure is retried with a bounded low-frequency interval",
         "QueryUnbiasedInterruptTimePrecise": "rate timing excludes suspended time",
     }
     for token, reason in system_io_native_contracts.items():
         require(SYSTEM_IO_SAMPLER, token, reason)
     require(SYSTEM_IO_SAMPLER,
-            "#include <winsock2.h>\n#include <windows.h>\n#include <iphlpapi.h>",
-            "Winsock must precede windows.h and the IP Helper API in the native translation unit")
+            "#include <sdkddkver.h>\n#include <winsock2.h>\n#include <windows.h>\n#include <iphlpapi.h>",
+            "the SDK target gate and Winsock order must precede the IP Helper API")
     require(SYSTEM_IO_SAMPLER, "#include <iphlpapi.h>",
             "the supported IP Helper umbrella header exposes GetIfTable2 and MIB_IF_TABLE2")
     reject(SYSTEM_IO_SAMPLER_HEADER, "winsock2.h",

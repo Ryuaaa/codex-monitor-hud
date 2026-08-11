@@ -1,3 +1,4 @@
+#include <sdkddkver.h>
 #include <winsock2.h>
 #include <windows.h>
 #include <iphlpapi.h>
@@ -20,6 +21,8 @@ constexpr wchar_t kDiskReadCounterPath[] =
 constexpr wchar_t kDiskWriteCounterPath[] =
     L"\\PhysicalDisk(_Total)\\Disk Write Bytes/sec";
 constexpr std::uint64_t kDiskSourceIdentity = 1;
+constexpr std::uint64_t kDiskQueryRetryInterval100ns =
+    60ULL * kSystemIoHundredNanosecondsPerSecond;
 
 bool CheckedAdd(std::uint64_t value, std::uint64_t* total) noexcept {
     if (!total || value > std::numeric_limits<std::uint64_t>::max() - *total) return false;
@@ -53,6 +56,7 @@ NetworkIoCounters CaptureNetwork(std::uint64_t capturedAt100ns) {
         const MIB_IF_ROW2& row = table->Table[index];
         if (row.Type == IF_TYPE_SOFTWARE_LOOPBACK ||
             row.OperStatus != IfOperStatusUp ||
+            !row.InterfaceAndOperStatusFlags.HardwareInterface ||
             row.InterfaceAndOperStatusFlags.FilterInterface) {
             continue;
         }
@@ -81,10 +85,15 @@ WindowsSystemIoCounterSampler::~WindowsSystemIoCounterSampler() {
     if (diskQuery_) PdhCloseQuery(diskQuery_);
 }
 
-bool WindowsSystemIoCounterSampler::EnsureDiskQuery() {
+bool WindowsSystemIoCounterSampler::EnsureDiskQuery(std::uint64_t capturedAt100ns) {
     if (diskQuery_) return true;
-    if (diskQueryInitializationAttempted_) return false;
+    if (diskQueryInitializationAttempted_ &&
+        capturedAt100ns < nextDiskQueryRetryAt100ns_) {
+        return false;
+    }
     diskQueryInitializationAttempted_ = true;
+    nextDiskQueryRetryAt100ns_ =
+        capturedAt100ns + kDiskQueryRetryInterval100ns;
 
     PDH_HQUERY query = nullptr;
     PDH_HCOUNTER readCounter = nullptr;
@@ -99,12 +108,16 @@ bool WindowsSystemIoCounterSampler::EnsureDiskQuery() {
     diskQuery_ = query;
     diskReadCounter_ = readCounter;
     diskWriteCounter_ = writeCounter;
+    nextDiskQueryRetryAt100ns_ = 0;
     return true;
 }
 
 DiskIoCounters WindowsSystemIoCounterSampler::CaptureDisk(std::uint64_t capturedAt100ns) {
     DiskIoCounters result{};
-    if (!EnsureDiskQuery() || PdhCollectQueryData(diskQuery_) != ERROR_SUCCESS) return result;
+    if (!EnsureDiskQuery(capturedAt100ns) ||
+        PdhCollectQueryData(diskQuery_) != ERROR_SUCCESS) {
+        return result;
+    }
 
     DWORD readType = 0;
     DWORD writeType = 0;

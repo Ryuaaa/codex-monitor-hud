@@ -18,10 +18,11 @@ public:
     SystemIoCounters Capture();
 
 private:
-    bool EnsureDiskQuery();
+    bool EnsureDiskQuery(std::uint64_t capturedAt100ns);
     DiskIoCounters CaptureDisk(std::uint64_t capturedAt100ns);
 
     bool diskQueryInitializationAttempted_ = false;
+    std::uint64_t nextDiskQueryRetryAt100ns_ = 0;
     PDH_HQUERY diskQuery_ = nullptr;
     PDH_HCOUNTER diskReadCounter_ = nullptr;
     PDH_HCOUNTER diskWriteCounter_ = nullptr;
