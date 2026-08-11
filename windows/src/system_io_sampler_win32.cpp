@@ -1,3 +1,7 @@
+#include <winsock2.h>
+#include <windows.h>
+#include <iphlpapi.h>
+
 #include "system_io_sampler_win32.h"
 
 #include <pdhmsg.h>

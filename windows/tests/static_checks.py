@@ -562,10 +562,13 @@ def main() -> None:
     }
     for token, reason in system_io_native_contracts.items():
         require(SYSTEM_IO_SAMPLER, token, reason)
-    require(SYSTEM_IO_SAMPLER_HEADER, "#include <winsock2.h>",
-            "Winsock declarations must precede windows.h on MSVC")
-    require(SYSTEM_IO_SAMPLER_HEADER, "#include <iphlpapi.h>",
+    require(SYSTEM_IO_SAMPLER,
+            "#include <winsock2.h>\n#include <windows.h>\n#include <iphlpapi.h>",
+            "Winsock must precede windows.h and the IP Helper API in the native translation unit")
+    require(SYSTEM_IO_SAMPLER, "#include <iphlpapi.h>",
             "the supported IP Helper umbrella header exposes GetIfTable2 and MIB_IF_TABLE2")
+    reject(SYSTEM_IO_SAMPLER_HEADER, "winsock2.h",
+           "the sampler header can be included after windows.h and must not change Winsock include order")
 
     system_io_test_contracts = {
         "the first sample must be unavailable rather than reported as zero":
