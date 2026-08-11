@@ -60,6 +60,14 @@ if(BUILD_TESTING)
     add_test(NAME windows_performance_diagnosis
         COMMAND CodexMonitorPerformanceDiagnosisTests)
 
+    add_executable(CodexMonitorPerformanceTrendTests
+        src/performance_trend.cpp
+        tests/performance_trend_test.cpp
+    )
+    configure_codex_monitor_target(CodexMonitorPerformanceTrendTests)
+    add_test(NAME windows_performance_trend
+        COMMAND CodexMonitorPerformanceTrendTests)
+
     add_executable(CodexMonitorServiceStatusModelTests
         src/service_status_model.cpp
         tests/service_status_model_test.cpp
@@ -102,6 +110,26 @@ if(BUILD_TESTING)
     )
     configure_codex_monitor_target(CodexMonitorModuleStateTests)
     add_test(NAME windows_module_state COMMAND CodexMonitorModuleStateTests)
+
+    if(WIN32)
+        add_executable(CodexMonitorSettingsStoreTests
+            src/module_state.cpp
+            src/settings_store_win32.cpp
+            tests/settings_store_win32_test.cpp
+        )
+        configure_codex_monitor_target(CodexMonitorSettingsStoreTests)
+        target_compile_definitions(CodexMonitorSettingsStoreTests PRIVATE
+            UNICODE
+            _UNICODE
+            NOMINMAX
+            WINVER=0x0A00
+            _WIN32_WINNT=0x0A00
+        )
+        target_link_libraries(CodexMonitorSettingsStoreTests PRIVATE
+            shell32 ole32)
+        add_test(NAME windows_settings_store
+            COMMAND CodexMonitorSettingsStoreTests)
+    endif()
 
     add_executable(CodexMonitorSamplingScheduleTests
         src/sampling_schedule.cpp
@@ -734,6 +762,7 @@ if(WIN32)
         src/main.cpp
         src/module_state.cpp
         src/performance_diagnosis.cpp
+        src/performance_trend.cpp
         src/performance_worker.cpp
         src/sampling_schedule.cpp
         src/service_status_fetch_win32.cpp

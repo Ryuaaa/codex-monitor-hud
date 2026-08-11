@@ -57,10 +57,22 @@ SYSTEM_IO_SAMPLER_TEST = (
     WINDOWS_ROOT / "tests" / "system_io_sampler_win32_test.cpp"
 ).read_text(encoding="utf-8")
 STATE_TEST = (WINDOWS_ROOT / "tests" / "module_state_test.cpp").read_text(encoding="utf-8")
+SETTINGS_STORE_TEST = (
+    WINDOWS_ROOT / "tests" / "settings_store_win32_test.cpp"
+).read_text(encoding="utf-8")
 DIAGNOSIS = (WINDOWS_ROOT / "src" / "performance_diagnosis.cpp").read_text(encoding="utf-8")
 DIAGNOSIS_TEST = (WINDOWS_ROOT / "tests" / "performance_diagnosis_test.cpp").read_text(
     encoding="utf-8"
 )
+PERFORMANCE_TREND = (WINDOWS_ROOT / "src" / "performance_trend.cpp").read_text(
+    encoding="utf-8"
+)
+PERFORMANCE_TREND_HEADER = (
+    WINDOWS_ROOT / "src" / "performance_trend.h"
+).read_text(encoding="utf-8")
+PERFORMANCE_TREND_TEST = (
+    WINDOWS_ROOT / "tests" / "performance_trend_test.cpp"
+).read_text(encoding="utf-8")
 SCHEDULE_TEST = (WINDOWS_ROOT / "tests" / "sampling_schedule_test.cpp").read_text(encoding="utf-8")
 CMAKE = (WINDOWS_ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
 PACKAGE_SCRIPT = (WINDOWS_ROOT / "package-release.ps1").read_text(encoding="utf-8")
@@ -360,6 +372,14 @@ def main() -> None:
         "command == SC_MAXIMIZE": "the fixed-aspect HUD cannot be maximized after startup",
         "kFastSampleIntervalMs = 5000": "system and target sampling uses five seconds",
         "kSlowSampleIntervalMs = 20000": "commit, paging, and ranking use twenty seconds",
+        "BuildCpuTrendCardText":
+            "the ten-minute CPU trend is connected to its own card",
+        "SYSTEM CPU · 10-MINUTE TREND":
+            "the trend card states its exact metric and time window",
+        "5 s samples · in-memory only":
+            "the trend card discloses that it reuses volatile sampling",
+        "state.cpuTrend.Reset()":
+            "pausing or reactivating performance sampling clears continuity",
         "GetTickCount64() >= state->nextSlowSampleTick": "slow sampling is scheduled by elapsed time",
         "WM_TIMER": "the HUD refreshes from the sampler",
         "SIZE_MINIMIZED": "minimization has an explicit low-burden path",
@@ -448,6 +468,8 @@ def main() -> None:
         "OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION": "per-process access stays read-only and limited",
         "GetProcessTimes": "process CPU uses cumulative native counters",
         "GetProcessMemoryInfo": "working-set memory uses the native process API",
+        "QueryUnbiasedInterruptTime":
+            "the CPU trend receives a monotonic timestamp that excludes sleep",
         "BuildTargetProcessSet": "Codex and ChatGPT descendants are resolved",
         "ComputeSystemCpuPercent": "system CPU is calculated from two snapshots",
         "ComputeWholeMachineCpuShare": "target CPU is normalized to the machine denominator",
@@ -475,6 +497,10 @@ def main() -> None:
         "bool topMemoryRankingAvailable": "a cached empty state is distinguishable from unavailable data",
         "SystemIoCounters systemIo": "raw network and disk counters cross the snapshot boundary",
         "SystemIoRates systemIoRates": "derived byte-per-second results cross the UI boundary",
+        "capturedAtUnbiasedTimeAvailable":
+            "the trend timestamp can fail without falling back to wall time",
+        "capturedAtUnbiased100ns":
+            "the unbiased timestamp travels with the exact performance sample",
     }
     for token, reason in snapshot_contracts.items():
         require(SNAPSHOT, token, reason)
@@ -678,6 +704,7 @@ def main() -> None:
         "kCodexTokenCostEstimate": "Token and API-equivalent cost has its own Beta module identity",
         "kCodexTaskActivity": "current local task activity has its own module identity",
         "kSystemDiagnosis": "the system diagnosis has its own module identity",
+        "kCpuTrend": "the in-memory CPU trend has its own module identity",
         "kSystemIoThroughput":
             "live network and disk throughput has its own module identity",
         "kOpenAIServiceStatus": "official service status has its own module identity",
@@ -690,8 +717,8 @@ def main() -> None:
         "MoveHomeModule": "settings reorder behavior is portable and testable",
         "SerializeSettings": "settings use an explicit whitelist serializer",
         "ParseSettings": "settings parsing has a portable boundary",
-        "version == 10":
-            "only the complete current schema may restore background quota alerts",
+        "version == 10 || version == 11":
+            "complete version 10 alerts survive the version 11 settings migration",
         "ClampWindowPlacement": "off-screen recovery is portable and testable",
     }
     for token, reason in state_contracts.items():
@@ -703,26 +730,83 @@ def main() -> None:
         "intentionally empty homepage": "all-hidden homepage intent is fixed",
         "unknown page must fall back to home": "damaged settings have a safe fallback",
         "off-screen saved window must return": "monitor removal recovery is fixed",
-        "TestVersionTenRoundTripAndIndependentQuotaSwitches":
-            "the independent quota, appearance, and alert settings have a version 10 round-trip test",
+        "TestVersionElevenRoundTripAndIndependentQuotaSwitches":
+            "the independent quota, appearance, and alert settings have a version 11 round-trip test",
         "TestVersionSevenIoMigrationPreservesExplicitChoices":
             "the new I/O module migrates version 7 settings without coupling quotas",
         "TestLegacyShapeMigrationKeepsOriginAndResetsUniformScale":
             "old independently shaped windows migrate to a uniform frame",
         "TestWeeklyQuotaAlertDefaultsAndMigrationAreOptIn":
             "weekly alert settings remain opt-in across migration",
+        "a complete enabled version 10 alert must survive":
+            "enabled version 10 quota alerts have an explicit migration fixture",
+        "TestCpuTrendDefaultsAndMigrationPolicy":
+            "the trend defaults only for a genuine new install",
         "version 9 appearance settings must migrate without loss":
             "the previous appearance schema is retained without enabling alerts",
         "TestVersionThreeMigrationPreservesExplicitVisibility":
             "version 3 settings retain explicit visibility when the service module is added",
         "TestVersionOneMigrationPreservesOldHomeChoices":
             "version 1 settings migrate without enabling new Home work",
-        '"version=10\\n"': "the current persisted settings schema is version 10",
+        '"version=11\\n"': "the current persisted settings schema is version 11",
+        '"version=10\\n"': "the previous alert schema has an explicit migration fixture",
         '"version=9\\n"': "the previous appearance schema has an explicit migration fixture",
         '"version=1\\n"': "the previous settings schema has an explicit migration fixture",
     }
     for token, reason in state_test_contracts.items():
         require(STATE_TEST, token, reason)
+
+    settings_store_test_contracts = {
+        "genuinely missing settings file must use new-install defaults":
+            "a Windows file fixture distinguishes a new install",
+        "unresolved settings location must not opt into a new module":
+            "an unavailable per-user settings location is tested",
+        "malformed existing settings file must keep the new trend off":
+            "damaged settings cannot receive new module defaults",
+        "oversized settings file must keep the new trend off":
+            "bounded settings loading uses safe migration defaults",
+        "non-file settings path must keep the new trend off":
+            "settings access errors cannot masquerade as a new install",
+        "explicitly saved version 11 trend selection must survive reload":
+            "valid explicit visibility persists through the real file store",
+    }
+    for token, reason in settings_store_test_contracts.items():
+        require(SETTINGS_STORE_TEST, token, reason)
+
+    trend_sources = PERFORMANCE_TREND_HEADER + PERFORMANCE_TREND
+    trend_contracts = {
+        "kPerformanceTrendWindow100ns":
+            "the in-memory CPU window has a fixed ten-minute bound",
+        "kPerformanceTrendMaximumGap100ns":
+            "a long sampling gap starts a new segment",
+        "kPerformanceTrendBucketCount = 18":
+            "the card has a bounded compact trend representation",
+        "std::optional<double> systemCpuPercent":
+            "missing CPU samples are distinct from idle zero",
+        "capturedAtUnbiased100ns < previous":
+            "backwards time clears the current segment",
+        "points_.clear()":
+            "discontinuities and pauses can drop stale continuity",
+        "validSampleCount":
+            "averages divide only by available CPU samples",
+    }
+    for token, reason in trend_contracts.items():
+        require(trend_sources, token, reason)
+    for token, reason in {
+        "unavailable CPU samples must not be averaged as zero":
+            "missing-value behavior has a fixed sample",
+        "full trend must downsample to eighteen buckets":
+            "the compact full-window shape is tested",
+        "irregular samples must preserve elapsed-time gaps":
+            "trend buckets use elapsed time rather than sample count",
+        "gap over thirty seconds must begin a new segment":
+            "long-gap continuity is tested",
+        "backwards timestamp must begin a new segment":
+            "time reversal continuity is tested",
+        "explicit pause reset must clear the segment":
+            "pause behavior is tested",
+    }.items():
+        require(PERFORMANCE_TREND_TEST, token, reason)
 
     cost_contracts = {
         "kCodexCostPricingVersion": "the frozen price table has an explicit version",
@@ -1241,6 +1325,14 @@ def main() -> None:
         "FOLDERID_LocalAppData": "settings live in the per-user Windows data directory",
         "CodexMonitorHUD": "settings have an app-specific directory",
         "settings.ini": "settings use a deterministic filename",
+        "std::filesystem::exists(path, existsError)":
+            "new installs are distinguished from unreadable or damaged settings",
+        'if (existsError) return ParseSettings("")':
+            "settings access errors use migration-safe module defaults",
+        'if (!exists) return DefaultSettings()':
+            "only a genuinely missing settings file receives new-install defaults",
+        'if (path.empty()) return ParseSettings("")':
+            "an unresolved settings location cannot masquerade as a new install",
         "kMaximumSettingsBytes = 64 * 1024":
             "a damaged settings file cannot consume unbounded memory at startup",
         "MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH":
@@ -1848,6 +1940,8 @@ def main() -> None:
             "daily and manual update scheduling is compiled into the HUD",
         "src/system_io_display.cpp":
             "tested I/O throughput presentation is compiled into the HUD",
+        "src/performance_trend.cpp":
+            "the bounded in-memory CPU trend is compiled into the HUD",
         "src/main.cpp": "the product window is compiled into the HUD",
     }
     for token, reason in hud_source_contracts.items():
@@ -1873,6 +1967,7 @@ def main() -> None:
         "src/ui_layout_math.cpp": "portable uniform resize math is compiled into the HUD",
         "src/performance_worker.cpp": "the HUD builds its serial background worker",
         "src/performance_diagnosis.cpp": "the HUD builds the pure diagnosis model",
+        "src/performance_trend.cpp": "the HUD builds the pure CPU trend model",
         "src/sampling_schedule.cpp": "the request scheduler is shared with fixed tests",
         "src/module_state.cpp": "the module state model is compiled into the HUD",
         "src/settings_store_win32.cpp": "the per-user settings store is compiled into the HUD",
@@ -1881,6 +1976,10 @@ def main() -> None:
             "portable diagnosis tests are buildable",
         "add_test(NAME windows_performance_diagnosis":
             "portable diagnosis tests are registered with CTest",
+        "add_executable(CodexMonitorPerformanceTrendTests":
+            "portable ten-minute trend tests are buildable",
+        "add_test(NAME windows_performance_trend":
+            "portable ten-minute trend tests are registered with CTest",
         "add_test(NAME windows_snapshot_math": "portable tests are registered with CTest",
         "add_executable(CodexMonitorUILayoutMathTests":
             "portable uniform resize tests are buildable",
@@ -1900,6 +1999,10 @@ def main() -> None:
             "Windows-native network and disk sampling tests are registered with CTest",
         "add_executable(CodexMonitorModuleStateTests": "portable state tests are buildable",
         "add_test(NAME windows_module_state": "portable state tests are registered with CTest",
+        "add_executable(CodexMonitorSettingsStoreTests":
+            "Windows file-level settings migration tests are buildable",
+        "add_test(NAME windows_settings_store":
+            "Windows file-level settings migration tests are registered with CTest",
         "add_executable(CodexMonitorSamplingScheduleTests":
             "portable sampling scheduling tests are buildable",
         "add_test(NAME windows_sampling_schedule":

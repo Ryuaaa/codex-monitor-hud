@@ -22,6 +22,7 @@
 #include "codex/weekly_quota_notification_win32.h"
 #include "module_state.h"
 #include "performance_diagnosis.h"
+#include "performance_trend.h"
 #include "performance_worker.h"
 #include "performance_snapshot.h"
 #include "service_status_worker.h"
@@ -218,6 +219,7 @@ struct AppState {
     codex_monitor::SettingsState settings = codex_monitor::DefaultSettings();
     codex_monitor::PerformanceWorker performanceWorker;
     codex_monitor::PerformanceSnapshot latestSnapshot;
+    codex_monitor::PerformanceTrend cpuTrend;
     codex_monitor::codex::CodexWorker codexWorker;
     codex_monitor::codex::WeeklyQuotaNotificationWin32
         weeklyQuotaNotification;
@@ -688,6 +690,67 @@ std::wstring BuildSystemCardText(const codex_monitor::PerformanceSnapshot& snaps
     return output.str();
 }
 
+std::wstring FormatCpuTrendPercent(const std::optional<double>& percent) {
+    if (!percent) return L"--";
+    std::wostringstream output;
+    output << std::fixed << std::setprecision(0) << *percent << L"%";
+    return output.str();
+}
+
+std::wstring FormatCpuTrendCoverage(std::uint64_t coverage100ns) {
+    const std::uint64_t seconds = coverage100ns /
+        codex_monitor::kPerformanceTrendHundredNanosecondsPerSecond;
+    std::wostringstream output;
+    if (seconds < 60) {
+        output << seconds << L" sec";
+    } else {
+        output << seconds / 60 << L" min";
+        if (seconds % 60 != 0) output << L" " << seconds % 60 << L" sec";
+    }
+    return output.str();
+}
+
+wchar_t CpuTrendGlyph(double percent) {
+    constexpr std::wstring_view glyphs = L"▁▂▃▄▅▆▇█";
+    const double clamped = std::clamp(percent, 0.0, 100.0);
+    const std::size_t index = std::min<std::size_t>(
+        glyphs.size() - 1,
+        static_cast<std::size_t>(clamped * glyphs.size() / 100.0));
+    return glyphs[index];
+}
+
+std::wstring BuildCpuTrendCardText(
+    const codex_monitor::PerformanceTrendSummary& summary) {
+    const std::size_t padding = summary.buckets.size() <
+            codex_monitor::kPerformanceTrendBucketCount
+        ? codex_monitor::kPerformanceTrendBucketCount - summary.buckets.size()
+        : 0;
+    std::wstring graph(
+        padding, L'·');
+    const std::size_t firstBucket = summary.buckets.size() >
+            codex_monitor::kPerformanceTrendBucketCount
+        ? summary.buckets.size() - codex_monitor::kPerformanceTrendBucketCount
+        : 0;
+    for (std::size_t index = firstBucket; index < summary.buckets.size(); ++index) {
+        const std::optional<double>& bucket = summary.buckets[index];
+        graph.push_back(bucket ? CpuTrendGlyph(*bucket) : L'·');
+    }
+
+    std::wostringstream output;
+    output << L"SYSTEM CPU · 10-MINUTE TREND\r\n" << graph << L"\r\n";
+    if (summary.sampleCount == 0) {
+        output << L"Waiting for the first unbiased sample";
+    } else {
+        output << L"Sampled " << FormatCpuTrendCoverage(summary.coverage100ns)
+               << L"  |  Average "
+               << FormatCpuTrendPercent(summary.averagePercent)
+               << L"  |  Peak "
+               << FormatCpuTrendPercent(summary.peakPercent);
+    }
+    output << L"\r\n5 s samples · in-memory only";
+    return output.str();
+}
+
 std::wstring BuildCommitCardText(const codex_monitor::PerformanceSnapshot& snapshot) {
     std::wostringstream output;
     output << L"COMMIT & PAGE FILE\r\n";
@@ -832,6 +895,7 @@ std::wstring_view CodexModuleHeading(codex_monitor::ModuleId id) {
         case codex_monitor::ModuleId::kSystemDiagnosis:
         case codex_monitor::ModuleId::kTargetProcessTree:
         case codex_monitor::ModuleId::kSystemResources:
+        case codex_monitor::ModuleId::kCpuTrend:
         case codex_monitor::ModuleId::kSystemIoThroughput:
         case codex_monitor::ModuleId::kCommitAndPageFile:
         case codex_monitor::ModuleId::kTopMemoryProcesses:
@@ -1461,6 +1525,7 @@ std::wstring BuildCodexCardText(codex_monitor::ModuleId id,
         case codex_monitor::ModuleId::kSystemDiagnosis:
         case codex_monitor::ModuleId::kTargetProcessTree:
         case codex_monitor::ModuleId::kSystemResources:
+        case codex_monitor::ModuleId::kCpuTrend:
         case codex_monitor::ModuleId::kSystemIoThroughput:
         case codex_monitor::ModuleId::kCommitAndPageFile:
         case codex_monitor::ModuleId::kTopMemoryProcesses:
@@ -1470,7 +1535,8 @@ std::wstring BuildCodexCardText(codex_monitor::ModuleId id,
 }
 
 std::wstring BuildModuleCardText(codex_monitor::ModuleId id,
-    const codex_monitor::PerformanceSnapshot& snapshot) {
+    const codex_monitor::PerformanceSnapshot& snapshot,
+    const codex_monitor::PerformanceTrendSummary& cpuTrend) {
     switch (id) {
         case codex_monitor::ModuleId::kSystemDiagnosis:
             return BuildDiagnosisCardText(snapshot);
@@ -1478,6 +1544,8 @@ std::wstring BuildModuleCardText(codex_monitor::ModuleId id,
             return BuildTargetCardText(snapshot);
         case codex_monitor::ModuleId::kSystemResources:
             return BuildSystemCardText(snapshot);
+        case codex_monitor::ModuleId::kCpuTrend:
+            return BuildCpuTrendCardText(cpuTrend);
         case codex_monitor::ModuleId::kSystemIoThroughput:
             return codex_monitor::BuildSystemIoThroughputCardText(
                 snapshot.systemIoRates);
@@ -1501,12 +1569,15 @@ std::wstring BuildModuleCardText(codex_monitor::ModuleId id,
 }
 
 void UpdateModuleCards(AppState& state) {
+    const codex_monitor::PerformanceTrendSummary cpuTrend =
+        state.cpuTrend.Summarize();
     for (const ModuleViews& views : state.moduleViews) {
         const std::size_t index = codex_monitor::ModuleIndex(views.id);
         const codex_monitor::ModuleDefinition& definition =
             codex_monitor::ModuleRegistry()[index];
         if (!definition.requiresPerformanceSampling) continue;
-        const std::wstring text = BuildModuleCardText(views.id, state.latestSnapshot);
+        const std::wstring text =
+            BuildModuleCardText(views.id, state.latestSnapshot, cpuTrend);
         if (state.settings.currentPage == codex_monitor::Page::kHome &&
             state.settings.homeVisible[index]) {
             SetWindowTextW(views.homeCard, text.c_str());
@@ -1832,6 +1903,11 @@ void ShowSamplingRefreshState(AppState& state) {
 void ApplyPerformanceSnapshot(AppState& state, codex_monitor::CompletedSample completed) {
     state.latestSnapshot = std::move(completed.snapshot);
     state.hasPerformanceSnapshot = true;
+    if (state.latestSnapshot.raw.capturedAtUnbiasedTimeAvailable) {
+        state.cpuTrend.Add(
+            state.latestSnapshot.raw.capturedAtUnbiased100ns,
+            state.latestSnapshot.systemCpuPercent);
+    }
     if (completed.mode == codex_monitor::SampleMode::kFastAndSlow) {
         state.nextSlowSampleTick = GetTickCount64() + kSlowSampleIntervalMs;
     }
@@ -1908,13 +1984,15 @@ void ApplyWindowsUpdateCheck(
 }
 
 void UpdateSamplingDemand(HWND window, AppState& state) {
-    const bool shouldSample = !state.windowMinimized && CurrentPageNeedsPerformance(state);
+    const bool shouldSample = !state.windowMinimized && !state.windowHidden &&
+        CurrentPageNeedsPerformance(state);
     if (!shouldSample) {
         StopSamplingTimer(window, state);
         if (!state.samplingPaused) {
             state.performanceWorker.PauseAndInvalidate();
             state.hasPerformanceSnapshot = false;
         }
+        state.cpuTrend.Reset();
         state.samplingPaused = true;
         UpdateStatusText(state);
         return;
@@ -1927,6 +2005,7 @@ void UpdateSamplingDemand(HWND window, AppState& state) {
 
     state.samplingPaused = false;
     state.hasPerformanceSnapshot = false;
+    state.cpuTrend.Reset();
     state.nextSlowSampleTick = 0;
     ShowSamplingRefreshState(state);
     state.performanceWorker.ActivateAndRequestFullSample();
@@ -3827,6 +3906,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         case WM_SHOWWINDOW:
             if (state) {
                 state->windowHidden = wParam == FALSE;
+                UpdateSamplingDemand(window, *state);
                 UpdateCodexDemand(window, *state);
                 UpdateCodexActivityDemand(window, *state);
                 UpdateServiceStatusDemand(window, *state);

@@ -169,6 +169,12 @@ void CaptureProcesses(RawPerformanceSnapshot& destination, bool captureAllProces
 
 RawPerformanceSnapshot WindowsSampler::CaptureRawSnapshot(SampleMode mode) {
     RawPerformanceSnapshot snapshot{};
+    ULONGLONG capturedAtUnbiased100ns = 0;
+    if (QueryUnbiasedInterruptTime(&capturedAtUnbiased100ns)) {
+        snapshot.capturedAtUnbiasedTimeAvailable = true;
+        snapshot.capturedAtUnbiased100ns =
+            static_cast<std::uint64_t>(capturedAtUnbiased100ns);
+    }
     CaptureSystemCpu(snapshot.systemCpu);
     snapshot.systemIo = systemIoSampler_.Capture();
     CapturePhysicalMemory(snapshot);

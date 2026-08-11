@@ -30,12 +30,18 @@ std::filesystem::path DefaultSettingsPath() {
 }
 
 SettingsState LoadSettingsFile(const std::filesystem::path& path) {
-    if (path.empty()) return DefaultSettings();
+    if (path.empty()) return ParseSettings("");
+
+    std::error_code existsError;
+    const bool exists = std::filesystem::exists(path, existsError);
+    if (existsError) return ParseSettings("");
+    if (!exists) return DefaultSettings();
+
     std::error_code sizeError;
     const std::uintmax_t size = std::filesystem::file_size(path, sizeError);
-    if (sizeError || size > kMaximumSettingsBytes) return DefaultSettings();
+    if (sizeError || size > kMaximumSettingsBytes) return ParseSettings("");
     std::ifstream input(path, std::ios::binary);
-    if (!input) return DefaultSettings();
+    if (!input) return ParseSettings("");
     const std::string contents((std::istreambuf_iterator<char>(input)),
                                std::istreambuf_iterator<char>());
     return ParseSettings(contents);

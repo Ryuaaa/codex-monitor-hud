@@ -31,12 +31,14 @@ void TestNewInstallDefaultsUseRegistryPolicy() {
            "every registered module must have a homepage order entry");
 
     const std::vector<ModuleId> home = codex_monitor::VisibleHomeModules(settings);
-    Expect(home.size() == 8,
-           "a new homepage must combine five core performance cards with quotas and current activity");
+    Expect(home.size() == 9,
+           "a new homepage must combine six core performance cards with quotas and current activity");
     Expect(Contains(home, ModuleId::kSystemDiagnosis),
            "the system diagnosis must be visible on a new homepage");
     Expect(codex_monitor::HomeNeedsPerformanceData(settings),
            "the default homepage must request performance data");
+    Expect(Contains(home, ModuleId::kCpuTrend),
+           "a new homepage must show the in-memory CPU trend");
     Expect(Contains(home, ModuleId::kCodexFiveHourQuota) &&
                Contains(home, ModuleId::kCodexWeeklyQuota),
            "a new homepage must show both independently selectable quota windows");
@@ -51,12 +53,14 @@ void TestNewInstallDefaultsUseRegistryPolicy() {
 
     const std::vector<ModuleId> computer =
         codex_monitor::VisibleModulesForNativePage(settings, Page::kComputer);
-    Expect(computer.size() == 6,
-           "the computer page must add live I/O to the five original performance modules");
+    Expect(computer.size() == 7,
+           "the computer page must add live I/O and CPU trend to the five original performance modules");
     Expect(Contains(computer, ModuleId::kSystemDiagnosis),
            "the system diagnosis must be visible on a new computer page");
     Expect(Contains(computer, ModuleId::kSystemIoThroughput),
            "live network and disk throughput must default on for the computer page");
+    Expect(Contains(computer, ModuleId::kCpuTrend),
+           "the ten-minute CPU trend must default on for the computer page");
     Expect(!Contains(home, ModuleId::kSystemIoThroughput),
            "live I/O must remain an opt-in homepage module");
     for (ModuleId id : computer) {
@@ -116,7 +120,7 @@ void TestOrderSanitizationAndMovement() {
            "the first module must not move beyond the registry boundary");
 }
 
-void TestVersionTenRoundTripAndIndependentQuotaSwitches() {
+void TestVersionElevenRoundTripAndIndependentQuotaSwitches() {
     using codex_monitor::ModuleId;
     using codex_monitor::Page;
 
@@ -146,8 +150,8 @@ void TestVersionTenRoundTripAndIndependentQuotaSwitches() {
     settings.windowPlacement = codex_monitor::WindowPlacement{-900, 120, 720, 640};
 
     const std::string serialized = codex_monitor::SerializeSettings(settings);
-    Expect(serialized.find("version=10\n") == 0,
-           "the settings whitelist must be serialized as version 10");
+    Expect(serialized.find("version=11\n") == 0,
+           "the settings whitelist must be serialized as version 11");
 
     const codex_monitor::SettingsState parsed = codex_monitor::ParseSettings(serialized);
     Expect(parsed.currentPage == Page::kCodex,
@@ -289,22 +293,32 @@ void TestWeeklyQuotaAlertDefaultsAndMigrationAreOptIn() {
                !appearanceVersion.legacyWindowSizeNeedsMigration,
            "version 9 appearance settings must migrate without loss");
 
-    const auto partialCurrent = codex_monitor::ParseSettings(
+    const auto migratedVersionTen = codex_monitor::ParseSettings(
         "version=10\nweekly_quota_alert_enabled=1\n"
+        "weekly_quota_alert_threshold=20\n"
+        "weekly_quota_alert_mode=naturalDay\n");
+    Expect(migratedVersionTen.weeklyQuotaAlert.enabled &&
+               migratedVersionTen.weeklyQuotaAlert.thresholdPercent == 20.0 &&
+               migratedVersionTen.weeklyQuotaAlert.mode ==
+                   WeeklyQuotaAlertMode::kNaturalDay,
+           "a complete enabled version 10 alert must survive the version 11 migration");
+
+    const auto partialCurrent = codex_monitor::ParseSettings(
+        "version=11\nweekly_quota_alert_enabled=1\n"
         "weekly_quota_alert_threshold=20\n");
     Expect(!partialCurrent.weeklyQuotaAlert.enabled &&
                partialCurrent.weeklyQuotaAlert.thresholdPercent == 15.0,
            "a partial current alert triplet must fall back to safe defaults");
 
     const auto invalidThreshold = codex_monitor::ParseSettings(
-        "version=10\nweekly_quota_alert_enabled=1\n"
+        "version=11\nweekly_quota_alert_enabled=1\n"
         "weekly_quota_alert_threshold=101\n"
         "weekly_quota_alert_mode=naturalDay\n");
     Expect(!invalidThreshold.weeklyQuotaAlert.enabled,
            "an out-of-range alert threshold must keep the feature disabled");
 
     const auto duplicateField = codex_monitor::ParseSettings(
-        "version=10\nweekly_quota_alert_enabled=1\n"
+        "version=11\nweekly_quota_alert_enabled=1\n"
         "weekly_quota_alert_enabled=0\n"
         "weekly_quota_alert_threshold=20\n"
         "weekly_quota_alert_mode=rolling24h\n");
@@ -438,8 +452,11 @@ void TestActivityNativeDefaultMigrationPolicy() {
     Expect(ActivityIsVisible(codex_monitor::DefaultSettings()),
            "a new install must show current task activity on the Codex page");
     Expect(ActivityIsVisible(codex_monitor::ParseSettings(
+               "version=11\npage=codex\n")),
+           "the current settings schema missing native visibility may use the activity default");
+    Expect(ActivityIsVisible(codex_monitor::ParseSettings(
                "version=10\npage=codex\n")),
-           "a current settings file missing native visibility may use the activity default");
+           "the alert schema missing native visibility may retain the activity default");
     Expect(ActivityIsVisible(codex_monitor::ParseSettings(
                "version=9\npage=codex\n")),
            "the appearance schema missing native visibility may retain the activity default");
@@ -509,12 +526,57 @@ void TestPageFilteringAndHomeDemandGates() {
     settings.nativePageVisible.fill(true);
     const std::vector<ModuleId> computer =
         codex_monitor::VisibleModulesForNativePage(settings, Page::kComputer);
-    Expect(computer.size() == 6,
+    Expect(computer.size() == 7,
            "the computer page must filter out all nine Codex-page modules even when enabled");
     const std::vector<ModuleId> codex =
         codex_monitor::VisibleModulesForNativePage(settings, Page::kCodex);
     Expect(codex.size() == 9,
            "the Codex page must include its nine modules and filter out computer modules");
+}
+
+void TestCpuTrendDefaultsAndMigrationPolicy() {
+    using codex_monitor::ModuleId;
+    using codex_monitor::Page;
+    const auto IsHomeVisible = [](const codex_monitor::SettingsState& settings) {
+        return Contains(codex_monitor::VisibleHomeModules(settings),
+                        ModuleId::kCpuTrend);
+    };
+    const auto IsComputerVisible = [](const codex_monitor::SettingsState& settings) {
+        return Contains(
+            codex_monitor::VisibleModulesForNativePage(settings, Page::kComputer),
+            ModuleId::kCpuTrend);
+    };
+
+    const auto defaults = codex_monitor::DefaultSettings();
+    Expect(IsHomeVisible(defaults) && IsComputerVisible(defaults),
+           "a genuine new install must show CPU trend on Home and Computer");
+
+    for (const std::string& existing : {
+             std::string{},
+             std::string{"version=broken\n"},
+             std::string{"version=10\npage=computer\n"},
+             std::string{"version=11\npage=computer\n"},
+         }) {
+        const auto parsed = codex_monitor::ParseSettings(existing);
+        Expect(!IsHomeVisible(parsed) && !IsComputerVisible(parsed),
+               "missing or damaged existing visibility must not opt into the new trend card");
+    }
+
+    const auto explicitVersionTen = codex_monitor::ParseSettings(
+        "version=10\n"
+        "home_visible=system-resources\n"
+        "native_visible=system-resources\n");
+    Expect(!IsHomeVisible(explicitVersionTen) &&
+               !IsComputerVisible(explicitVersionTen),
+           "a version 10 explicit selection must remain unchanged");
+
+    const auto explicitVersionEleven = codex_monitor::ParseSettings(
+        "version=11\n"
+        "home_visible=cpu-trend\n"
+        "native_visible=cpu-trend\n");
+    Expect(IsHomeVisible(explicitVersionEleven) &&
+               IsComputerVisible(explicitVersionEleven),
+           "version 11 must persist independently selected trend cards");
 }
 
 void TestMalformedSettingsFallBackSafely() {
@@ -542,7 +604,7 @@ void TestMalformedSettingsFallBackSafely() {
     Expect(!codex_monitor::HomeNeedsServiceStatus(parsed),
            "damaged settings must not silently enable service-status homepage work");
     Expect(codex_monitor::VisibleModulesForNativePage(parsed, Page::kComputer).size() == 6,
-           "damaged native visibility must keep the six computer defaults");
+           "damaged native visibility must keep the six pre-trend computer defaults");
     Expect(codex_monitor::VisibleModulesForNativePage(parsed, Page::kCodex).size() == 5,
            "damaged native visibility must keep safe Codex defaults");
     Expect(!parsed.windowPlacement, "an invalid window placement must be ignored");
@@ -578,7 +640,7 @@ void TestWindowPlacementReturnsToAVisibleWorkArea() {
 int main() {
     TestNewInstallDefaultsUseRegistryPolicy();
     TestOrderSanitizationAndMovement();
-    TestVersionTenRoundTripAndIndependentQuotaSwitches();
+    TestVersionElevenRoundTripAndIndependentQuotaSwitches();
     TestVersionSevenIoMigrationPreservesExplicitChoices();
     TestLegacyShapeMigrationKeepsOriginAndResetsUniformScale();
     TestWeeklyQuotaAlertDefaultsAndMigrationAreOptIn();
@@ -587,6 +649,7 @@ int main() {
     TestForecastNativeDefaultMigrationPolicy();
     TestActivityNativeDefaultMigrationPolicy();
     TestPageFilteringAndHomeDemandGates();
+    TestCpuTrendDefaultsAndMigrationPolicy();
     TestMalformedSettingsFallBackSafely();
     TestWindowPlacementReturnsToAVisibleWorkArea();
     if (failures != 0) return 1;

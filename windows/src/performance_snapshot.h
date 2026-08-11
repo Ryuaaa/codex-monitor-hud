@@ -34,6 +34,8 @@ struct ProcessSnapshot {
 };
 
 struct RawPerformanceSnapshot {
+    bool capturedAtUnbiasedTimeAvailable = false;
+    std::uint64_t capturedAtUnbiased100ns = 0;
     CpuTimes systemCpu;
     SystemIoCounters systemIo;
 

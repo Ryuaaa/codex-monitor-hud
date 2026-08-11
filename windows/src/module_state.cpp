@@ -41,6 +41,16 @@ constexpr std::array<ModuleDefinition, kModuleCount> kRegistry{{
      false,
      true,
      true},
+    {ModuleId::kCpuTrend,
+     "cpu-trend",
+     L"10-minute system CPU trend",
+     Page::kComputer,
+     true,
+     false,
+     false,
+     false,
+     true,
+     true},
     {ModuleId::kSystemIoThroughput,
      "system-io-throughput",
      L"Network & disk live throughput",
@@ -394,7 +404,7 @@ bool MoveHomeModule(SettingsState& settings, ModuleId id, int direction) {
 std::string SerializeSettings(const SettingsState& settings) {
     const std::vector<ModuleId> order = SanitizeHomeOrder(settings.homeOrder);
     std::ostringstream output;
-    output << "version=10\n";
+    output << "version=11\n";
     output << "page=" << PageKey(settings.currentPage) << '\n';
     output << "always_on_top=" << (settings.alwaysOnTop ? 1 : 0) << '\n';
     output << "window_locked=" << (settings.windowLocked ? 1 : 0) << '\n';
@@ -561,10 +571,11 @@ SettingsState ParseSettings(std::string_view text) {
     }
 
     // The alert creates persistent background work and notifications, so only
-    // a complete current-schema triplet can opt in. Older, unknown, partial,
+    // a complete version 10 or 11 triplet can opt in. Older, unknown, partial,
     // and malformed settings remain safely disabled with the 15% rolling
     // default.
-    if (version == 10 && !weeklyAlertSettingsMalformed &&
+    if ((version == 10 || version == 11) &&
+        !weeklyAlertSettingsMalformed &&
         weeklyAlertEnabled && weeklyAlertThreshold && weeklyAlertMode) {
         settings.weeklyQuotaAlert.enabled = *weeklyAlertEnabled;
         settings.weeklyQuotaAlert.thresholdPercent =
@@ -584,6 +595,7 @@ SettingsState ParseSettings(std::string_view text) {
                  ModuleId::kCodexFiveHourQuota,
                  ModuleId::kCodexWeeklyQuota,
                  ModuleId::kCodexTaskActivity,
+                 ModuleId::kCpuTrend,
              }) {
             settings.homeVisible[ModuleIndex(id)] = false;
         }
@@ -602,10 +614,11 @@ SettingsState ParseSettings(std::string_view text) {
         // not silently opt the user into newly introduced work.
         const bool useForecastDefault =
             (version == 5 || version == 6 || version == 7 || version == 8 ||
-             version == 9 || version == 10) &&
+             version == 9 || version == 10 || version == 11) &&
             !nativeVisibleKeySeen;
         const bool useActivityDefault =
-            (version == 7 || version == 8 || version == 9 || version == 10) &&
+            (version == 7 || version == 8 || version == 9 || version == 10 ||
+             version == 11) &&
             !nativeVisibleKeySeen;
         if (!useForecastDefault) {
             settings.nativePageVisible[ModuleIndex(ModuleId::kCodexQuotaForecast)] =
@@ -620,6 +633,10 @@ SettingsState ParseSettings(std::string_view text) {
         // existing native selection must not silently start that work.
         settings.nativePageVisible[
             ModuleIndex(ModuleId::kCodexTokenCostEstimate)] = false;
+        // The CPU trend is new in version 11. A parsed file always represents
+        // existing or damaged state; only DefaultSettings() for a genuine new
+        // install may opt into the new card.
+        settings.nativePageVisible[ModuleIndex(ModuleId::kCpuTrend)] = false;
     }
     settings.legacyWindowSizeNeedsMigration =
         windowKeyFound && !windowScaleKeyFound;
