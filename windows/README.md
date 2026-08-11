@@ -179,7 +179,7 @@ Windows CI 还包含以下原生集成测试：
 
 这些测试证明编译、算法、进程边界和 Windows 虚拟机上的基础窗口行为，不替代真实用户电脑上的视觉手感、账号数据和任务管理器对照验收。
 
-仓库已经提供手动触发的 `Windows signed release` 工作流。它会从 GitHub 加密机密读取可信代码签名 PFX，先把实际证书 SHA-256 固定进更新器，再依次构建、测试、签名并验证 EXE、构建并签名 MSI、重新生成校验值，最后把 Windows 文件加入指定 GitHub Release。没有可信 Windows 代码签名证书时，该流程会直接失败，不会发布未签名安装包。
+仓库已经提供手动触发的 `Windows signed release` 工作流。它会从 GitHub 加密机密读取可信代码签名 PFX，先把实际证书 SHA-256 固定进更新器，再依次构建、测试、签名并验证 EXE、构建并签名 MSI、重新生成校验值，最后把 Windows 文件加入指定 GitHub Release。普通 Windows CI 会用一次性测试证书解析并试跑签名辅助脚本；没有可信 Windows 代码签名证书时，正式发布流程仍会直接失败，不会发布未签名安装包。
 
 ## Windows 机器上的最小验收
 

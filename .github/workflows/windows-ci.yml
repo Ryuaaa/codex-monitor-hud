@@ -79,6 +79,76 @@ jobs:
             throw "PE version metadata does not match CMake: expected $expectedVersion, got file=$($versionInfo.FileVersion) product=$($versionInfo.ProductVersion)"
           }
 
+      - name: Test release signing helper
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+          $tokens = $null
+          $parseErrors = $null
+          $scriptPath = (Resolve-Path -LiteralPath `
+            "windows/sign-release-artifacts.ps1").Path
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            $scriptPath,
+            [ref]$tokens,
+            [ref]$parseErrors) | Out-Null
+          if ($parseErrors.Count -ne 0) {
+            $parseErrors | ForEach-Object { Write-Error $_.ToString() }
+            throw "The release signing helper contains a PowerShell parse error"
+          }
+
+          $passwordText = [guid]::NewGuid().ToString("N")
+          $password = ConvertTo-SecureString $passwordText -AsPlainText -Force
+          $pfxPath = Join-Path $env:RUNNER_TEMP `
+            ("codex-monitor-signing-helper-" + [guid]::NewGuid().ToString("N") + ".pfx")
+          $certificate = $null
+          try {
+            $certificate = New-SelfSignedCertificate `
+              -Type CodeSigningCert `
+              -Subject ("CN=Codex Monitor HUD Signing Helper CI " + `
+                $env:GITHUB_RUN_ID + "-" + $env:GITHUB_RUN_ATTEMPT) `
+              -CertStoreLocation "Cert:\CurrentUser\My" `
+              -KeyAlgorithm RSA `
+              -KeyLength 2048 `
+              -HashAlgorithm SHA256 `
+              -KeyExportPolicy Exportable `
+              -NotBefore (Get-Date).AddMinutes(-5) `
+              -NotAfter (Get-Date).AddHours(2)
+            Export-PfxCertificate `
+              -Cert $certificate `
+              -FilePath $pfxPath `
+              -Password $password | Out-Null
+            $fingerprint = & $scriptPath `
+              -Action Fingerprint `
+              -CertificatePath $pfxPath `
+              -CertificatePassword $passwordText
+            if ($fingerprint -notmatch '^[0-9a-f]{64}$') {
+              throw "The release signing helper returned an invalid fingerprint"
+            }
+            $sha256 = [System.Security.Cryptography.SHA256]::Create()
+            try {
+              $expectedFingerprint = -join (
+                $sha256.ComputeHash($certificate.RawData) |
+                  ForEach-Object { $_.ToString("x2") })
+            } finally {
+              $sha256.Dispose()
+            }
+            if ($fingerprint -ne $expectedFingerprint) {
+              throw "The release signing helper fingerprint is incorrect"
+            }
+          } finally {
+            if ($null -ne $certificate) {
+              $storePath = "Cert:\CurrentUser\My\$($certificate.Thumbprint)"
+              if (Test-Path -LiteralPath $storePath) {
+                Remove-Item -LiteralPath $storePath -DeleteKey -Force
+              }
+              $certificate.Dispose()
+            }
+            if (Test-Path -LiteralPath $pfxPath) {
+              Remove-Item -LiteralPath $pfxPath -Force
+            }
+          }
+
       - name: Create portable Windows package
         shell: pwsh
         run: |

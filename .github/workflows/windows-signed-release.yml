@@ -147,8 +147,14 @@ jobs:
           if ($assets.Count -ne 4 -or $assets -contains $null) {
             throw "The signed Windows release asset set is incomplete"
           }
-          gh release view $tag | Out-Null
-          if ($LASTEXITCODE -eq 0) {
+          $releaseExists = $false
+          try {
+            gh release view $tag *> $null
+            $releaseExists = $LASTEXITCODE -eq 0
+          } catch {
+            $releaseExists = $false
+          }
+          if ($releaseExists) {
             gh release upload $tag @assets --clobber
           } else {
             gh release create $tag @assets --verify-tag `

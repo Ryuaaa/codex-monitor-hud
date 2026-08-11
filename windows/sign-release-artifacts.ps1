@@ -39,11 +39,6 @@ try {
     if ([string]::IsNullOrWhiteSpace($leafThumbprint)) {
         throw "The release certificate has no SHA-1 store identity"
     }
-    if ($Action -eq "Fingerprint") {
-        Write-Output $publisherFingerprint
-        return
-    }
-
     if (-not $certificate.HasPrivateKey) {
         throw "The release certificate does not contain a private key"
     }
@@ -60,6 +55,10 @@ try {
     }
     if (-not $hasCodeSigningUsage) {
         throw "The release certificate is not valid for code signing"
+    }
+    if ($Action -eq "Fingerprint") {
+        Write-Output $publisherFingerprint
+        return
     }
 } finally {
     $certificate.Dispose()
