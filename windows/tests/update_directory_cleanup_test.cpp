@@ -178,7 +178,7 @@ void TestWindowsFilesystemCleanup() {
     const std::wstring newest = ManagedName(L'a');
     const std::wstring secondNewest = ManagedName(L'b');
     const std::wstring stale = ManagedName(L'c');
-    const std::wstring unmanaged = L"update-" + std::wstring(32U, L'A');
+    const std::wstring unmanaged = L"update-" + std::wstring(32U, L'g');
     CreateOldFlatDirectory(root, newest, 8U);
     CreateOldFlatDirectory(root, secondNewest, 9U);
     CreateOldFlatDirectory(root, stale, 10U);
