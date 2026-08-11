@@ -158,6 +158,21 @@ UPDATE_APPLY_TRANSACTION_HEADER = (
 UPDATE_APPLY_TRANSACTION_TEST = (
     WINDOWS_ROOT / "tests" / "update_apply_transaction_test.cpp"
 ).read_text(encoding="utf-8")
+UPDATE_HELPER = (
+    WINDOWS_ROOT / "src" / "update" / "update_helper_win32.cpp"
+).read_text(encoding="utf-8")
+UPDATE_HELPER_HEADER = (
+    WINDOWS_ROOT / "src" / "update" / "update_helper_win32.h"
+).read_text(encoding="utf-8")
+UPDATE_INSTALLED_HUD = (
+    WINDOWS_ROOT / "src" / "update" / "update_installed_hud_win32.cpp"
+).read_text(encoding="utf-8")
+UPDATE_INSTALLED_HUD_HEADER = (
+    WINDOWS_ROOT / "src" / "update" / "update_installed_hud_win32.h"
+).read_text(encoding="utf-8")
+UPDATE_HELPER_TEST = (
+    WINDOWS_ROOT / "tests" / "update_helper_test.cpp"
+).read_text(encoding="utf-8")
 UPDATE_STATE = (
     WINDOWS_ROOT / "src" / "update" / "update_state_store.cpp"
 ).read_text(encoding="utf-8")
@@ -477,7 +492,9 @@ def main() -> None:
                       UPDATE_INSTALLER_VERIFIER_HEADER +
                       UPDATE_INSTALLER_VERIFIER + UPDATE_MSI_IDENTITY_HEADER +
                       UPDATE_MSI_IDENTITY + UPDATE_APPLY_TRANSACTION_HEADER +
-                      UPDATE_APPLY_TRANSACTION + UPDATE_WORKER_HEADER +
+                      UPDATE_APPLY_TRANSACTION + UPDATE_HELPER_HEADER +
+                      UPDATE_HELPER + UPDATE_INSTALLED_HUD_HEADER +
+                      UPDATE_INSTALLED_HUD + UPDATE_WORKER_HEADER +
                       UPDATE_WORKER + MAIN)
     for token, reason in update_contracts.items():
         require(update_sources, token, reason)
@@ -568,6 +585,11 @@ def main() -> None:
         require(update_apply_sources, token, reason)
     require(msi_identity_sources, "WTD_REVOKE_WHOLECHAIN",
             "the production trust path cannot disable revocation checks")
+    require(msi_identity_sources, "CERT_E_UNTRUSTEDROOT",
+            "the isolated signed fixture has an explicit test-only trust result")
+    require(msi_identity_sources,
+            "CODEX_MONITOR_UPDATE_APPLY_TRANSACTION_TESTING",
+            "the untrusted CI signer exception is unavailable to production")
     reject(update_apply_sources, "revocationChecks",
            "the transaction API must not expose a revocation bypass")
     require(UPDATE_APPLY_TRANSACTION_TEST, "callbackCount == 0",
@@ -595,6 +617,73 @@ def main() -> None:
     require(WINDOWS_WORKFLOW,
             "checksum-rejected",
             "Windows CI proves checksum failure invokes no callback")
+    require(WINDOWS_WORKFLOW,
+            "signature-rejected",
+            "Windows CI proves a tampered signed MSI invokes no callback")
+    for forbidden_store_write in (
+        "Import-Certificate",
+        "Cert:\\CurrentUser\\Root",
+        "Cert:\\CurrentUser\\TrustedPublisher",
+        "$store.Add($publicCertificate)",
+    ):
+        reject(WINDOWS_WORKFLOW, forbidden_store_write,
+               "Windows CI must not mutate hosted-runner trust stores")
+    helper_sources = (
+        UPDATE_HELPER_HEADER + UPDATE_HELPER +
+        UPDATE_INSTALLED_HUD_HEADER + UPDATE_INSTALLED_HUD
+    )
+    for token, reason in {
+        "--codex-monitor-update-helper-v1":
+            "the internal helper mode has a versioned command-line contract",
+        "GetProcessTimes":
+            "the inherited old-process handle is checked against creation time",
+        "QueryFullProcessImageNameW":
+            "the inherited process must be the installed HUD executable",
+        "WaitForSingleObject":
+            "the helper blocks on the exact inherited process handle",
+        "ApplyVerifiedWindowsMsiUpdate":
+            "the helper reuses the continuously locked production installer transaction",
+        "VerifyAndLaunchInstalledWindowsHud":
+            "restart is gated by post-install executable verification",
+        "WTD_REVOKE_WHOLECHAIN":
+            "the restarted executable receives whole-chain revocation checking",
+        "CERT_SHA256_HASH_PROP_ID":
+            "the restarted executable is pinned to the compiled publisher",
+        "GetFileVersionInfoW":
+            "the restarted executable carries the selected release identity",
+        "CreateProcessW":
+            "the verified installed HUD is restarted directly without a shell",
+    }.items():
+        require(helper_sources, token, reason)
+    reject(helper_sources, "DeleteFileW(",
+           "the helper must never delete an installed application file")
+    reject(helper_sources, "ShellExecute",
+           "restart must not delegate an unverified path to the shell")
+    require_regex(
+        MAIN,
+        r"TryRunWindowsUpdateHelperCommandLine\(\).*?SetProcessDpiAwarenessContext",
+        "helper mode must run before singleton, workers, or visible UI initialization",
+    )
+    for token, reason in {
+        "an unproven old-process exit must stop before installation":
+            "every wait failure is fixed as a no-install path",
+        "a rejected or failed MSI must never reach executable launch":
+            "installer failures cannot restart an unchecked executable",
+        "an unverified installed executable must not be treated as started":
+            "post-install signature failure remains fail closed",
+        "wait, verified install, and verified restart must be ordered":
+            "the complete helper sequence has a fixed ordering test",
+    }.items():
+        require(UPDATE_HELPER_TEST, token, reason)
+    test_helper_macro = "CODEX_MONITOR_UPDATE_HELPER_TESTING"
+    if CMAKE.count(test_helper_macro) != 1:
+        raise AssertionError(
+            "the injectable helper sequencing macro must belong to exactly one test target"
+        )
+    require(UPDATE_HELPER_HEADER, test_helper_macro,
+            "the helper callback seam is hidden from production builds")
+    require(UPDATE_HELPER, test_helper_macro,
+            "the helper callback implementation is hidden from production builds")
     require(RESOURCE_SCRIPT, "CODEX_MONITOR_WINDOWS_VERSION_MAJOR",
             "the executable resource version follows the CMake project version")
     reject(RESOURCE_SCRIPT, "FILEVERSION 0,3,0,0",
@@ -1070,6 +1159,10 @@ def main() -> None:
             "publisher trust and MSI identity verification are compiled into the HUD",
         "src/update/update_apply_transaction_win32.cpp":
             "the continuous-lock update apply transaction is compiled into the HUD",
+        "src/update/update_helper_win32.cpp":
+            "the controlled exit/install/restart helper mode is compiled into the HUD",
+        "src/update/update_installed_hud_win32.cpp":
+            "post-install executable verification is compiled into the HUD",
         "src/update/update_worker.cpp":
             "daily and manual update scheduling is compiled into the HUD",
         "src/main.cpp": "the product window is compiled into the HUD",
@@ -1153,6 +1246,8 @@ def main() -> None:
             "publisher and MSI identity policy tests are registered with CTest",
         "add_test(NAME windows_update_apply_transaction":
             "the continuous-lock update transaction is registered with CTest",
+        "add_test(NAME windows_update_helper":
+            "the controlled helper sequencing tests are registered with CTest",
         "add_executable(CodexMonitorCodexProcessTests":
             "bounded process integration tests are buildable",
         "add_test(NAME windows_codex_process":

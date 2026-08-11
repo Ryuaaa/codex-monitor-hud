@@ -232,7 +232,8 @@ int RunSignedApplyCli(int argc, char* argv[]) {
         std::cerr << "usage: --verify-apply-signed-msi <absolute-msi> "
                      "<expected-version> <64hex-cert-sha256> "
                      "<64hex-msi-sha256> "
-                     "<installed|publisher-rejected|checksum-rejected>\n";
+                     "<installed|publisher-rejected|checksum-rejected|"
+                     "signature-rejected>\n";
         return 2;
     }
 
@@ -280,6 +281,14 @@ int RunSignedApplyCli(int argc, char* argv[]) {
     } else if (expected == "checksum-rejected") {
         matched = result.status ==
                       WindowsUpdateApplyStatus::kChecksumRejected &&
+                  callbackCount == 0;
+    } else if (expected == "signature-rejected") {
+        matched = result.status ==
+                      WindowsUpdateApplyStatus::
+                          kPublisherOrIdentityRejected &&
+                  result.publisherAndIdentity.status ==
+                      WindowsMsiIdentityVerificationStatus::
+                          kSignatureVerificationFailed &&
                   callbackCount == 0;
     } else {
         std::cerr << "signed_apply=invalid-expected-result\n";

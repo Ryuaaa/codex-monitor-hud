@@ -302,7 +302,19 @@ WindowsMsiIdentityVerificationStatus VerifySignatureAndPublisher(
     const LONG trustStatus =
         WinVerifyTrust(reinterpret_cast<HWND>(INVALID_HANDLE_VALUE),
                        &action, &trustData);
-    if (trustStatus != ERROR_SUCCESS) {
+    bool signatureAccepted = trustStatus == ERROR_SUCCESS;
+#if defined(CODEX_MONITOR_UPDATE_APPLY_TRANSACTION_TESTING)
+    // GitHub's hosted Windows runner can sign with an ephemeral certificate,
+    // but writing that certificate into the runner's trust stores can block
+    // indefinitely. Only the dedicated transaction test binary may continue
+    // past the precise "untrusted self-signed root" result, after which the
+    // signer is still required to match the explicit SHA-256 pin. Bad digests,
+    // revoked chains, missing signatures, and every other trust failure remain
+    // rejected. The production HUD is built without this macro.
+    signatureAccepted = signatureAccepted ||
+        trustStatus == CERT_E_UNTRUSTEDROOT;
+#endif
+    if (!signatureAccepted) {
         CloseWinTrustState(&action, &trustData);
         return WindowsMsiIdentityVerificationStatus::
             kSignatureVerificationFailed;
