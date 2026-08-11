@@ -1405,6 +1405,8 @@ def main() -> None:
             "the worker integration test checks for orphaned app-server processes",
         "TestQuotaForecastDemandGating":
             "forecast history is covered across disabled, enabled, failure, and cancellation paths",
+        "a refresh that observed malformed history must publish suppression metadata to the UI":
+            "worker repair cannot hide same-refresh history damage from alert delivery",
     }.items():
         require(CODEX_WORKER_TEST, token, reason)
 
@@ -1497,6 +1499,8 @@ def main() -> None:
             "damaged history suppresses rather than estimating a notification",
         "RecoverMalformedStateForCurrentPeriod":
             "known damaged state recovers conservatively without permanent disablement",
+        "quotaHistoryHadMalformedLinesThisRefresh":
+            "worker-detected history damage suppresses the same UI refresh",
         "Shell_NotifyIconW(NIM_MODIFY":
             "Windows receives a non-activating Shell notification",
         "NIIF_RESPECT_QUIET_TIME":

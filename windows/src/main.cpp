@@ -954,8 +954,11 @@ bool EnsureWeeklyQuotaNotificationAvailable(AppState& state) {
     return state.weeklyQuotaNotification.Start(state.mainWindow, icon);
 }
 
-void EvaluateWeeklyQuotaAlertAfterRefresh(AppState& state) {
+void EvaluateWeeklyQuotaAlertAfterRefresh(
+    AppState& state,
+    bool quotaHistoryHadMalformedLinesThisRefresh) {
     if (!state.settings.weeklyQuotaAlert.enabled ||
+        quotaHistoryHadMalformedLinesThisRefresh ||
         !state.latestCodexReport.rateLimitsResponseReceived ||
         state.latestCodexData.rateLimits.lastFailure ||
         !state.latestCodexData.rateLimits.lastValue) {
@@ -1840,6 +1843,9 @@ void ApplyPerformanceSnapshot(AppState& state, codex_monitor::CompletedSample co
 void ApplyCodexRefresh(
     AppState& state,
     codex_monitor::codex::CompletedCodexRefresh completed) {
+    const bool quotaHistoryHadMalformedLinesThisRefresh =
+        completed.quotaForecastUpdate &&
+        completed.quotaForecastUpdate->historyHadMalformedLines;
     state.latestCodexData = std::move(completed.data);
     state.latestCodexReport = std::move(completed.report);
     if (completed.quotaForecastUpdate) {
@@ -1858,7 +1864,8 @@ void ApplyCodexRefresh(
         state.latestCodexData.account.lastValue.has_value() ||
         state.latestCodexData.usage.lastValue.has_value() ||
         state.latestCodexData.threadList.lastValue.has_value();
-    EvaluateWeeklyQuotaAlertAfterRefresh(state);
+    EvaluateWeeklyQuotaAlertAfterRefresh(
+        state, quotaHistoryHadMalformedLinesThisRefresh);
     UpdateCodexCards(state);
     LayoutControls(state.mainWindow, state);
     UpdateStatusText(state);

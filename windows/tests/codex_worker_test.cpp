@@ -470,6 +470,21 @@ void TestQuotaForecastDemandGating(HWND window,
                "quota history must exclude account, task, and token data");
     }
 
+    if (written) {
+        Expect(WriteTextFile(historyPath,
+                             *written + "malformed-history-line\n"),
+               "the malformed-history worker fixture must be written");
+        Expect(worker.RequestRefresh(),
+               "the malformed-history fixture must request one refresh");
+        const auto damagedHistoryRefresh =
+            WaitForRefresh(window, worker, 10s);
+        Expect(damagedHistoryRefresh &&
+                   damagedHistoryRefresh->quotaForecastUpdate &&
+                   damagedHistoryRefresh->quotaForecastUpdate
+                       ->historyHadMalformedLines,
+               "a refresh that observed malformed history must publish suppression metadata to the UI");
+    }
+
     const std::int64_t now = CurrentUnixSeconds();
     std::ostringstream fixture;
     fixture << "version=1\n"

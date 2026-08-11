@@ -166,12 +166,14 @@ QuotaForecastRefresh RefreshQuotaForecast(
 
     QuotaHistoryStore store(historyPath, std::move(atomicReplace));
     QuotaHistoryLoadResult loaded = store.Load(nowUnixSeconds);
+    QuotaForecastRefresh result;
+    result.historyHadMalformedLines =
+        loaded.ok() && loaded.skippedMalformedLines != 0;
     std::vector<QuotaHistorySample> history =
         loaded.ok() ? std::move(loaded.samples)
                     : std::vector<QuotaHistorySample>{};
     if (HasHistoryValue(current)) history.push_back(current);
 
-    QuotaForecastRefresh result;
     result.fiveHour =
         CalculateWindowForecast(fiveHour, history, false, nowUnixSeconds);
     result.weekly =

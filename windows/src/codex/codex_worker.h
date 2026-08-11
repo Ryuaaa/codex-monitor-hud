@@ -30,6 +30,7 @@ struct QuotaForecastRefresh {
     QuotaWindowForecastRefresh weekly;
     bool historyStored = false;
     bool historySaveFailed = false;
+    bool historyHadMalformedLines = false;
 };
 
 enum class CodexCostRefreshStatus {
