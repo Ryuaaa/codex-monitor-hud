@@ -88,6 +88,14 @@ if(BUILD_TESTING)
     configure_codex_monitor_target(CodexMonitorSystemIoRateTests)
     add_test(NAME windows_system_io_rate COMMAND CodexMonitorSystemIoRateTests)
 
+    add_executable(CodexMonitorSystemIoDisplayTests
+        src/system_io_display.cpp
+        tests/system_io_display_test.cpp
+    )
+    configure_codex_monitor_target(CodexMonitorSystemIoDisplayTests)
+    add_test(NAME windows_system_io_display
+        COMMAND CodexMonitorSystemIoDisplayTests)
+
     add_executable(CodexMonitorModuleStateTests
         src/module_state.cpp
         tests/module_state_test.cpp
@@ -717,6 +725,7 @@ if(WIN32)
         src/service_status_model.cpp
         src/service_status_worker.cpp
         src/settings_store_win32.cpp
+        src/system_io_display.cpp
         src/system_io_rate.cpp
         src/system_io_sampler_win32.cpp
         src/ui_layout_math.cpp

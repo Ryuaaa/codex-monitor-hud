@@ -24,6 +24,7 @@
 #include "service_status_worker.h"
 #include "settings_store_win32.h"
 #include "snapshot_math.h"
+#include "system_io_display.h"
 #include "update/update_helper_win32.h"
 #include "update/update_helper_launcher_win32.h"
 #include "update/update_install_worker.h"
@@ -662,6 +663,7 @@ std::wstring_view CodexModuleHeading(codex_monitor::ModuleId id) {
         case codex_monitor::ModuleId::kSystemDiagnosis:
         case codex_monitor::ModuleId::kTargetProcessTree:
         case codex_monitor::ModuleId::kSystemResources:
+        case codex_monitor::ModuleId::kSystemIoThroughput:
         case codex_monitor::ModuleId::kCommitAndPageFile:
         case codex_monitor::ModuleId::kTopMemoryProcesses:
             return L"CODEX";
@@ -1213,6 +1215,7 @@ std::wstring BuildCodexCardText(codex_monitor::ModuleId id,
         case codex_monitor::ModuleId::kSystemDiagnosis:
         case codex_monitor::ModuleId::kTargetProcessTree:
         case codex_monitor::ModuleId::kSystemResources:
+        case codex_monitor::ModuleId::kSystemIoThroughput:
         case codex_monitor::ModuleId::kCommitAndPageFile:
         case codex_monitor::ModuleId::kTopMemoryProcesses:
             return L"Unavailable module";
@@ -1229,6 +1232,9 @@ std::wstring BuildModuleCardText(codex_monitor::ModuleId id,
             return BuildTargetCardText(snapshot);
         case codex_monitor::ModuleId::kSystemResources:
             return BuildSystemCardText(snapshot);
+        case codex_monitor::ModuleId::kSystemIoThroughput:
+            return codex_monitor::BuildSystemIoThroughputCardText(
+                snapshot.systemIoRates);
         case codex_monitor::ModuleId::kCommitAndPageFile:
             return BuildCommitCardText(snapshot);
         case codex_monitor::ModuleId::kTopMemoryProcesses:

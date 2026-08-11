@@ -38,6 +38,15 @@ SYSTEM_IO_RATE_HEADER = (WINDOWS_ROOT / "src" / "system_io_rate.h").read_text(
 SYSTEM_IO_RATE_TEST = (WINDOWS_ROOT / "tests" / "system_io_rate_test.cpp").read_text(
     encoding="utf-8"
 )
+SYSTEM_IO_DISPLAY = (WINDOWS_ROOT / "src" / "system_io_display.cpp").read_text(
+    encoding="utf-8"
+)
+SYSTEM_IO_DISPLAY_HEADER = (
+    WINDOWS_ROOT / "src" / "system_io_display.h"
+).read_text(encoding="utf-8")
+SYSTEM_IO_DISPLAY_TEST = (
+    WINDOWS_ROOT / "tests" / "system_io_display_test.cpp"
+).read_text(encoding="utf-8")
 SYSTEM_IO_SAMPLER = (
     WINDOWS_ROOT / "src" / "system_io_sampler_win32.cpp"
 ).read_text(encoding="utf-8")
@@ -361,6 +370,8 @@ def main() -> None:
         "SYSTEM CPU & PHYSICAL MEMORY": "the second card displays system metrics",
         "COMMIT & PAGE FILE": "the third card displays commit and page-file metrics",
         "TOP 5 PROCESSES BY WORKING SET": "the fourth card displays the memory ranking",
+        "BuildSystemIoThroughputCardText":
+            "the live network and disk rates are connected to a performance card",
         "Thermal pressure: system not provided": "unsupported thermal pressure is explicit",
         "waiting for next sample": "the first CPU frame is not fabricated",
         "#define NOMINMAX": "Windows min/max macros cannot break standard-library calls",
@@ -581,6 +592,44 @@ def main() -> None:
     for token, reason in system_io_test_contracts.items():
         require(SYSTEM_IO_RATE_TEST + SYSTEM_IO_SAMPLER_TEST, token, reason)
 
+    system_io_display_contracts = {
+        "FormatSystemIoByteRate":
+            "byte-rate formatting has a portable presentation boundary",
+        "BuildSystemIoThroughputCardText":
+            "all four rates are composed in one tested card builder",
+        "正在建立基线":
+            "first and reset samples are not fabricated as zero throughput",
+        "当前未取得网络或磁盘计数":
+            "a fully unavailable sample is explained honestly",
+        "复用现有 5 秒性能采样":
+            "the card documents its existing low-burden cadence",
+        "networkReceiveBytesPerSecond": "the card displays download throughput",
+        "networkSendBytesPerSecond": "the card displays upload throughput",
+        "diskReadBytesPerSecond": "the card displays disk-read throughput",
+        "diskWriteBytesPerSecond": "the card displays disk-write throughput",
+    }
+    for token, reason in system_io_display_contracts.items():
+        require(SYSTEM_IO_DISPLAY + SYSTEM_IO_DISPLAY_HEADER, token, reason)
+    reject(SYSTEM_IO_DISPLAY_HEADER + SYSTEM_IO_DISPLAY, "windows.h",
+           "fixed I/O display formatting must stay independent of Win32")
+    reject(SYSTEM_IO_DISPLAY_HEADER + SYSTEM_IO_DISPLAY, "std::thread",
+           "display formatting must not create another worker")
+
+    system_io_display_test_contracts = {
+        "a first or reset sample must say that it is establishing a baseline":
+            "baseline wording is fixed by a sample",
+        "a valid idle rate must be shown as zero rather than unavailable":
+            "zero and unavailable remain distinct",
+        "the card must display network receive as download":
+            "download mapping is fixed",
+        "the card must preserve a valid idle disk-write rate":
+            "disk-write mapping is fixed",
+        "an entirely unavailable sample must not look idle or healthy":
+            "the all-unavailable state is fixed",
+    }
+    for token, reason in system_io_display_test_contracts.items():
+        require(SYSTEM_IO_DISPLAY_TEST, token, reason)
+
     state_contracts = {
         "struct ModuleDefinition": "module metadata has a single registry model",
         "Page nativePage": "each module declares its own native page",
@@ -595,6 +644,8 @@ def main() -> None:
         "kCodexTokenCostEstimate": "Token and API-equivalent cost has its own Beta module identity",
         "kCodexTaskActivity": "current local task activity has its own module identity",
         "kSystemDiagnosis": "the system diagnosis has its own module identity",
+        "kSystemIoThroughput":
+            "live network and disk throughput has its own module identity",
         "kOpenAIServiceStatus": "official service status has its own module identity",
         "SanitizeHomeOrder": "saved order is repaired against the current registry",
         "VisibleHomeModules": "homepage visibility is derived in the portable model",
@@ -616,13 +667,15 @@ def main() -> None:
         "intentionally empty homepage": "all-hidden homepage intent is fixed",
         "unknown page must fall back to home": "damaged settings have a safe fallback",
         "off-screen saved window must return": "monitor removal recovery is fixed",
-        "TestVersionSevenRoundTripAndIndependentQuotaSwitches":
-            "the independent quota switches and version 7 schema have a round-trip test",
+        "TestVersionEightRoundTripAndIndependentQuotaSwitches":
+            "the independent quota switches and version 8 schema have a round-trip test",
+        "TestVersionSevenIoMigrationPreservesExplicitChoices":
+            "the new I/O module migrates version 7 settings without coupling quotas",
         "TestVersionThreeMigrationPreservesExplicitVisibility":
             "version 3 settings retain explicit visibility when the service module is added",
         "TestVersionOneMigrationPreservesOldHomeChoices":
             "version 1 settings migrate without enabling new Home work",
-        '"version=7\\n"': "the current persisted settings schema is version 7",
+        '"version=8\\n"': "the current persisted settings schema is version 8",
         '"version=1\\n"': "the previous settings schema has an explicit migration fixture",
     }
     for token, reason in state_test_contracts.items():
@@ -1668,6 +1721,8 @@ def main() -> None:
             "post-install executable verification is compiled into the HUD",
         "src/update/update_worker.cpp":
             "daily and manual update scheduling is compiled into the HUD",
+        "src/system_io_display.cpp":
+            "tested I/O throughput presentation is compiled into the HUD",
         "src/main.cpp": "the product window is compiled into the HUD",
     }
     for token, reason in hud_source_contracts.items():
@@ -1687,6 +1742,8 @@ def main() -> None:
         "add_executable(CodexMonitorHUD WIN32": "the executable uses the Windows GUI subsystem",
         "src/windows_sampler.cpp": "the native sampler is compiled into the HUD",
         "src/system_io_rate.cpp": "portable network and disk rate math is compiled into the HUD",
+        "src/system_io_display.cpp":
+            "portable network and disk presentation is compiled into the HUD",
         "src/system_io_sampler_win32.cpp": "native network and disk counters are compiled into the HUD",
         "src/ui_layout_math.cpp": "portable uniform resize math is compiled into the HUD",
         "src/performance_worker.cpp": "the HUD builds its serial background worker",
@@ -1708,6 +1765,10 @@ def main() -> None:
             "portable network and disk rate tests are buildable",
         "add_test(NAME windows_system_io_rate":
             "portable network and disk rate tests are registered with CTest",
+        "add_executable(CodexMonitorSystemIoDisplayTests":
+            "portable network and disk display tests are buildable",
+        "add_test(NAME windows_system_io_display":
+            "portable network and disk display samples are registered with CTest",
         "add_executable(CodexMonitorSystemIoSamplerTests":
             "Windows-native network and disk sampling tests are buildable",
         "add_test(NAME windows_system_io_sampler":

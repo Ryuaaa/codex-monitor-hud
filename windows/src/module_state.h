@@ -18,6 +18,7 @@ enum class ModuleId {
     kSystemDiagnosis,
     kTargetProcessTree,
     kSystemResources,
+    kSystemIoThroughput,
     kCommitAndPageFile,
     kTopMemoryProcesses,
     kCodexFiveHourQuota,
@@ -44,7 +45,7 @@ struct ModuleDefinition {
     bool defaultNativePageVisible;
 };
 
-constexpr std::size_t kModuleCount = 14;
+constexpr std::size_t kModuleCount = 15;
 
 struct WindowPlacement {
     int x = 0;

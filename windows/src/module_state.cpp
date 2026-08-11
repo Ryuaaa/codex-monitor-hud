@@ -38,6 +38,16 @@ constexpr std::array<ModuleDefinition, kModuleCount> kRegistry{{
      false,
      true,
      true},
+    {ModuleId::kSystemIoThroughput,
+     "system-io-throughput",
+     L"Network & disk live throughput",
+     Page::kComputer,
+     true,
+     false,
+     false,
+     false,
+     false,
+     true},
     {ModuleId::kCommitAndPageFile,
      "commit-page-file",
      L"Commit & page file",
@@ -326,7 +336,7 @@ bool MoveHomeModule(SettingsState& settings, ModuleId id, int direction) {
 std::string SerializeSettings(const SettingsState& settings) {
     const std::vector<ModuleId> order = SanitizeHomeOrder(settings.homeOrder);
     std::ostringstream output;
-    output << "version=7\n";
+    output << "version=8\n";
     output << "page=" << PageKey(settings.currentPage) << '\n';
     output << "always_on_top=" << (settings.alwaysOnTop ? 1 : 0) << '\n';
     output << "home_order=";
@@ -440,19 +450,18 @@ SettingsState ParseSettings(std::string_view text) {
             settings.nativePageVisible[index] =
                 kRegistry[index].defaultNativePageVisible;
         }
-        // Only a valid current or immediately preceding settings file that
-        // genuinely omitted native_visible receives newly introduced
-        // native-page defaults. Older, unknown, and malformed
-        // files keep all pre-v5 defaults but must not silently opt an existing
-        // user into the forecast module.
+        // Only a recognized settings schema that genuinely omitted
+        // native_visible receives the matching native-page defaults. Older,
+        // unknown, and malformed files keep all pre-v5 defaults but must not
+        // silently opt an existing user into the forecast module.
         // A genuinely new install is created through DefaultSettings() before
         // any file exists. An empty file is damaged existing state, so it must
         // not silently opt the user into newly introduced work.
         const bool useForecastDefault =
-            (version == 5 || version == 6 || version == 7) &&
+            (version == 5 || version == 6 || version == 7 || version == 8) &&
             !nativeVisibleKeySeen;
         const bool useActivityDefault =
-            version == 7 && !nativeVisibleKeySeen;
+            (version == 7 || version == 8) && !nativeVisibleKeySeen;
         if (!useForecastDefault) {
             settings.nativePageVisible[ModuleIndex(ModuleId::kCodexQuotaForecast)] =
                 false;
