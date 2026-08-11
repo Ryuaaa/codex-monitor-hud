@@ -108,6 +108,7 @@ void TestExecutableIdentityPolicy() {
 
 void TestSuccessfulSequenceIsStrictlyOrdered() {
     std::vector<int> order;
+    int recoveryCalls = 0;
     const auto result = RunWindowsUpdateHelperSequenceForTesting(
         [&] {
             order.push_back(1);
@@ -120,9 +121,14 @@ void TestSuccessfulSequenceIsStrictlyOrdered() {
         [&] {
             order.push_back(3);
             return Launched();
+        },
+        [&] {
+            ++recoveryCalls;
+            return Launched();
         });
     Require(result.completedAndRestarted() &&
-                order == std::vector<int>({1, 2, 3}),
+                order == std::vector<int>({1, 2, 3}) &&
+                recoveryCalls == 0,
             "wait, verified install, and verified restart must be ordered");
 }
 
@@ -137,6 +143,7 @@ void TestWaitFailuresNeverReachInstaller() {
     for (const WindowsUpdateHelperWaitStatus failure : failures) {
         int installCalls = 0;
         int launchCalls = 0;
+        int recoveryCalls = 0;
         const auto result = RunWindowsUpdateHelperSequenceForTesting(
             [failure] { return failure; },
             [&] {
@@ -146,26 +153,51 @@ void TestWaitFailuresNeverReachInstaller() {
             [&] {
                 ++launchCalls;
                 return Launched();
+            },
+            [&] {
+                ++recoveryCalls;
+                return Launched();
             });
         Require(!result.completedAndRestarted() && installCalls == 0 &&
-                    launchCalls == 0,
+                    launchCalls == 0 && recoveryCalls == 0,
                 "an unproven old-process exit must stop before installation");
     }
 }
 
-void TestInstallFailureNeverReachesExecutableLaunch() {
-    int launchCalls = 0;
+void TestInstallFailureRestartsOnlyVerifiedPreviousVersion() {
+    int newVersionLaunchCalls = 0;
+    int previousVersionLaunchCalls = 0;
     const auto result = RunWindowsUpdateHelperSequenceForTesting(
         [] { return WindowsUpdateHelperWaitStatus::kExited; },
         [] { return InstallRejected(); },
         [&] {
-            ++launchCalls;
+            ++newVersionLaunchCalls;
+            return Launched();
+        },
+        [&] {
+            ++previousVersionLaunchCalls;
             return Launched();
         });
     Require(result.status ==
-                WindowsUpdateHelperStatus::kInstallRejectedOrFailed &&
-                launchCalls == 0,
-            "a rejected or failed MSI must never reach executable launch");
+                WindowsUpdateHelperStatus::
+                    kInstallFailedAndPreviousVersionRestarted &&
+                newVersionLaunchCalls == 0 &&
+                previousVersionLaunchCalls == 1,
+            "a failed MSI should restart only the verified previous version");
+
+    const auto recoveryRejected =
+        RunWindowsUpdateHelperSequenceForTesting(
+            [] { return WindowsUpdateHelperWaitStatus::kExited; },
+            [] { return InstallRejected(); },
+            [] { return Launched(); },
+            [] {
+                return LaunchFailure(
+                    WindowsInstalledHudLaunchStatus::
+                        kSignatureVerificationFailed);
+            });
+    Require(recoveryRejected.status ==
+                WindowsUpdateHelperStatus::kInstallRejectedOrFailed,
+            "an unverified previous executable must remain stopped");
 }
 
 void TestUnverifiedExecutableIsNeverReportedAsRestarted() {
@@ -176,6 +208,9 @@ void TestUnverifiedExecutableIsNeverReportedAsRestarted() {
             return LaunchFailure(
                 WindowsInstalledHudLaunchStatus::
                     kSignatureVerificationFailed);
+        },
+        [] {
+            return Launched();
         });
     Require(result.status ==
                 WindowsUpdateHelperStatus::kInstalledExecutableRejected &&
@@ -190,6 +225,9 @@ void TestVerifiedProcessStartFailureIsDistinct() {
         [] {
             return LaunchFailure(
                 WindowsInstalledHudLaunchStatus::kProcessStartFailed);
+        },
+        [] {
+            return Launched();
         });
     Require(result.status == WindowsUpdateHelperStatus::kRestartFailed,
             "a verified executable start failure should remain diagnosable");
@@ -198,7 +236,8 @@ void TestVerifiedProcessStartFailureIsDistinct() {
 void TestMissingOrThrowingOperationsFailClosed() {
     int laterCalls = 0;
     const auto missing = RunWindowsUpdateHelperSequenceForTesting(
-        {}, [] { return Installed(); }, [] { return Launched(); });
+        {}, [] { return Installed(); }, [] { return Launched(); },
+        [] { return Launched(); });
     Require(missing.status == WindowsUpdateHelperStatus::kInvalidInput,
             "a missing helper operation must fail closed");
 
@@ -213,6 +252,10 @@ void TestMissingOrThrowingOperationsFailClosed() {
         [&] {
             ++laterCalls;
             return Launched();
+        },
+        [&] {
+            ++laterCalls;
+            return Launched();
         });
     Require(waitThrows.status == WindowsUpdateHelperStatus::kUnexpected &&
                 laterCalls == 0,
@@ -222,6 +265,10 @@ void TestMissingOrThrowingOperationsFailClosed() {
         [] { return WindowsUpdateHelperWaitStatus::kExited; },
         []() -> WindowsUpdateApplyResult {
             throw std::runtime_error("install");
+        },
+        [&] {
+            ++laterCalls;
+            return Launched();
         },
         [&] {
             ++laterCalls;
@@ -335,6 +382,7 @@ void TestProductionBoundaryIsUnsupportedOffWindows() {
     request.sha256Manifest = std::string(64U, '0') + "  " +
         request.expectedInstallerFileName + "\n";
     request.expectedVersion = "1.2.3";
+    request.previousVersion = "1.2.2";
     request.trustedPublisherFingerprint = PublisherCertificateSha256{};
     request.installedExecutablePath = "/tmp/CodexMonitorHUD.exe";
     const auto result = RunWindowsUpdateHelper(request);
@@ -359,7 +407,7 @@ int main(int argc, char* argv[]) {
     TestExecutableIdentityPolicy();
     TestSuccessfulSequenceIsStrictlyOrdered();
     TestWaitFailuresNeverReachInstaller();
-    TestInstallFailureNeverReachesExecutableLaunch();
+    TestInstallFailureRestartsOnlyVerifiedPreviousVersion();
     TestUnverifiedExecutableIsNeverReportedAsRestarted();
     TestVerifiedProcessStartFailureIsDistinct();
     TestMissingOrThrowingOperationsFailClosed();

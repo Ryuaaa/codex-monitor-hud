@@ -29,6 +29,7 @@ enum class WindowsUpdateHelperStatus {
     kOldProcessRejected,
     kOldProcessWaitTimedOut,
     kOldProcessWaitFailed,
+    kInstallFailedAndPreviousVersionRestarted,
     kInstallRejectedOrFailed,
     kInstalledExecutableRejected,
     kRestartFailed,
@@ -49,6 +50,9 @@ struct WindowsUpdateHelperRequest {
     std::filesystem::path installerPath;
     std::string expectedInstallerFileName;
     std::string sha256Manifest;
+    // Used only for verified recovery when the MSI transaction fails after
+    // the old HUD has exited.
+    std::string previousVersion;
     std::string expectedVersion;
     std::optional<PublisherCertificateSha256> trustedPublisherFingerprint;
     std::filesystem::path installedExecutablePath;
@@ -61,6 +65,7 @@ struct WindowsUpdateHelperResult {
         WindowsUpdateHelperWaitStatus::kWaitFailed;
     WindowsUpdateApplyResult apply;
     WindowsInstalledHudLaunchResult launch;
+    WindowsInstalledHudLaunchResult previousVersionRecoveryLaunch;
 
     [[nodiscard]] bool completedAndRestarted() const noexcept {
         return status ==
@@ -71,7 +76,9 @@ struct WindowsUpdateHelperResult {
 // Runs the non-interactive helper transaction. It first proves that the exact
 // inherited old-HUD process has exited, then performs the continuously locked
 // MSI transaction, and only after a successful install verifies and starts the
-// installed HUD. It never deletes an installed application file itself.
+// installed HUD. If installation fails, it attempts to restart the old version
+// only after the same publisher and exact previous-version checks pass. It
+// never deletes an installed application file itself.
 [[nodiscard]] WindowsUpdateHelperResult RunWindowsUpdateHelper(
     const WindowsUpdateHelperRequest& request) noexcept;
 
@@ -96,7 +103,9 @@ RunWindowsUpdateHelperSequenceForTesting(
     const WindowsUpdateHelperWaitOperation& waitForOldProcess,
     const WindowsUpdateHelperApplyOperation& applyUpdate,
     const WindowsUpdateHelperVerifyAndLaunchOperation&
-        verifyAndLaunchInstalledHud) noexcept;
+        verifyAndLaunchInstalledHud,
+    const WindowsUpdateHelperVerifyAndLaunchOperation&
+        verifyAndRestartPreviousHud) noexcept;
 
 #ifdef _WIN32
 [[nodiscard]] WindowsUpdateHelperWaitStatus

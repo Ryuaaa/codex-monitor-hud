@@ -44,11 +44,13 @@ using VerifyAndLaunchOperation =
 WindowsUpdateHelperResult RunSequence(
     const WaitOperation& waitForOldProcess,
     const ApplyOperation& applyUpdate,
-    const VerifyAndLaunchOperation& verifyAndLaunchInstalledHud) noexcept {
+    const VerifyAndLaunchOperation& verifyAndLaunchInstalledHud,
+    const VerifyAndLaunchOperation& verifyAndRestartPreviousHud) noexcept {
     WindowsUpdateHelperResult result;
     try {
         if (!waitForOldProcess || !applyUpdate ||
-            !verifyAndLaunchInstalledHud) {
+            !verifyAndLaunchInstalledHud ||
+            !verifyAndRestartPreviousHud) {
             result.status = WindowsUpdateHelperStatus::kInvalidInput;
             return result;
         }
@@ -78,6 +80,13 @@ WindowsUpdateHelperResult RunSequence(
 
         result.apply = applyUpdate();
         if (!result.apply.installed()) {
+            result.previousVersionRecoveryLaunch =
+                verifyAndRestartPreviousHud();
+            if (result.previousVersionRecoveryLaunch.started()) {
+                result.status = WindowsUpdateHelperStatus::
+                    kInstallFailedAndPreviousVersionRestarted;
+                return result;
+            }
             result.status =
                 WindowsUpdateHelperStatus::kInstallRejectedOrFailed;
             return result;
@@ -372,6 +381,9 @@ int ExitCodeForHelperResult(
             return 21;
         case WindowsUpdateHelperStatus::kOldProcessWaitFailed:
             return 22;
+        case WindowsUpdateHelperStatus::
+                kInstallFailedAndPreviousVersionRestarted:
+            return 31;
         case WindowsUpdateHelperStatus::kInstallRejectedOrFailed:
             return 30;
         case WindowsUpdateHelperStatus::kInstalledExecutableRejected:
@@ -408,7 +420,8 @@ WindowsUpdateHelperResult RunWindowsUpdateHelper(
         request.oldProcessExitTimeout > std::chrono::minutes(10) ||
         request.installerPath.empty() ||
         request.expectedInstallerFileName.empty() ||
-        request.sha256Manifest.empty() || request.expectedVersion.empty() ||
+        request.sha256Manifest.empty() || request.previousVersion.empty() ||
+        request.expectedVersion.empty() ||
         request.installedExecutablePath.empty()) {
 #ifdef _WIN32
         KernelHandle consumed(reinterpret_cast<HANDLE>(
@@ -440,6 +453,12 @@ WindowsUpdateHelperResult RunWindowsUpdateHelper(
                     request.installedExecutablePath,
                     request.expectedVersion,
                     request.trustedPublisherFingerprint);
+            },
+            [&request] {
+                return VerifyAndLaunchInstalledWindowsHud(
+                    request.installedExecutablePath,
+                    request.previousVersion,
+                    request.trustedPublisherFingerprint);
             });
     } catch (...) {
         KernelHandle consumed(reinterpret_cast<HANDLE>(
@@ -470,7 +489,7 @@ std::optional<int> TryRunWindowsUpdateHelperCommandLine() noexcept {
         releaseArguments();
         return std::nullopt;
     }
-    if (argumentCount != 8) {
+    if (argumentCount != 9) {
         releaseArguments();
         return 10;
     }
@@ -486,6 +505,8 @@ std::optional<int> TryRunWindowsUpdateHelperCommandLine() noexcept {
         NormalizeDigest(arguments[6]);
     const std::optional<std::string> version =
         PrintableAscii(arguments[7], 64U);
+    const std::optional<std::string> previousVersion =
+        PrintableAscii(arguments[8], 64U);
     const std::optional<std::string> filename =
         PrintableAscii(installer.filename().native(), 240U);
     const std::optional<std::filesystem::path> installedExecutable =
@@ -496,7 +517,7 @@ std::optional<int> TryRunWindowsUpdateHelperCommandLine() noexcept {
     if (!inheritedHandle || *inheritedHandle == 0U || !processId ||
         *processId == 0U || !creationTime || *creationTime == 0U ||
         installer.empty() || !digest || !version || !filename ||
-        !installedExecutable) {
+        !previousVersion || !installedExecutable) {
         if (inheritedHandle && *inheritedHandle != 0U) {
             KernelHandle consumed(
                 reinterpret_cast<HANDLE>(*inheritedHandle));
@@ -521,6 +542,7 @@ std::optional<int> TryRunWindowsUpdateHelperCommandLine() noexcept {
     request.installerPath = installer;
     request.expectedInstallerFileName = std::move(expectedFilename);
     request.sha256Manifest = *digest + "  " + *filename + "\n";
+    request.previousVersion = *previousVersion;
     request.expectedVersion = *version;
     request.trustedPublisherFingerprint = fingerprint;
     request.installedExecutablePath = *installedExecutable;
@@ -537,9 +559,12 @@ WindowsUpdateHelperResult RunWindowsUpdateHelperSequenceForTesting(
     const WindowsUpdateHelperWaitOperation& waitForOldProcess,
     const WindowsUpdateHelperApplyOperation& applyUpdate,
     const WindowsUpdateHelperVerifyAndLaunchOperation&
-        verifyAndLaunchInstalledHud) noexcept {
+        verifyAndLaunchInstalledHud,
+    const WindowsUpdateHelperVerifyAndLaunchOperation&
+        verifyAndRestartPreviousHud) noexcept {
     return RunSequence(waitForOldProcess, applyUpdate,
-                       verifyAndLaunchInstalledHud);
+                       verifyAndLaunchInstalledHud,
+                       verifyAndRestartPreviousHud);
 }
 
 #ifdef _WIN32

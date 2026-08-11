@@ -595,7 +595,7 @@ def main() -> None:
     require(UPDATE_APPLY_TRANSACTION_TEST, "callbackCount == 0",
             "verification failures assert that installer launch is impossible")
     require(UPDATE_APPLY_TRANSACTION_TEST,
-            "ArePathAndAncestorLocksHeldWhileCallbackRuns",
+            "ProbePathAndAncestorLocks",
             "the signed fixture proves locks survive through the callback")
     require(UPDATE_APPLY_TRANSACTION_TEST, "--install-signed-msi",
             "the signed fixture can execute the production synchronous installer path")
@@ -667,8 +667,10 @@ def main() -> None:
     for token, reason in {
         "an unproven old-process exit must stop before installation":
             "every wait failure is fixed as a no-install path",
-        "a rejected or failed MSI must never reach executable launch":
-            "installer failures cannot restart an unchecked executable",
+        "a failed MSI should restart only the verified previous version":
+            "installer failure recovers only through pinned old-version verification",
+        "an unverified previous executable must remain stopped":
+            "failure recovery cannot launch an unchecked old executable",
         "an unverified installed executable must not be treated as started":
             "post-install signature failure remains fail closed",
         "wait, verified install, and verified restart must be ordered":

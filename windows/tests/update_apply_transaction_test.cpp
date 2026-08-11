@@ -204,26 +204,38 @@ bool CanOpenDirectoryForDelete(const std::filesystem::path& directory) {
     return true;
 }
 
-bool ArePathAndAncestorLocksHeldWhileCallbackRuns(
+struct UpdatePathLockProbe {
+    bool renameBlocked = false;
+    bool deleteBlocked = false;
+    bool writeBlocked = false;
+    bool parentDeleteAccessBlocked = false;
+
+    [[nodiscard]] bool allHeld() const noexcept {
+        return renameBlocked && deleteBlocked && writeBlocked &&
+               parentDeleteAccessBlocked;
+    }
+};
+
+UpdatePathLockProbe ProbePathAndAncestorLocks(
     const std::filesystem::path& installer) {
     const std::filesystem::path moved =
         installer.parent_path() / L"transaction-lock-probe.msi";
     DeleteFileW(moved.c_str());
-    const bool renameBlocked =
+    UpdatePathLockProbe probe;
+    probe.renameBlocked =
         MoveFileExW(installer.c_str(), moved.c_str(),
                     MOVEFILE_REPLACE_EXISTING) == FALSE;
-    const bool deleteBlocked = DeleteFileW(installer.c_str()) == FALSE;
+    probe.deleteBlocked = DeleteFileW(installer.c_str()) == FALSE;
     HANDLE writeHandle = CreateFileW(
         installer.c_str(), GENERIC_WRITE,
         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
         OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-    const bool writeBlocked = writeHandle == INVALID_HANDLE_VALUE;
+    probe.writeBlocked = writeHandle == INVALID_HANDLE_VALUE;
     if (writeHandle != INVALID_HANDLE_VALUE) CloseHandle(writeHandle);
 
-    const bool controlledParentDeleteAccessBlocked =
+    probe.parentDeleteAccessBlocked =
         !CanOpenDirectoryForDelete(installer.parent_path());
-    return renameBlocked && deleteBlocked && writeBlocked &&
-           controlledParentDeleteAccessBlocked;
+    return probe;
 }
 
 int RunSignedApplyCli(int argc, char* argv[]) {
@@ -257,14 +269,13 @@ int RunSignedApplyCli(int argc, char* argv[]) {
     const bool controlledParentDeleteAvailableBefore =
         CanOpenDirectoryForDelete(installer.parent_path());
     int callbackCount = 0;
-    bool locksHeldDuringCallback = false;
+    UpdatePathLockProbe lockProbe;
     const auto result = ApplyVerifiedWindowsMsiUpdateForTesting(
         installer, filename, Manifest(digest, filename), argv[3], fingerprint,
         [&](const std::filesystem::path& verifiedPath) {
             ++callbackCount;
-            locksHeldDuringCallback =
-                ArePathAndAncestorLocksHeldWhileCallbackRuns(verifiedPath);
-            return locksHeldDuringCallback ? 0 : 1603;
+            lockProbe = ProbePathAndAncestorLocks(verifiedPath);
+            return lockProbe.allHeld() ? 0 : 1603;
         });
 
     const std::string_view expected(argv[6]);
@@ -273,7 +284,7 @@ int RunSignedApplyCli(int argc, char* argv[]) {
         matched = result.status == WindowsUpdateApplyStatus::kInstalled &&
                   result.installed() && callbackCount == 1 &&
                   controlledParentDeleteAvailableBefore &&
-                  locksHeldDuringCallback;
+                  lockProbe.allHeld();
     } else if (expected == "publisher-rejected") {
         matched = result.status ==
                       WindowsUpdateApplyStatus::kPublisherOrIdentityRejected &&
@@ -305,7 +316,11 @@ int RunSignedApplyCli(int argc, char* argv[]) {
                   << " callback_count=" << callbackCount
                   << " parent_delete_before="
                   << controlledParentDeleteAvailableBefore
-                  << " locks_held=" << locksHeldDuringCallback << '\n';
+                  << " rename_blocked=" << lockProbe.renameBlocked
+                  << " delete_blocked=" << lockProbe.deleteBlocked
+                  << " write_blocked=" << lockProbe.writeBlocked
+                  << " parent_delete_blocked="
+                  << lockProbe.parentDeleteAccessBlocked << '\n';
         return 1;
     }
 
