@@ -167,9 +167,10 @@ void CaptureProcesses(RawPerformanceSnapshot& destination, bool captureAllProces
 
 }  // namespace
 
-RawPerformanceSnapshot WindowsSampler::CaptureRawSnapshot(SampleMode mode) const {
+RawPerformanceSnapshot WindowsSampler::CaptureRawSnapshot(SampleMode mode) {
     RawPerformanceSnapshot snapshot{};
     CaptureSystemCpu(snapshot.systemCpu);
+    snapshot.systemIo = systemIoSampler_.Capture();
     CapturePhysicalMemory(snapshot);
     if (mode == SampleMode::kFastAndSlow) {
         CaptureCommitMemory(snapshot);
@@ -244,6 +245,7 @@ PerformanceSnapshot WindowsSampler::BuildPerformanceSnapshot(RawPerformanceSnaps
                                                                SampleMode mode) {
     PerformanceSnapshot snapshot{};
     snapshot.systemCpuNeedsBaseline = raw.systemCpu.available && !previousSystemCpu_.has_value();
+    snapshot.systemIoRates = ComputeSystemIoRates(previousSystemIo_, raw.systemIo);
 
     std::optional<std::uint64_t> systemCpuDelta;
     if (previousSystemCpu_) {
@@ -302,6 +304,12 @@ PerformanceSnapshot WindowsSampler::BuildPerformanceSnapshot(RawPerformanceSnaps
     snapshot.raw = std::move(raw);
 
     if (snapshot.raw.systemCpu.available) previousSystemCpu_ = snapshot.raw.systemCpu;
+    if (snapshot.raw.systemIo.network.available) {
+        previousSystemIo_.network = snapshot.raw.systemIo.network;
+    }
+    if (snapshot.raw.systemIo.disk.available) {
+        previousSystemIo_.disk = snapshot.raw.systemIo.disk;
+    }
     previousProcessCpu_ = std::move(nextProcessCpu);
     return snapshot;
 }
@@ -313,6 +321,7 @@ PerformanceSnapshot WindowsSampler::Sample(SampleMode mode) {
 void WindowsSampler::ResetCpuBaseline() {
     previousSystemCpu_.reset();
     previousProcessCpu_.clear();
+    previousSystemIo_ = {};
 }
 
 }  // namespace codex_monitor

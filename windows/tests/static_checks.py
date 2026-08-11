@@ -20,6 +20,30 @@ SAMPLER_HEADER = (WINDOWS_ROOT / "src" / "windows_sampler.h").read_text(encoding
 SNAPSHOT = (WINDOWS_ROOT / "src" / "performance_snapshot.h").read_text(encoding="utf-8")
 MATH = (WINDOWS_ROOT / "src" / "snapshot_math.h").read_text(encoding="utf-8")
 TEST = (WINDOWS_ROOT / "tests" / "snapshot_math_test.cpp").read_text(encoding="utf-8")
+UI_LAYOUT_MATH = (WINDOWS_ROOT / "src" / "ui_layout_math.cpp").read_text(
+    encoding="utf-8"
+)
+UI_LAYOUT_MATH_HEADER = (WINDOWS_ROOT / "src" / "ui_layout_math.h").read_text(
+    encoding="utf-8"
+)
+UI_LAYOUT_MATH_TEST = (
+    WINDOWS_ROOT / "tests" / "ui_layout_math_test.cpp"
+).read_text(encoding="utf-8")
+SYSTEM_IO_RATE = (WINDOWS_ROOT / "src" / "system_io_rate.cpp").read_text(
+    encoding="utf-8"
+)
+SYSTEM_IO_RATE_HEADER = (WINDOWS_ROOT / "src" / "system_io_rate.h").read_text(
+    encoding="utf-8"
+)
+SYSTEM_IO_RATE_TEST = (WINDOWS_ROOT / "tests" / "system_io_rate_test.cpp").read_text(
+    encoding="utf-8"
+)
+SYSTEM_IO_SAMPLER = (
+    WINDOWS_ROOT / "src" / "system_io_sampler_win32.cpp"
+).read_text(encoding="utf-8")
+SYSTEM_IO_SAMPLER_TEST = (
+    WINDOWS_ROOT / "tests" / "system_io_sampler_win32_test.cpp"
+).read_text(encoding="utf-8")
 STATE_TEST = (WINDOWS_ROOT / "tests" / "module_state_test.cpp").read_text(encoding="utf-8")
 DIAGNOSIS = (WINDOWS_ROOT / "src" / "performance_diagnosis.cpp").read_text(encoding="utf-8")
 DIAGNOSIS_TEST = (WINDOWS_ROOT / "tests" / "performance_diagnosis_test.cpp").read_text(
@@ -65,6 +89,24 @@ CODEX_WORKER_HEADER = (
 CODEX_WORKER = (WINDOWS_ROOT / "src" / "codex" / "codex_worker.cpp").read_text(
     encoding="utf-8"
 )
+CODEX_ACTIVITY_SCAN_HEADER = (
+    WINDOWS_ROOT / "src" / "codex" / "codex_activity_scan.h"
+).read_text(encoding="utf-8")
+CODEX_ACTIVITY_SCAN = (
+    WINDOWS_ROOT / "src" / "codex" / "codex_activity_scan.cpp"
+).read_text(encoding="utf-8")
+CODEX_ACTIVITY_WORKER_HEADER = (
+    WINDOWS_ROOT / "src" / "codex" / "codex_activity_worker.h"
+).read_text(encoding="utf-8")
+CODEX_ACTIVITY_WORKER = (
+    WINDOWS_ROOT / "src" / "codex" / "codex_activity_worker.cpp"
+).read_text(encoding="utf-8")
+CODEX_ACTIVITY_SCAN_TEST = (
+    WINDOWS_ROOT / "tests" / "codex_activity_scan_test.cpp"
+).read_text(encoding="utf-8")
+CODEX_ACTIVITY_WORKER_TEST = (
+    WINDOWS_ROOT / "tests" / "codex_activity_worker_test.cpp"
+).read_text(encoding="utf-8")
 CODEX_USAGE_HEADER = (
     WINDOWS_ROOT / "src" / "codex" / "codex_usage_math.h"
 ).read_text(encoding="utf-8")
@@ -103,6 +145,21 @@ CODEX_COST_HYBRID = (
 ).read_text(encoding="utf-8")
 CODEX_WORKER_TEST = (
     WINDOWS_ROOT / "tests" / "codex_worker_test.cpp"
+).read_text(encoding="utf-8")
+WEEKLY_QUOTA_ALERT = (
+    WINDOWS_ROOT / "src" / "codex" / "weekly_quota_alert.cpp"
+).read_text(encoding="utf-8")
+WEEKLY_QUOTA_ALERT_HEADER = (
+    WINDOWS_ROOT / "src" / "codex" / "weekly_quota_alert.h"
+).read_text(encoding="utf-8")
+WEEKLY_QUOTA_ALERT_STATE_STORE = (
+    WINDOWS_ROOT / "src" / "codex" / "weekly_quota_alert_state_store.cpp"
+).read_text(encoding="utf-8")
+WEEKLY_QUOTA_ALERT_TEST = (
+    WINDOWS_ROOT / "tests" / "weekly_quota_alert_test.cpp"
+).read_text(encoding="utf-8")
+WEEKLY_QUOTA_ALERT_STATE_STORE_TEST = (
+    WINDOWS_ROOT / "tests" / "weekly_quota_alert_state_store_test.cpp"
 ).read_text(encoding="utf-8")
 SERVICE_STATUS_MODEL = (
     WINDOWS_ROOT / "src" / "service_status_model.cpp"
@@ -372,6 +429,9 @@ def main() -> None:
         "slowMetricsCache_.commitAvailable": "last valid commit values survive fast samples or failures",
         "slowMetricsCache_.pageFileAvailable": "last valid page-file values survive fast samples or failures",
         "slowMetricsCache_.rankingAvailable": "last valid ranking survives fast samples or failures",
+        "systemIoSampler_.Capture()": "network and disk counters share the serial native sampler",
+        "ComputeSystemIoRates(previousSystemIo_": "whole-machine byte rates use cumulative deltas",
+        "previousSystemIo_ = {}": "pause and resume require fresh I/O rate baselines",
     }
     for token, reason in sampler_contracts.items():
         require(SAMPLER, token, reason)
@@ -384,6 +444,8 @@ def main() -> None:
         "bool workingSetAttempted": "intentional fast-sample omissions are not permission failures",
         "bool processListAvailable": "process enumeration failure is represented explicitly",
         "bool topMemoryRankingAvailable": "a cached empty state is distinguishable from unavailable data",
+        "SystemIoCounters systemIo": "raw network and disk counters cross the snapshot boundary",
+        "SystemIoRates systemIoRates": "derived byte-per-second results cross the UI boundary",
     }
     for token, reason in snapshot_contracts.items():
         require(SNAPSHOT, token, reason)
@@ -418,23 +480,117 @@ def main() -> None:
     for token, reason in test_contracts.items():
         require(TEST, token, reason)
 
+    ui_layout_math_contracts = {
+        "kMinimumUniformScale = 0.75":
+            "interactive HUD resizing has a fixed 75 percent minimum",
+        "ComputeUniformScaleLimits":
+            "the maximum scale follows the current monitor work area",
+        "minimumFitsWorkArea":
+            "a work area smaller than the minimum is represented explicitly",
+        "ComputeUniformScaleForProposedFrame":
+            "side and corner proposals select one uniform scale",
+        "FrameForUniformScale":
+            "uniform dimensions are rebuilt around a fixed drag anchor",
+        "CenteredOrigin":
+            "side drags retain the fixed opposite edge and orthogonal center",
+        "PlaceFrameInWorkAreaCorner":
+            "all four work-area corner placements share one safe primitive",
+        "ClampFrameToWorkArea":
+            "restored and resized frames can be moved back onscreen",
+        "ScaleLogicalSizeForDpi":
+            "DPI conversion is checked independently of Win32 window state",
+        "kInt32Maximum":
+            "coordinate arithmetic has explicit signed 32-bit bounds",
+    }
+    for token, reason in ui_layout_math_contracts.items():
+        require(UI_LAYOUT_MATH + UI_LAYOUT_MATH_HEADER, token, reason)
+    reject(UI_LAYOUT_MATH_HEADER, "windows.h",
+           "uniform resize math must remain portable and deterministic")
+
+    ui_layout_math_test_contracts = {
+        "the minimum drag scale must remain 75 percent":
+            "the public minimum is fixed by a sample",
+        "the maximum must follow the limiting work-area axis":
+            "dynamic work-area maximum behavior is fixed",
+        "all four work-area corners must be placeable":
+            "corner placement behavior is fixed",
+        "must keep the opposite corner fixed":
+            "corner drag anchoring is fixed",
+        "must fix the right edge and vertical center":
+            "side drag anchoring is fixed",
+        "DPI multiplication must reject signed-coordinate overflow":
+            "DPI overflow behavior is fixed",
+        "a RECT whose mathematical width exceeds signed range must be rejected":
+            "coordinate overflow behavior is fixed",
+    }
+    for token, reason in ui_layout_math_test_contracts.items():
+        require(UI_LAYOUT_MATH_TEST, token, reason)
+
+    system_io_rate_contracts = {
+        "networkReceiveBytesPerSecond": "network receive rate has an explicit optional byte-per-second field",
+        "networkSendBytesPerSecond": "network send rate has an explicit optional byte-per-second field",
+        "diskReadBytesPerSecond": "disk read rate has an explicit optional byte-per-second field",
+        "diskWriteBytesPerSecond": "disk write rate has an explicit optional byte-per-second field",
+        "currentTime100ns <= previousTime100ns": "zero and backwards elapsed time are rejected",
+        "elapsed100ns > kMaximumSystemIoRateInterval100ns": "stale intervals are not presented as current rates",
+        "currentFirst < previousFirst": "counter reset or wraparound is rejected",
+        "previousSourceIdentity != currentSourceIdentity": "adapter or counter-source changes require a new baseline",
+        "result.networkNeedsBaseline = true": "network reset and time anomalies request a new baseline",
+        "result.diskNeedsBaseline = true": "disk reset and time anomalies request a new baseline",
+    }
+    for token, reason in system_io_rate_contracts.items():
+        require(SYSTEM_IO_RATE + SYSTEM_IO_RATE_HEADER, token, reason)
+    reject(SYSTEM_IO_RATE_HEADER, "windows.h",
+           "fixed I/O rate algorithms must not depend on Windows headers")
+
+    system_io_native_contracts = {
+        "GetIfTable2": "network bytes come from documented cumulative interface counters",
+        "FreeMibTable": "the native interface table is always released",
+        "IF_TYPE_SOFTWARE_LOOPBACK": "loopback traffic is not counted as external machine traffic",
+        "row.InterfaceAndOperStatusFlags.FilterInterface":
+            "filter interfaces are excluded from aggregate traffic",
+        "PdhAddEnglishCounterW": "localized systems use stable English physical-disk counter paths",
+        "PdhCollectQueryData": "physical-disk cumulative counters are sampled in one persistent query",
+        "PdhGetRawCounterValue": "disk rates are derived from raw cumulative byte counters",
+        "PERF_COUNTER_BULK_COUNT": "disk raw values are accepted only with cumulative-byte semantics",
+        "raw FirstValue is the": "the misleading Bytes/sec display name is documented as raw cumulative data",
+        "PdhCloseQuery": "the persistent native disk query is released",
+        "QueryUnbiasedInterruptTimePrecise": "rate timing excludes suspended time",
+    }
+    for token, reason in system_io_native_contracts.items():
+        require(SYSTEM_IO_SAMPLER, token, reason)
+
+    system_io_test_contracts = {
+        "the first sample must be unavailable rather than reported as zero":
+            "first-sample behavior is fixed",
+        "counter rollback or reset must invalidate": "counter reset behavior is fixed",
+        "a backwards monotonic timestamp must be unavailable": "time anomaly behavior is fixed",
+        "GetIfTable2 must provide whole-machine network counters":
+            "the Windows-native sampling path executes in CI",
+    }
+    for token, reason in system_io_test_contracts.items():
+        require(SYSTEM_IO_RATE_TEST + SYSTEM_IO_SAMPLER_TEST, token, reason)
+
     state_contracts = {
         "struct ModuleDefinition": "module metadata has a single registry model",
         "Page nativePage": "each module declares its own native page",
         "requiresPerformanceSampling": "sampling demand is declared per module",
         "requiresCodexData": "Codex demand is independent from performance demand",
+        "requiresCodexActivity": "local task activity has an independent demand gate",
         "requiresServiceStatus": "official service-status demand is an independent dependency",
         "nativePageVisible": "own-page visibility is independent from Home visibility",
         "kCodexFiveHourQuota": "the five-hour quota has its own module identity",
         "kCodexWeeklyQuota": "the weekly quota has its own module identity",
         "kCodexQuotaForecast": "quota trend forecasting has its own module identity",
         "kCodexTokenCostEstimate": "Token and API-equivalent cost has its own Beta module identity",
+        "kCodexTaskActivity": "current local task activity has its own module identity",
         "kSystemDiagnosis": "the system diagnosis has its own module identity",
         "kOpenAIServiceStatus": "official service status has its own module identity",
         "SanitizeHomeOrder": "saved order is repaired against the current registry",
         "VisibleHomeModules": "homepage visibility is derived in the portable model",
         "VisibleModulesForNativePage": "native pages are filtered by registry metadata",
         "HomeNeedsCodexData": "homepage Codex demand follows visible modules",
+        "HomeNeedsCodexActivity": "homepage activity scanning follows visible modules",
         "HomeNeedsServiceStatus": "homepage service-status demand follows visible modules",
         "MoveHomeModule": "settings reorder behavior is portable and testable",
         "SerializeSettings": "settings use an explicit whitelist serializer",
@@ -450,13 +606,13 @@ def main() -> None:
         "intentionally empty homepage": "all-hidden homepage intent is fixed",
         "unknown page must fall back to home": "damaged settings have a safe fallback",
         "off-screen saved window must return": "monitor removal recovery is fixed",
-        "TestVersionSixRoundTripAndIndependentQuotaSwitches":
-            "the independent quota switches and version 6 schema have a round-trip test",
+        "TestVersionSevenRoundTripAndIndependentQuotaSwitches":
+            "the independent quota switches and version 7 schema have a round-trip test",
         "TestVersionThreeMigrationPreservesExplicitVisibility":
             "version 3 settings retain explicit visibility when the service module is added",
         "TestVersionOneMigrationPreservesOldHomeChoices":
             "version 1 settings migrate without enabling new Home work",
-        '"version=6\\n"': "the current persisted settings schema is version 6",
+        '"version=7\\n"': "the current persisted settings schema is version 7",
         '"version=1\\n"': "the previous settings schema has an explicit migration fixture",
     }
     for token, reason in state_test_contracts.items():
@@ -1146,6 +1302,138 @@ def main() -> None:
     }.items():
         require(CODEX_WORKER_TEST, token, reason)
 
+    weekly_quota_alert_sources = (
+        WEEKLY_QUOTA_ALERT_HEADER + WEEKLY_QUOTA_ALERT
+    )
+    for token, reason in {
+        "bool enabled = false":
+            "weekly quota alerts remain opt-in",
+        "double thresholdPercent = 15.0":
+            "the inactive default threshold matches the macOS policy",
+        "WeeklyQuotaAlertMode::kRolling24Hours":
+            "rolling twenty-four hours is the default mode",
+        "policy.thresholdPercent >= 5.0":
+            "the minimum user threshold is enforced",
+        "policy.thresholdPercent <= 100.0":
+            "the maximum user threshold is enforced",
+        "kMaximumBaselineLatenessSeconds = 30LL * 60LL":
+            "baselines too far from midnight or twenty-four hours ago are rejected",
+        "*sample.weekly.resetsAtUnixSeconds == resetAtUnixSeconds":
+            "only one exact weekly reset cycle contributes",
+        "sample.capturedAtUnixSeconds <= nowUnixSeconds":
+            "future samples cannot trigger an alert",
+        "kClockMovedBackward":
+            "wall-clock rollback has an explicit non-alert outcome",
+        "kRemainingIncreased":
+            "quota replenishment or non-monotonic data suppresses alerts",
+        "nowUnixSeconds - notifiedAt <":
+            "overlapping rolling windows cannot repeat within twenty-four hours",
+        "localDayStartUnixSeconds":
+            "natural-day evaluation receives the platform-derived local midnight",
+    }.items():
+        require(weekly_quota_alert_sources, token, reason)
+    reject(WEEKLY_QUOTA_ALERT_HEADER, "windows.h",
+           "quota alert decisions must remain portable and deterministic")
+
+    for token, reason in {
+        "alerts default to disabled, fifteen percent, and rolling twenty-four hours":
+            "default settings are fixed by a sample",
+        "the same local calendar day must notify only once":
+            "natural-day anti-duplication is covered",
+        "overlapping rolling windows must not repeat within twenty-four hours":
+            "rolling anti-duplication is covered",
+        "a changed weekly reset must clear prior-cycle suppression":
+            "weekly reset rollover is covered",
+        "future samples must never become a rolling baseline":
+            "future history is covered",
+        "any same-cycle increase inside the period makes the data unsafe":
+            "non-monotonic remaining percentages are covered",
+    }.items():
+        require(WEEKLY_QUOTA_ALERT_TEST, token, reason)
+
+    for token, reason in {
+        "kMaximumStateBytes = 1024":
+            "persistent anti-duplication state has a hard byte limit",
+        "kMaximumLineBytes = 128":
+            "persistent fields have a hard line limit",
+        "MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH":
+            "Windows state replacement is atomic and flushed",
+        "kUnsupportedVersion":
+            "newer state formats are never overwritten",
+        "TemporaryPathFor":
+            "state writes use a same-directory temporary file",
+    }.items():
+        require(WEEKLY_QUOTA_ALERT_STATE_STORE, token, reason)
+    for token, reason in {
+        "a damaged file must expose only a safe empty fallback state":
+            "corrupt-state fallback is fixed",
+        "a newer unknown state format must never be overwritten":
+            "unknown-version preservation is covered",
+        "replacement failure must preserve old bytes":
+            "atomic failure preservation is covered",
+    }.items():
+        require(WEEKLY_QUOTA_ALERT_STATE_STORE_TEST, token, reason)
+
+    activity_sources = (
+        CODEX_ACTIVITY_SCAN_HEADER + CODEX_ACTIVITY_SCAN +
+        CODEX_ACTIVITY_WORKER_HEADER + CODEX_ACTIVITY_WORKER
+    )
+    for token, reason in {
+        "kCodexActivityWindowSeconds = 120":
+            "only sessions written in the bounded two-minute window are considered",
+        "kCodexActivityMaximumTailBytes":
+            "one recent session read is capped at one MiB",
+        "kCodexActivityMaximumCandidateFiles = 64":
+            "the number of recent session candidates is bounded",
+        "ParseCodexActivityJsonlLine":
+            "activity parsing has a narrow metadata-only boundary",
+        "root.payload->role":
+            "only the documented message role participates in inference",
+        "root.payload->phase":
+            "only the documented final-answer phase completes a turn",
+        "kRecentFilesUnresolved":
+            "compressed-only or unreadable recent state cannot become a zero",
+        "unresolvedRecentFileCount":
+            "partial coverage remains visible to presentation",
+        "FILE_FLAG_OPEN_REPARSE_POINT":
+            "Windows file reads do not follow redirected candidates",
+        "O_NOFOLLOW":
+            "portable tests exercise the same no-follow file boundary",
+        "kActiveRefreshDelay{5}":
+            "active sessions use the five-second cadence",
+        "kIdleRefreshDelay{20}":
+            "idle and unavailable sessions use the low-burden twenty-second cadence",
+        "cancellationEpoch_":
+            "hidden or paused activity results cannot write back later",
+        "PauseAndInvalidate":
+            "activity scanning stops when its module is not visible",
+        "StopAndJoin":
+            "activity worker teardown joins its background thread",
+    }.items():
+        require(activity_sources, token, reason)
+    for token, reason in {
+        "TestPureInferenceMatchesMacSafetyRules":
+            "start, finish, staleness, and documented event forms have fixed samples",
+        "TestPrivateTextCannotImpersonateMetadata":
+            "prompt and response text cannot impersonate structural metadata",
+        "TestBoundedFilesystemScanAndHonestDegradation":
+            "compressed and unreadable recent coverage has fixed degradation tests",
+        "TestCandidateAndTailLimits":
+            "the 64-file and one-MiB limits are executed",
+        "far-future event timestamp must not invent activity":
+            "clock anomalies cannot manufacture activity",
+    }.items():
+        require(CODEX_ACTIVITY_SCAN_TEST, token, reason)
+    for token, reason in {
+        "TestCadenceAndRepeatedRequestCoalescing":
+            "five/twenty-second cadence and request merging are fixed",
+        "TestPauseDiscardsInflightResult":
+            "an in-flight hidden result is discarded before resume",
+        "TestStopAndJoinLeavesNoThreadOrResult":
+            "worker shutdown leaves no publishable result or thread work",
+    }.items():
+        require(CODEX_ACTIVITY_WORKER_TEST, token, reason)
+
     codex_usage_contracts = {
         "bool todayAvailable": "today has an explicit availability bit",
         "optional<std::int64_t> todayTokens":
@@ -1310,6 +1598,10 @@ def main() -> None:
         raise AssertionError(
             "Codex demand must be reconsidered on startup, page/settings changes, and minimize/restore"
         )
+    if MAIN.count("UpdateCodexActivityDemand(") < 7:
+        raise AssertionError(
+            "activity demand must be reconsidered on show, startup, page/settings, and size changes"
+        )
     if MAIN.count("UpdateServiceStatusDemand(") < 6:
         raise AssertionError(
             "service-status demand must be reconsidered on show, startup, page/settings, and size changes"
@@ -1318,6 +1610,10 @@ def main() -> None:
     hud_sources = cmake_call_body(CMAKE, "add_executable", "CodexMonitorHUD")
     hud_source_contracts = {
         "resources/CodexMonitorHUD.rc": "the application icon resource is compiled into the HUD",
+        "src/codex/codex_activity_scan.cpp":
+            "bounded local activity inference is compiled into the HUD",
+        "src/codex/codex_activity_worker.cpp":
+            "visibility-driven activity scanning is compiled into the HUD",
         "src/codex/codex_app_server_client.cpp":
             "the official protocol client is compiled into the HUD",
         "src/codex/codex_executable.cpp": "safe codex.exe discovery is compiled into the HUD",
@@ -1372,10 +1668,17 @@ def main() -> None:
             "the HUD itself links Windows.Data.Json rather than only its tests")
     require(hud_libraries, "winhttp",
             "the HUD links the documented native HTTP client library")
+    require(hud_libraries, "iphlpapi",
+            "the HUD links documented native network interface counters")
+    require(hud_libraries, "pdh",
+            "the HUD links documented physical-disk performance counters")
 
     cmake_contracts = {
         "add_executable(CodexMonitorHUD WIN32": "the executable uses the Windows GUI subsystem",
         "src/windows_sampler.cpp": "the native sampler is compiled into the HUD",
+        "src/system_io_rate.cpp": "portable network and disk rate math is compiled into the HUD",
+        "src/system_io_sampler_win32.cpp": "native network and disk counters are compiled into the HUD",
+        "src/ui_layout_math.cpp": "portable uniform resize math is compiled into the HUD",
         "src/performance_worker.cpp": "the HUD builds its serial background worker",
         "src/performance_diagnosis.cpp": "the HUD builds the pure diagnosis model",
         "src/sampling_schedule.cpp": "the request scheduler is shared with fixed tests",
@@ -1387,6 +1690,18 @@ def main() -> None:
         "add_test(NAME windows_performance_diagnosis":
             "portable diagnosis tests are registered with CTest",
         "add_test(NAME windows_snapshot_math": "portable tests are registered with CTest",
+        "add_executable(CodexMonitorUILayoutMathTests":
+            "portable uniform resize tests are buildable",
+        "add_test(NAME windows_ui_layout_math":
+            "portable uniform resize tests are registered with CTest",
+        "add_executable(CodexMonitorSystemIoRateTests":
+            "portable network and disk rate tests are buildable",
+        "add_test(NAME windows_system_io_rate":
+            "portable network and disk rate tests are registered with CTest",
+        "add_executable(CodexMonitorSystemIoSamplerTests":
+            "Windows-native network and disk sampling tests are buildable",
+        "add_test(NAME windows_system_io_sampler":
+            "Windows-native network and disk sampling tests are registered with CTest",
         "add_executable(CodexMonitorModuleStateTests": "portable state tests are buildable",
         "add_test(NAME windows_module_state": "portable state tests are registered with CTest",
         "add_executable(CodexMonitorSamplingScheduleTests":
@@ -1425,6 +1740,14 @@ def main() -> None:
             "portable quota history tests are buildable",
         "add_test(NAME windows_quota_history_store":
             "portable quota history tests are registered with CTest",
+        "add_executable(CodexMonitorWeeklyQuotaAlertTests":
+            "portable weekly quota alert tests are buildable",
+        "add_test(NAME windows_weekly_quota_alert":
+            "weekly quota alert fixed samples are registered with CTest",
+        "add_executable(CodexMonitorWeeklyQuotaAlertStateStoreTests":
+            "portable weekly alert state-store tests are buildable",
+        "add_test(NAME windows_weekly_quota_alert_state_store":
+            "weekly alert persistence tests are registered with CTest",
         "add_test(NAME windows_github_release_selector":
             "strict release selection tests are registered with CTest",
         "add_test(NAME windows_update_state_store":

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "performance_snapshot.h"
+#include "system_io_sampler_win32.h"
 
 #include <cstdint>
 #include <optional>
@@ -42,7 +43,7 @@ private:
         std::vector<RankedProcess> topMemoryProcesses;
     };
 
-    RawPerformanceSnapshot CaptureRawSnapshot(SampleMode mode) const;
+    RawPerformanceSnapshot CaptureRawSnapshot(SampleMode mode);
     PerformanceSnapshot BuildPerformanceSnapshot(RawPerformanceSnapshot raw, SampleMode mode);
     void UpdateAndApplySlowMetrics(RawPerformanceSnapshot& raw,
                                    PerformanceSnapshot& snapshot,
@@ -50,6 +51,8 @@ private:
 
     std::optional<CpuTimes> previousSystemCpu_;
     std::unordered_map<std::uint32_t, ProcessCpuBaseline> previousProcessCpu_;
+    SystemIoCounters previousSystemIo_;
+    WindowsSystemIoCounterSampler systemIoSampler_;
     SlowMetricsCache slowMetricsCache_;
 };
 

@@ -15,6 +15,7 @@ constexpr std::array<ModuleDefinition, kModuleCount> kRegistry{{
      true,
      false,
      false,
+     false,
      true,
      true},
     {ModuleId::kTargetProcessTree,
@@ -22,6 +23,7 @@ constexpr std::array<ModuleDefinition, kModuleCount> kRegistry{{
      L"Codex / ChatGPT process tree",
      Page::kComputer,
      true,
+     false,
      false,
      false,
      true,
@@ -33,6 +35,7 @@ constexpr std::array<ModuleDefinition, kModuleCount> kRegistry{{
      true,
      false,
      false,
+     false,
      true,
      true},
     {ModuleId::kCommitAndPageFile,
@@ -42,6 +45,7 @@ constexpr std::array<ModuleDefinition, kModuleCount> kRegistry{{
      true,
      false,
      false,
+     false,
      true,
      true},
     {ModuleId::kTopMemoryProcesses,
@@ -49,6 +53,7 @@ constexpr std::array<ModuleDefinition, kModuleCount> kRegistry{{
      L"Top processes by memory",
      Page::kComputer,
      true,
+     false,
      false,
      false,
      true,
@@ -61,6 +66,7 @@ constexpr std::array<ModuleDefinition, kModuleCount> kRegistry{{
      true,
      false,
      false,
+     false,
      true},
     {ModuleId::kCodexWeeklyQuota,
      "codex-weekly-quota",
@@ -68,6 +74,7 @@ constexpr std::array<ModuleDefinition, kModuleCount> kRegistry{{
      Page::kCodex,
      false,
      true,
+     false,
      false,
      false,
      true},
@@ -79,6 +86,7 @@ constexpr std::array<ModuleDefinition, kModuleCount> kRegistry{{
      true,
      false,
      false,
+     false,
      true},
     {ModuleId::kCodexSubscriptionType,
      "codex-subscription-type",
@@ -86,6 +94,7 @@ constexpr std::array<ModuleDefinition, kModuleCount> kRegistry{{
      Page::kCodex,
      false,
      true,
+     false,
      false,
      false,
      true},
@@ -97,6 +106,7 @@ constexpr std::array<ModuleDefinition, kModuleCount> kRegistry{{
      true,
      false,
      false,
+     false,
      false},
     {ModuleId::kCodexTokenCostEstimate,
      "codex-token-cost-estimate",
@@ -106,7 +116,18 @@ constexpr std::array<ModuleDefinition, kModuleCount> kRegistry{{
      true,
      false,
      false,
+     false,
      false},
+    {ModuleId::kCodexTaskActivity,
+     "codex-task-activity",
+     L"Codex current task activity (local estimate)",
+     Page::kCodex,
+     false,
+     false,
+     true,
+     false,
+     false,
+     true},
     {ModuleId::kCodexRecentTasks,
      "codex-recent-tasks",
      L"Codex recent tasks (history)",
@@ -115,11 +136,13 @@ constexpr std::array<ModuleDefinition, kModuleCount> kRegistry{{
      true,
      false,
      false,
+     false,
      true},
     {ModuleId::kOpenAIServiceStatus,
      "openai-service-status",
      L"OpenAI official service status",
      Page::kCodex,
+     false,
      false,
      false,
      true,
@@ -272,6 +295,13 @@ bool HomeNeedsCodexData(const SettingsState& settings) {
     return false;
 }
 
+bool HomeNeedsCodexActivity(const SettingsState& settings) {
+    for (ModuleId id : VisibleHomeModules(settings)) {
+        if (kRegistry[ModuleIndex(id)].requiresCodexActivity) return true;
+    }
+    return false;
+}
+
 bool HomeNeedsServiceStatus(const SettingsState& settings) {
     for (ModuleId id : VisibleHomeModules(settings)) {
         if (kRegistry[ModuleIndex(id)].requiresServiceStatus) return true;
@@ -296,7 +326,7 @@ bool MoveHomeModule(SettingsState& settings, ModuleId id, int direction) {
 std::string SerializeSettings(const SettingsState& settings) {
     const std::vector<ModuleId> order = SanitizeHomeOrder(settings.homeOrder);
     std::ostringstream output;
-    output << "version=6\n";
+    output << "version=7\n";
     output << "page=" << PageKey(settings.currentPage) << '\n';
     output << "always_on_top=" << (settings.alwaysOnTop ? 1 : 0) << '\n';
     output << "home_order=";
@@ -418,10 +448,17 @@ SettingsState ParseSettings(std::string_view text) {
         // A genuinely new install is created through DefaultSettings() before
         // any file exists. An empty file is damaged existing state, so it must
         // not silently opt the user into newly introduced work.
-        const bool useCurrentNativeDefaults =
-            (version == 5 || version == 6) && !nativeVisibleKeySeen;
-        if (!useCurrentNativeDefaults) {
+        const bool useForecastDefault =
+            (version == 5 || version == 6 || version == 7) &&
+            !nativeVisibleKeySeen;
+        const bool useActivityDefault =
+            version == 7 && !nativeVisibleKeySeen;
+        if (!useForecastDefault) {
             settings.nativePageVisible[ModuleIndex(ModuleId::kCodexQuotaForecast)] =
+                false;
+        }
+        if (!useActivityDefault) {
+            settings.nativePageVisible[ModuleIndex(ModuleId::kCodexTaskActivity)] =
                 false;
         }
     }

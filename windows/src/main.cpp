@@ -13,6 +13,7 @@
 #include <winrt/base.h>
 
 #include "../resources/resource.h"
+#include "codex/codex_activity_worker.h"
 #include "codex/codex_cost_hybrid.h"
 #include "codex/codex_usage_math.h"
 #include "codex/codex_worker.h"
@@ -77,6 +78,7 @@ constexpr UINT kCodexReadyMessage = WM_APP + 2;
 constexpr UINT kServiceStatusReadyMessage = WM_APP + 3;
 constexpr UINT kUpdateReadyMessage = WM_APP + 4;
 constexpr UINT kUpdateInstallReadyMessage = WM_APP + 5;
+constexpr UINT kCodexActivityReadyMessage = WM_APP + 6;
 constexpr UINT kFastSampleIntervalMs = 5000;
 constexpr ULONGLONG kSlowSampleIntervalMs = 20000;
 constexpr int kMinimumWidth = 390;
@@ -135,6 +137,9 @@ struct AppState {
     bool hasCodexRefresh = false;
     bool codexDataAvailable = false;
     bool codexLastRefreshSucceeded = false;
+    bool codexActivityPaused = true;
+    bool codexActivityWorkerAvailable = false;
+    bool hasCodexActivityRefresh = false;
     bool windowHidden = true;
     bool serviceStatusPaused = true;
     bool serviceStatusWorkerAvailable = false;
@@ -164,6 +169,9 @@ struct AppState {
     std::optional<codex_monitor::codex::CodexCostRefresh>
         latestCostHistory;
     std::chrono::seconds codexNextRefreshDelay{60};
+    codex_monitor::codex::CodexActivityWorker codexActivityWorker;
+    codex_monitor::codex::CodexActivityScanResult latestCodexActivity;
+    std::chrono::seconds codexActivityNextRefreshDelay{20};
     codex_monitor::OpenAIServiceStatusWorker serviceStatusWorker;
     std::optional<codex_monitor::OpenAIServiceStatusModel> latestServiceStatus;
     std::optional<std::chrono::system_clock::time_point>
@@ -182,10 +190,25 @@ void LayoutControls(HWND window, AppState& state);
 void LayoutSettingsControls(HWND window, AppState& state);
 void UpdateSamplingDemand(HWND window, AppState& state);
 void UpdateCodexDemand(HWND window, AppState& state);
+void UpdateCodexActivityDemand(HWND window, AppState& state);
 void UpdateServiceStatusDemand(HWND window, AppState& state);
 void PersistSettings(AppState& state);
 void RefreshSettingsControls(AppState& state);
 void RefreshUpdateControls(AppState& state);
+
+std::filesystem::path DefaultCodexSessionsRoot() {
+    SetLastError(ERROR_SUCCESS);
+    const DWORD required = GetEnvironmentVariableW(L"USERPROFILE", nullptr, 0);
+    if (required == 0 || required > 32768) return {};
+    std::wstring profile(required, L'\0');
+    const DWORD copied =
+        GetEnvironmentVariableW(L"USERPROFILE", profile.data(), required);
+    if (copied == 0 || copied >= required) return {};
+    profile.resize(copied);
+    const std::filesystem::path path(profile);
+    if (!path.is_absolute()) return {};
+    return path.lexically_normal() / L".codex" / L"sessions";
+}
 
 int ScaleForDpi(HWND window, int value) {
     const UINT dpi = window ? GetDpiForWindow(window) : GetDpiForSystem();
@@ -630,6 +653,8 @@ std::wstring_view CodexModuleHeading(codex_monitor::ModuleId id) {
             return L"CODEX ACCOUNT TOKEN USAGE";
         case codex_monitor::ModuleId::kCodexTokenCostEstimate:
             return L"CODEX TOKEN USAGE & COST (BETA)";
+        case codex_monitor::ModuleId::kCodexTaskActivity:
+            return L"CODEX CURRENT TASK ACTIVITY (LOCAL ESTIMATE)";
         case codex_monitor::ModuleId::kCodexRecentTasks:
             return L"CODEX RECENT TASKS (HISTORY)";
         case codex_monitor::ModuleId::kOpenAIServiceStatus:
@@ -653,6 +678,10 @@ std::wstring BuildCodexUnavailableText(codex_monitor::ModuleId id) {
         detail = L"正在连接本机 Codex 只读接口\r\n"
                  L"当前未返回；状态只表示 app-server 进程范围，"
                  L"不代表桌面版全局";
+    }
+    if (id == codex_monitor::ModuleId::kCodexTaskActivity) {
+        detail = L"正在检查本机会话活动\r\n"
+                 L"只识别时间与事件类型，不保存或显示对话内容";
     }
     if (id == codex_monitor::ModuleId::kCodexTokenCostEstimate) {
         detail = L"正在读取本机 Codex Token 历史\r\n"
@@ -1088,6 +1117,78 @@ std::wstring BuildRecentTasksCardText(const AppState& state) {
     return output.str();
 }
 
+std::wstring FormatActivityDuration(std::int64_t seconds) {
+    seconds = std::max<std::int64_t>(0, seconds);
+    std::wostringstream output;
+    if (seconds < 60) {
+        output << seconds << L"秒";
+    } else if (seconds < 3600) {
+        output << seconds / 60 << L"分";
+        if (seconds % 60 != 0) output << seconds % 60 << L"秒";
+    } else {
+        output << seconds / 3600 << L"小时";
+        const std::int64_t minutes = (seconds % 3600) / 60;
+        if (minutes != 0) output << minutes << L"分";
+    }
+    return output.str();
+}
+
+std::wstring BuildTaskActivityCardText(const AppState& state) {
+    using codex_monitor::codex::CodexActivityScanStatus;
+    std::wostringstream output;
+    output << CodexModuleHeading(
+        codex_monitor::ModuleId::kCodexTaskActivity);
+    if (!state.hasCodexActivityRefresh) {
+        output << L"\r\n正在检查最近本机会话记录"
+                  L"\r\n活跃5秒 · 空闲20秒";
+        return output.str();
+    }
+    const auto& activity = state.latestCodexActivity;
+    if (!activity.available()) {
+        switch (activity.status) {
+            case CodexActivityScanStatus::kRootNotFound:
+                output << L"\r\n未找到本机会话记录";
+                break;
+            case CodexActivityScanStatus::kUnsafeRoot:
+            case CodexActivityScanStatus::kRootNotDirectory:
+                output << L"\r\n本机会话目录不安全或不可用，未读取";
+                break;
+            case CodexActivityScanStatus::kRecentFilesUnresolved:
+                output << L"\r\n近期记录已压缩、迁移或暂不可读"
+                          L"\r\n当前无法可靠判断活动";
+                return output.str();
+            case CodexActivityScanStatus::kInvalidArgument:
+            case CodexActivityScanStatus::kIoError:
+                output << L"\r\n本机会话记录暂时不可读";
+                break;
+            case CodexActivityScanStatus::kCancelled:
+                output << L"\r\n检查已暂停";
+                break;
+            case CodexActivityScanStatus::kAvailable:
+                break;
+        }
+        output << L"\r\n当前无法可靠判断活动";
+        return output.str();
+    }
+    if (activity.activeTaskCount > 0) {
+        output << L"\r\n" << activity.activeTaskCount
+               << (activity.partial ? L"个可确认活跃" : L"个活跃")
+               << L" · 最长"
+               << FormatActivityDuration(
+                      activity.longestActiveTaskSeconds);
+    } else {
+        output << (activity.partial
+                       ? L"\r\n暂无可确认的活跃任务"
+                       : L"\r\n当前没有活跃任务");
+    }
+    if (activity.partial) {
+        output << L"\r\n部分近期记录已压缩、迁移或暂不可读";
+    } else {
+        output << L"\r\n本机会话推测 · 活跃5秒 · 空闲20秒";
+    }
+    return output.str();
+}
+
 std::wstring BuildCodexCardText(codex_monitor::ModuleId id,
                                 const AppState& state) {
     switch (id) {
@@ -1103,6 +1204,8 @@ std::wstring BuildCodexCardText(codex_monitor::ModuleId id,
             return BuildTokenUsageCardText(state);
         case codex_monitor::ModuleId::kCodexTokenCostEstimate:
             return BuildTokenCostCardText(state);
+        case codex_monitor::ModuleId::kCodexTaskActivity:
+            return BuildTaskActivityCardText(state);
         case codex_monitor::ModuleId::kCodexRecentTasks:
             return BuildRecentTasksCardText(state);
         case codex_monitor::ModuleId::kOpenAIServiceStatus:
@@ -1136,6 +1239,7 @@ std::wstring BuildModuleCardText(codex_monitor::ModuleId id,
         case codex_monitor::ModuleId::kCodexSubscriptionType:
         case codex_monitor::ModuleId::kCodexAccountTokenUsage:
         case codex_monitor::ModuleId::kCodexTokenCostEstimate:
+        case codex_monitor::ModuleId::kCodexTaskActivity:
         case codex_monitor::ModuleId::kCodexRecentTasks:
             return BuildCodexUnavailableText(id);
         case codex_monitor::ModuleId::kOpenAIServiceStatus:
@@ -1173,6 +1277,18 @@ void UpdateCodexCards(AppState& state) {
     }
 }
 
+void UpdateCodexActivityCards(AppState& state) {
+    const std::wstring text = BuildTaskActivityCardText(state);
+    for (const ModuleViews& views : state.moduleViews) {
+        const codex_monitor::ModuleDefinition& definition =
+            codex_monitor::ModuleRegistry()[
+                codex_monitor::ModuleIndex(views.id)];
+        if (!definition.requiresCodexActivity) continue;
+        SetWindowTextW(views.homeCard, text.c_str());
+        SetWindowTextW(views.nativeCard, text.c_str());
+    }
+}
+
 void UpdateServiceStatusCards(AppState& state) {
     const std::wstring text = BuildServiceStatusCardText(state);
     for (const ModuleViews& views : state.moduleViews) {
@@ -1200,6 +1316,19 @@ bool NativePageNeedsCodexData(const codex_monitor::SettingsState& settings,
          codex_monitor::VisibleModulesForNativePage(settings, page)) {
         if (codex_monitor::ModuleRegistry()[codex_monitor::ModuleIndex(id)]
                 .requiresCodexData) return true;
+    }
+    return false;
+}
+
+bool NativePageNeedsCodexActivity(
+    const codex_monitor::SettingsState& settings,
+    codex_monitor::Page page) {
+    for (codex_monitor::ModuleId id :
+         codex_monitor::VisibleModulesForNativePage(settings, page)) {
+        if (codex_monitor::ModuleRegistry()[codex_monitor::ModuleIndex(id)]
+                .requiresCodexActivity) {
+            return true;
+        }
     }
     return false;
 }
@@ -1235,6 +1364,19 @@ bool CurrentPageNeedsCodexData(const AppState& state) {
             return codex_monitor::HomeNeedsCodexData(state.settings);
         case codex_monitor::Page::kCodex:
             return NativePageNeedsCodexData(state.settings, codex_monitor::Page::kCodex);
+        case codex_monitor::Page::kComputer:
+            return false;
+    }
+    return false;
+}
+
+bool CurrentPageNeedsCodexActivity(const AppState& state) {
+    switch (state.settings.currentPage) {
+        case codex_monitor::Page::kHome:
+            return codex_monitor::HomeNeedsCodexActivity(state.settings);
+        case codex_monitor::Page::kCodex:
+            return NativePageNeedsCodexActivity(
+                state.settings, codex_monitor::Page::kCodex);
         case codex_monitor::Page::kComputer:
             return false;
     }
@@ -1287,6 +1429,7 @@ void UpdateStatusText(AppState& state) {
     output << L"Top: " << (state.settings.alwaysOnTop ? L"On" : L"Off");
     const bool needsPerformance = CurrentPageNeedsPerformance(state);
     const bool needsCodex = CurrentPageNeedsCodexData(state);
+    const bool needsActivity = CurrentPageNeedsCodexActivity(state);
     const bool needsService = CurrentPageNeedsServiceStatus(state);
     if (needsPerformance) {
         output << L"  |  System: ";
@@ -1324,6 +1467,21 @@ void UpdateStatusText(AppState& state) {
             output << L"5 min";
         }
     }
+    if (needsActivity) {
+        output << L"  |  Activity: ";
+        if (state.windowMinimized || state.windowHidden ||
+            state.codexActivityPaused) {
+            output << L"paused";
+        } else if (!state.codexActivityWorkerAvailable) {
+            output << L"unavailable";
+        } else if (state.codexActivityWorker.IsBusy()) {
+            output << L"refreshing";
+        } else if (!state.hasCodexActivityRefresh) {
+            output << L"waiting";
+        } else {
+            output << state.codexActivityNextRefreshDelay.count() << L" s";
+        }
+    }
     if (needsService) {
         output << L"  |  Service: ";
         if (state.windowMinimized || state.windowHidden ||
@@ -1344,7 +1502,7 @@ void UpdateStatusText(AppState& state) {
             output << L"15 min";
         }
     }
-    if (!needsPerformance && !needsCodex && !needsService) {
+    if (!needsPerformance && !needsCodex && !needsActivity && !needsService) {
         output << L"  |  No active data modules";
     }
     if (state.updateInstallWorker.IsBusy()) {
@@ -1436,6 +1594,16 @@ void ApplyCodexRefresh(
         state.latestCodexData.usage.lastValue.has_value() ||
         state.latestCodexData.threadList.lastValue.has_value();
     UpdateCodexCards(state);
+    UpdateStatusText(state);
+}
+
+void ApplyCodexActivityRefresh(
+    AppState& state,
+    codex_monitor::codex::CompletedCodexActivityRefresh completed) {
+    state.latestCodexActivity = std::move(completed.activity);
+    state.codexActivityNextRefreshDelay = completed.nextRefreshDelay;
+    state.hasCodexActivityRefresh = true;
+    UpdateCodexActivityCards(state);
     UpdateStatusText(state);
 }
 
@@ -1532,6 +1700,36 @@ void UpdateCodexDemand(HWND, AppState& state) {
     state.codexPaused = false;
     state.codexWorker.ActivateAndRefresh();
     if (!state.codexDataAvailable) UpdateCodexCards(state);
+    UpdateStatusText(state);
+}
+
+void UpdateCodexActivityDemand(HWND, AppState& state) {
+    const bool shouldRefresh =
+        !state.windowMinimized && !state.windowHidden &&
+        CurrentPageNeedsCodexActivity(state);
+    if (!shouldRefresh) {
+        if (!state.codexActivityPaused &&
+            state.codexActivityWorkerAvailable) {
+            state.codexActivityWorker.PauseAndInvalidate();
+        }
+        state.codexActivityPaused = true;
+        UpdateStatusText(state);
+        return;
+    }
+    if (!state.codexActivityWorkerAvailable) {
+        state.codexActivityPaused = false;
+        UpdateCodexActivityCards(state);
+        UpdateStatusText(state);
+        return;
+    }
+    if (!state.codexActivityPaused) {
+        UpdateStatusText(state);
+        return;
+    }
+    state.codexActivityPaused = false;
+    state.hasCodexActivityRefresh = false;
+    UpdateCodexActivityCards(state);
+    state.codexActivityWorker.ActivateAndRefresh();
     UpdateStatusText(state);
 }
 
@@ -1788,7 +1986,9 @@ bool CreateControls(HWND window, AppState& state) {
             ? L"Starting sampler"
             : definition.requiresCodexData
                 ? BuildCodexUnavailableText(definition.id)
-                : BuildServiceStatusCardText(state);
+                : definition.requiresCodexActivity
+                    ? BuildTaskActivityCardText(state)
+                    : BuildServiceStatusCardText(state);
         views.homeCard =
             CreateLabel(window, initialText.c_str(), SS_LEFT | WS_BORDER);
         views.nativeCard =
@@ -1893,6 +2093,7 @@ void SwitchPage(HWND window, AppState& state, codex_monitor::Page page) {
     LayoutControls(window, state);
     UpdateSamplingDemand(window, state);
     UpdateCodexDemand(window, state);
+    UpdateCodexActivityDemand(window, state);
     UpdateServiceStatusDemand(window, state);
     PersistSettings(state);
 }
@@ -2276,6 +2477,7 @@ LRESULT CALLBACK SettingsWindowProcedure(HWND window, UINT message,
                     LayoutControls(state->mainWindow, *state);
                     UpdateSamplingDemand(state->mainWindow, *state);
                     UpdateCodexDemand(state->mainWindow, *state);
+                    UpdateCodexActivityDemand(state->mainWindow, *state);
                     UpdateServiceStatusDemand(state->mainWindow, *state);
                     PersistSettings(*state);
                 }
@@ -2298,6 +2500,7 @@ LRESULT CALLBACK SettingsWindowProcedure(HWND window, UINT message,
                     LayoutControls(state->mainWindow, *state);
                     UpdateSamplingDemand(state->mainWindow, *state);
                     UpdateCodexDemand(state->mainWindow, *state);
+                    UpdateCodexActivityDemand(state->mainWindow, *state);
                     UpdateServiceStatusDemand(state->mainWindow, *state);
                     PersistSettings(*state);
                 }
@@ -2517,6 +2720,10 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
                         ? std::filesystem::path{}
                         : state->settingsPath.parent_path() /
                               L"codex-cost-history-cache.txt");
+            state->codexActivityWorkerAvailable =
+                state->codexActivityWorker.Start(
+                    window, kCodexActivityReadyMessage,
+                    DefaultCodexSessionsRoot());
             state->serviceStatusWorkerAvailable =
                 state->serviceStatusWorker.Start(window,
                                                  kServiceStatusReadyMessage);
@@ -2531,6 +2738,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
                     window, kUpdateInstallReadyMessage);
             UpdateSamplingDemand(window, *state);
             UpdateCodexDemand(window, *state);
+            UpdateCodexActivityDemand(window, *state);
             UpdateServiceStatusDemand(window, *state);
             return 0;
 
@@ -2590,6 +2798,20 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
                     state->codexWorker.TakeLatest();
                 if (completed && !state->codexPaused) {
                     ApplyCodexRefresh(*state, std::move(*completed));
+                } else {
+                    UpdateStatusText(*state);
+                }
+            }
+            return 0;
+
+        case kCodexActivityReadyMessage:
+            if (state) {
+                std::optional<
+                    codex_monitor::codex::CompletedCodexActivityRefresh>
+                    completed = state->codexActivityWorker.TakeLatest();
+                if (completed && !state->codexActivityPaused &&
+                    !state->windowHidden && !state->windowMinimized) {
+                    ApplyCodexActivityRefresh(*state, std::move(*completed));
                 } else {
                     UpdateStatusText(*state);
                 }
@@ -2709,6 +2931,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             }
             UpdateSamplingDemand(window, *state);
             UpdateCodexDemand(window, *state);
+            UpdateCodexActivityDemand(window, *state);
             UpdateServiceStatusDemand(window, *state);
             return 0;
 
@@ -2716,6 +2939,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             if (state) {
                 state->windowHidden = wParam == FALSE;
                 UpdateCodexDemand(window, *state);
+                UpdateCodexActivityDemand(window, *state);
                 UpdateServiceStatusDemand(window, *state);
             }
             break;
@@ -2799,6 +3023,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
                 StopSamplingTimer(window, *state);
                 state->performanceWorker.StopAndJoin();
                 state->codexWorker.StopAndJoin();
+                state->codexActivityWorker.StopAndJoin();
                 state->serviceStatusWorker.StopAndJoin();
                 state->updateWorker.RequestStop();
                 state->updateInstallWorker.RequestStop();

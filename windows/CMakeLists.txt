@@ -74,6 +74,20 @@ if(BUILD_TESTING)
     configure_codex_monitor_target(CodexMonitorSnapshotMathTests)
     add_test(NAME windows_snapshot_math COMMAND CodexMonitorSnapshotMathTests)
 
+    add_executable(CodexMonitorUILayoutMathTests
+        src/ui_layout_math.cpp
+        tests/ui_layout_math_test.cpp
+    )
+    configure_codex_monitor_target(CodexMonitorUILayoutMathTests)
+    add_test(NAME windows_ui_layout_math COMMAND CodexMonitorUILayoutMathTests)
+
+    add_executable(CodexMonitorSystemIoRateTests
+        src/system_io_rate.cpp
+        tests/system_io_rate_test.cpp
+    )
+    configure_codex_monitor_target(CodexMonitorSystemIoRateTests)
+    add_test(NAME windows_system_io_rate COMMAND CodexMonitorSystemIoRateTests)
+
     add_executable(CodexMonitorModuleStateTests
         src/module_state.cpp
         tests/module_state_test.cpp
@@ -147,6 +161,15 @@ if(BUILD_TESTING)
     add_test(NAME windows_codex_cost_file_scan
         COMMAND CodexMonitorCodexCostFileScanTests)
 
+    add_executable(CodexMonitorCodexActivityScanTests
+        src/codex/codex_activity_scan.cpp
+        src/codex/codex_cost_file_scan.cpp
+        tests/codex_activity_scan_test.cpp
+    )
+    configure_codex_monitor_target(CodexMonitorCodexActivityScanTests)
+    add_test(NAME windows_codex_activity_scan
+        COMMAND CodexMonitorCodexActivityScanTests)
+
     add_executable(CodexMonitorCodexCostHistoryStateTests
         src/codex/codex_cost_model.cpp
         src/codex/codex_cost_event_parser.cpp
@@ -182,6 +205,24 @@ if(BUILD_TESTING)
     configure_codex_monitor_target(CodexMonitorQuotaHistoryStoreTests)
     add_test(NAME windows_quota_history_store
         COMMAND CodexMonitorQuotaHistoryStoreTests)
+
+    add_executable(CodexMonitorWeeklyQuotaAlertTests
+        src/codex/weekly_quota_alert.cpp
+        tests/weekly_quota_alert_test.cpp
+    )
+    configure_codex_monitor_target(CodexMonitorWeeklyQuotaAlertTests)
+    add_test(NAME windows_weekly_quota_alert
+        COMMAND CodexMonitorWeeklyQuotaAlertTests)
+
+    add_executable(CodexMonitorWeeklyQuotaAlertStateStoreTests
+        src/codex/weekly_quota_alert.cpp
+        src/codex/weekly_quota_alert_state_store.cpp
+        tests/weekly_quota_alert_state_store_test.cpp
+    )
+    configure_codex_monitor_target(
+        CodexMonitorWeeklyQuotaAlertStateStoreTests)
+    add_test(NAME windows_weekly_quota_alert_state_store
+        COMMAND CodexMonitorWeeklyQuotaAlertStateStoreTests)
 
     add_executable(CodexMonitorGitHubReleaseSelectorTests
         src/update/github_release_selector.cpp
@@ -365,6 +406,45 @@ endif()
 
 if(WIN32)
     if(BUILD_TESTING)
+        add_executable(CodexMonitorSystemIoSamplerTests
+            src/system_io_rate.cpp
+            src/system_io_sampler_win32.cpp
+            tests/system_io_sampler_win32_test.cpp
+        )
+        configure_codex_monitor_target(CodexMonitorSystemIoSamplerTests)
+        target_compile_definitions(CodexMonitorSystemIoSamplerTests PRIVATE
+            UNICODE
+            _UNICODE
+            NOMINMAX
+            WINVER=0x0A00
+            _WIN32_WINNT=0x0A00
+        )
+        target_link_libraries(CodexMonitorSystemIoSamplerTests PRIVATE
+            iphlpapi pdh)
+        add_test(NAME windows_system_io_sampler
+            COMMAND CodexMonitorSystemIoSamplerTests)
+
+        add_executable(CodexMonitorCodexActivityWorkerTests
+            src/codex/codex_activity_scan.cpp
+            src/codex/codex_activity_worker.cpp
+            src/codex/codex_cost_file_scan.cpp
+            tests/codex_activity_worker_test.cpp
+        )
+        configure_codex_monitor_target(CodexMonitorCodexActivityWorkerTests)
+        target_compile_definitions(CodexMonitorCodexActivityWorkerTests PRIVATE
+            UNICODE
+            _UNICODE
+            NOMINMAX
+            WINVER=0x0A00
+            _WIN32_WINNT=0x0A00
+        )
+        target_link_libraries(CodexMonitorCodexActivityWorkerTests PRIVATE
+            user32)
+        add_test(NAME windows_codex_activity_worker
+            COMMAND CodexMonitorCodexActivityWorkerTests)
+        set_tests_properties(windows_codex_activity_worker
+            PROPERTIES TIMEOUT 20)
+
         add_executable(CodexMonitorFakeCodexAppServer
             tests/fake_codex_app_server.cpp
         )
@@ -609,6 +689,8 @@ if(WIN32)
 
     add_executable(CodexMonitorHUD WIN32
         resources/CodexMonitorHUD.rc
+        src/codex/codex_activity_scan.cpp
+        src/codex/codex_activity_worker.cpp
         src/codex/codex_app_server_client.cpp
         src/codex/codex_cost_event_parser.cpp
         src/codex/codex_cost_file_scan.cpp
@@ -635,6 +717,9 @@ if(WIN32)
         src/service_status_model.cpp
         src/service_status_worker.cpp
         src/settings_store_win32.cpp
+        src/system_io_rate.cpp
+        src/system_io_sampler_win32.cpp
+        src/ui_layout_math.cpp
         src/update/github_release_json_win32.cpp
         src/update/github_release_selector.cpp
         src/update/update_check_win32.cpp
@@ -668,7 +753,7 @@ if(WIN32)
             "CODEX_MONITOR_WINDOWS_PUBLISHER_SHA256=\"${CODEX_MONITOR_WINDOWS_PUBLISHER_SHA256}\"")
     endif()
     target_link_libraries(CodexMonitorHUD PRIVATE
-        user32 gdi32 psapi shell32 ole32 winhttp windowsapp bcrypt
+        user32 gdi32 psapi shell32 ole32 winhttp windowsapp bcrypt iphlpapi pdh
         wintrust crypt32 msi advapi32 version)
 else()
     message(STATUS "Non-Windows host: configuring portable snapshot and state tests only.")

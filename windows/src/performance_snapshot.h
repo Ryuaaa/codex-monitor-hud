@@ -1,5 +1,7 @@
 #pragma once
 
+#include "system_io_rate.h"
+
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -33,6 +35,7 @@ struct ProcessSnapshot {
 
 struct RawPerformanceSnapshot {
     CpuTimes systemCpu;
+    SystemIoCounters systemIo;
 
     bool physicalMemoryAvailable = false;
     std::uint64_t physicalTotalBytes = 0;
@@ -64,6 +67,7 @@ struct PerformanceSnapshot {
 
     std::optional<double> systemCpuPercent;
     bool systemCpuNeedsBaseline = false;
+    SystemIoRates systemIoRates;
 
     std::optional<double> targetCpuPercent;
     bool targetCpuPartial = false;
