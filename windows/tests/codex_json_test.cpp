@@ -288,6 +288,18 @@ void TestStrictTypesUnsafeIntegersAndMalformedJson() {
     Expect(!fractional.ok() && fractional.failure &&
                fractional.failure->kind == MethodFailureKind::kUnexpectedType,
            "fractional JSON numbers must not enter integer fields");
+
+    for (const std::string_view json : {
+             R"json({"rateLimits":{"primary":{"usedPercent":-1}}})json",
+             R"json({"rateLimits":{"primary":{"usedPercent":101}}})json",
+         }) {
+        const auto outOfRange =
+            codex_monitor::codex::ParseRateLimitsResultJson(json);
+        Expect(!outOfRange.ok() && outOfRange.failure &&
+                   outOfRange.failure->kind ==
+                       MethodFailureKind::kUnexpectedType,
+               "quota percentages outside zero through one hundred must be rejected");
+    }
 }
 
 void TestMethodFailuresRetainOnlyTheirOwnLastValue() {

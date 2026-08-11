@@ -90,9 +90,11 @@ const RateLimitWindow* SelectQuotaWindow(const RateLimitsData& limits,
 QuotaHistoryWindowSample MakeHistoryWindow(
     const RateLimitWindow* window) noexcept {
     QuotaHistoryWindowSample result;
-    if (!window) return result;
-    const int used = std::clamp(static_cast<int>(window->usedPercent), 0, 100);
-    result.remainingPercent = static_cast<double>(100 - used);
+    if (!window || window->usedPercent < 0 || window->usedPercent > 100) {
+        return result;
+    }
+    result.remainingPercent =
+        static_cast<double>(100 - window->usedPercent);
     result.resetsAtUnixSeconds = window->resetsAtUnixSeconds;
     return result;
 }
@@ -134,9 +136,14 @@ QuotaWindowForecastRefresh CalculateWindowForecast(
             {}, -1.0, -1.0, static_cast<double>(nowUnixSeconds));
         return result;
     }
-    const int used = std::clamp(static_cast<int>(current->usedPercent), 0, 100);
+    if (current->usedPercent < 0 || current->usedPercent > 100) {
+        result.forecast = CalculateQuotaForecast(
+            {}, -1.0, -1.0, static_cast<double>(nowUnixSeconds));
+        return result;
+    }
     result.forecast = CalculateQuotaForecast(
-        ForecastSamples(history, weekly), static_cast<double>(100 - used),
+        ForecastSamples(history, weekly),
+        static_cast<double>(100 - current->usedPercent),
         static_cast<double>(*current->resetsAtUnixSeconds),
         static_cast<double>(nowUnixSeconds));
     return result;

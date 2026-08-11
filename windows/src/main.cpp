@@ -963,7 +963,10 @@ void EvaluateWeeklyQuotaAlertAfterRefresh(AppState& state) {
     }
     const codex_monitor::codex::RateLimitWindow* weekly =
         SelectQuotaWindow(*state.latestCodexData.rateLimits.lastValue, true);
-    if (!weekly || !weekly->resetsAtUnixSeconds) return;
+    if (!weekly || !weekly->resetsAtUnixSeconds ||
+        weekly->usedPercent < 0 || weekly->usedPercent > 100) {
+        return;
+    }
 
     const std::int64_t nowUnixSeconds =
         std::chrono::duration_cast<std::chrono::seconds>(
@@ -973,8 +976,8 @@ void EvaluateWeeklyQuotaAlertAfterRefresh(AppState& state) {
     request.policy = state.settings.weeklyQuotaAlert;
     request.quotaHistoryPath = state.quotaHistoryPath;
     request.alertStatePath = state.weeklyQuotaAlertStatePath;
-    request.currentWeeklyRemainingPercent = static_cast<double>(
-        100 - std::clamp(static_cast<int>(weekly->usedPercent), 0, 100));
+    request.currentWeeklyRemainingPercent =
+        static_cast<double>(100 - weekly->usedPercent);
     request.currentWeeklyResetAtUnixSeconds =
         *weekly->resetsAtUnixSeconds;
     request.nowUnixSeconds = nowUnixSeconds;
@@ -3586,9 +3589,13 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             break;
 
         case WM_SYSCOMMAND:
-            if (state && state->settings.windowLocked) {
+            if (state) {
                 const WPARAM command = wParam & 0xFFF0U;
-                if (command == SC_MOVE || command == SC_SIZE) return 0;
+                if (command == SC_MAXIMIZE) return 0;
+                if (state->settings.windowLocked &&
+                    (command == SC_MOVE || command == SC_SIZE)) {
+                    return 0;
+                }
             }
             break;
 
@@ -3870,6 +3877,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         case WM_DPICHANGED:
             if (state) {
                 const auto* suggested = reinterpret_cast<const RECT*>(lParam);
+                if (!suggested) return 0;
                 const UINT newDpi = LOWORD(wParam);
                 const auto base =
                     codex_monitor::ui_layout::ScaleLogicalSizeForDpi(
@@ -3881,7 +3889,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
                             *base, ToPixelRect(*work),
                             MulDiv(kResizeWorkAreaMargin,
                                    static_cast<int>(newDpi), 96));
-                    if (scaleLimits) {
+                    if (scaleLimits && !state->interactiveMoveOrResize) {
                         state->settings.windowScale = std::clamp(
                             state->settings.windowScale,
                             scaleLimits->minimumScale,
@@ -3895,23 +3903,34 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
                             suggested->left, suggested->top,
                             suggested->left + size->width,
                             suggested->top + size->height};
-                        const auto clamped =
-                            codex_monitor::ui_layout::ClampFrameToWorkArea(
-                                desired, ToPixelRect(*work));
-                        if (clamped) {
+                        std::optional<codex_monitor::ui_layout::PixelRect> target =
+                            desired;
+                        if (!state->interactiveMoveOrResize) {
+                            target =
+                                codex_monitor::ui_layout::ClampFrameToWorkArea(
+                                    desired, ToPixelRect(*work));
+                        }
+                        if (target) {
                             SetWindowPos(
-                                window, nullptr, clamped->left, clamped->top,
-                                clamped->right - clamped->left,
-                                clamped->bottom - clamped->top,
+                                window, nullptr, target->left, target->top,
+                                target->right - target->left,
+                                target->bottom - target->top,
                                 SWP_NOACTIVATE | SWP_NOZORDER);
                         }
                     }
                 }
-                ClampWindowToVisibleScreens(window, *state);
                 RecreateFonts(window, *state);
                 LayoutControls(window, *state);
-                CaptureWindowPlacement(window, *state);
-                PersistSettings(*state);
+                if (state->interactiveMoveOrResize) {
+                    if (GetWindowRect(window, &state->interactiveStartFrame)) {
+                        state->interactiveStartScale =
+                            state->settings.windowScale;
+                    }
+                } else {
+                    ClampWindowToVisibleScreens(window, *state);
+                    CaptureWindowPlacement(window, *state);
+                    PersistSettings(*state);
+                }
             }
             return 0;
 
@@ -4110,7 +4129,21 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand) {
         return 1;
     }
 
-    ShowWindow(window, showCommand == 0 ? SW_SHOWNORMAL : showCommand);
+    const UINT windowDpi = GetDpiForWindow(window);
+    if (windowDpi != 0 && windowDpi != systemDpi) {
+        const codex_monitor::WindowPlacement corrected =
+            InitialWindowPlacement(state, windowDpi);
+        state.settings.windowPlacement = corrected;
+        SetWindowPos(window, nullptr, corrected.x, corrected.y,
+                     corrected.width, corrected.height,
+                     SWP_NOACTIVATE | SWP_NOZORDER);
+    }
+
+    const int normalizedShowCommand =
+        showCommand == 0 || showCommand == SW_SHOWMAXIMIZED
+            ? SW_SHOWNORMAL
+            : showCommand;
+    ShowWindow(window, normalizedShowCommand);
     UpdateWindow(window);
 
     MSG message{};

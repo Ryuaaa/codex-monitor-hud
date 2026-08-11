@@ -28,6 +28,30 @@ namespace {
     return result;
 }
 
+[[nodiscard]] bool RecoverMalformedStateForCurrentPeriod(
+    const WeeklyQuotaAlertDeliveryRequest& request,
+    const WeeklyQuotaAlertStateStore& stateStore) noexcept {
+    const WeeklyQuotaAlertEvaluation evaluation = EvaluateWeeklyQuotaAlert(
+        {}, request.policy, request.currentWeeklyRemainingPercent,
+        request.currentWeeklyResetAtUnixSeconds, request.nowUnixSeconds,
+        request.localDayStartUnixSeconds, {});
+    if (!evaluation.periodStartUnixSeconds ||
+        evaluation.outcome == WeeklyQuotaAlertOutcome::kInvalidInput ||
+        evaluation.outcome == WeeklyQuotaAlertOutcome::kDisabled ||
+        evaluation.outcome == WeeklyQuotaAlertOutcome::kClockMovedBackward) {
+        return false;
+    }
+
+    // The damaged file cannot prove whether this period already delivered.
+    // Conservatively suppress only the current period, then let the normal
+    // natural-day, rolling-24-hour, or weekly-reset boundary start fresh.
+    WeeklyQuotaAlertState recovered = evaluation.nextState;
+    recovered.lastNotifiedPeriodStartUnixSeconds =
+        evaluation.periodStartUnixSeconds;
+    recovered.lastNotifiedAtUnixSeconds = request.nowUnixSeconds;
+    return stateStore.Save(recovered).written();
+}
+
 }  // namespace
 
 WeeklyQuotaAlertDeliveryResult EvaluateAndDeliverWeeklyQuotaAlert(
@@ -53,7 +77,7 @@ WeeklyQuotaAlertDeliveryResult EvaluateAndDeliverWeeklyQuotaAlert(
         const QuotaHistoryLoadResult history =
             QuotaHistoryStore(request.quotaHistoryPath)
                 .Load(request.nowUnixSeconds);
-        if (!history.ok()) {
+        if (!history.ok() || history.skippedMalformedLines != 0) {
             return Finish(WeeklyQuotaAlertDeliveryStatus::kHistoryUnavailable);
         }
 
@@ -61,9 +85,14 @@ WeeklyQuotaAlertDeliveryResult EvaluateAndDeliverWeeklyQuotaAlert(
             request.alertStatePath, request.stateAtomicReplace);
         const WeeklyQuotaAlertStateLoadResult loadedState = stateStore.Load();
         if (!loadedState.ok()) {
-            // A malformed, unreadable, or newer state cannot prove whether
-            // this period already notified. Suppress instead of risking a
-            // duplicate, and never overwrite an unknown newer version.
+            // A known malformed file is replaced with conservative
+            // suppression for only the current period. I/O failures and
+            // unknown newer versions remain untouched.
+            if (loadedState.status ==
+                WeeklyQuotaAlertStateLoadStatus::kMalformed) {
+                (void)RecoverMalformedStateForCurrentPeriod(request,
+                                                            stateStore);
+            }
             return Finish(WeeklyQuotaAlertDeliveryStatus::kStateUnavailable);
         }
 

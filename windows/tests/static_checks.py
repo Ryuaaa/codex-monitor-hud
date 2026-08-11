@@ -355,6 +355,9 @@ def main() -> None:
         "HWND_NOTOPMOST": "topmost mode can be disabled",
         "WM_GETMINMAXINFO": "resizing has a usable minimum size",
         "WM_DPICHANGED": "layout follows per-monitor DPI changes",
+        "GetDpiForWindow(window)": "startup placement uses the actual target monitor DPI",
+        "showCommand == SW_SHOWMAXIMIZED": "startup cannot bypass uniform HUD sizing through maximize",
+        "command == SC_MAXIMIZE": "the fixed-aspect HUD cannot be maximized after startup",
         "kFastSampleIntervalMs = 5000": "system and target sampling uses five seconds",
         "kSlowSampleIntervalMs = 20000": "commit, paging, and ranking use twenty seconds",
         "GetTickCount64() >= state->nextSlowSampleTick": "slow sampling is scheduled by elapsed time",
@@ -1490,6 +1493,10 @@ def main() -> None:
             "notification delivery has a narrow percentage-only callback",
         "stateStore.Save(priorState)":
             "a rejected notification restores the prior anti-duplication state",
+        "history.skippedMalformedLines != 0":
+            "damaged history suppresses rather than estimating a notification",
+        "RecoverMalformedStateForCurrentPeriod":
+            "known damaged state recovers conservatively without permanent disablement",
         "Shell_NotifyIconW(NIM_MODIFY":
             "Windows receives a non-activating Shell notification",
         "NIIF_RESPECT_QUIET_TIME":
@@ -1521,6 +1528,10 @@ def main() -> None:
             "insufficient product history is covered",
         "a changed weekly reset must start one fresh notification cycle":
             "weekly reset rollover is covered at the delivery boundary",
+        "any skipped malformed history line must suppress rather than estimate a notification":
+            "partial history cannot cause a false alert",
+        "malformed-state recovery must allow one notification in the next rolling period":
+            "known damaged state recovers after a safe suppression period",
     }.items():
         require(WEEKLY_QUOTA_ALERT_DELIVERY_TEST, token, reason)
 

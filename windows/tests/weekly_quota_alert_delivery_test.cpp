@@ -5,7 +5,9 @@
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <string>
 #include <string_view>
 
 namespace {
@@ -198,6 +200,107 @@ void TestInsufficientHistoryNeverNotifies() {
             "insufficient history must never produce a notification");
 }
 
+void TestMalformedHistorySuppressesUntilAValidRewrite() {
+    TemporaryDirectory temporary;
+    auto request = Request(temporary);
+    SeedBaseline(request);
+    {
+        std::ofstream output(request.quotaHistoryPath,
+                             std::ios::binary | std::ios::app);
+        Require(static_cast<bool>(output),
+                "damaged history fixture must open");
+        output << "malformed-history-line\n";
+        output.flush();
+        Require(static_cast<bool>(output),
+                "damaged history fixture must be written");
+    }
+
+    int sends = 0;
+    const auto damaged = EvaluateAndDeliverWeeklyQuotaAlert(
+        request, [&](const auto&) {
+            ++sends;
+            return true;
+        });
+    Require(damaged.status ==
+                WeeklyQuotaAlertDeliveryStatus::kHistoryUnavailable &&
+                sends == 0,
+            "any skipped malformed history line must suppress rather than estimate a notification");
+
+    Require(QuotaHistoryStore(request.quotaHistoryPath)
+                .Update(Sample(kNow, request.currentWeeklyRemainingPercent))
+                .written(),
+            "the next valid quota refresh must atomically remove malformed history lines");
+    const auto recovered = EvaluateAndDeliverWeeklyQuotaAlert(
+        request, [&](const auto&) {
+            ++sends;
+            return true;
+        });
+    Require(recovered.status == WeeklyQuotaAlertDeliveryStatus::kDelivered &&
+                sends == 1,
+            "a clean history rewrite must restore normal delivery without user repair");
+}
+
+void TestMalformedStateSuppressesOnlyTheCurrentPeriod() {
+    TemporaryDirectory temporary;
+    auto request = Request(temporary);
+    SeedBaseline(request);
+    {
+        std::ofstream output(request.alertStatePath,
+                             std::ios::binary | std::ios::trunc);
+        Require(static_cast<bool>(output),
+                "damaged state fixture must open");
+        output << "damaged-state\n";
+        output.flush();
+        Require(static_cast<bool>(output),
+                "damaged state fixture must be written");
+    }
+
+    int sends = 0;
+    const auto damaged = EvaluateAndDeliverWeeklyQuotaAlert(
+        request, [&](const auto&) {
+            ++sends;
+            return true;
+        });
+    const auto recoveredState =
+        WeeklyQuotaAlertStateStore(request.alertStatePath).Load();
+    Require(damaged.status ==
+                WeeklyQuotaAlertDeliveryStatus::kStateUnavailable &&
+                recoveredState.status == WeeklyQuotaAlertStateLoadStatus::kOk &&
+                recoveredState.state.lastNotifiedAtUnixSeconds == kNow &&
+                sends == 0,
+            "malformed alert state must be replaced by conservative current-period suppression");
+
+    request.nowUnixSeconds += 5 * 60;
+    request.currentWeeklyRemainingPercent = 60.0;
+    const auto samePeriod = EvaluateAndDeliverWeeklyQuotaAlert(
+        request, [&](const auto&) {
+            ++sends;
+            return true;
+        });
+    Require(samePeriod.status ==
+                WeeklyQuotaAlertDeliveryStatus::kNoNotification &&
+                samePeriod.evaluationOutcome ==
+                    WeeklyQuotaAlertOutcome::kAlreadyNotified &&
+                sends == 0,
+            "recovered state must not risk a duplicate in the damaged period");
+
+    request.nowUnixSeconds = kNow + 24 * 60 * 60;
+    request.currentWeeklyRemainingPercent = 50.0;
+    Require(QuotaHistoryStore(request.quotaHistoryPath)
+                .Update(Sample(request.nowUnixSeconds - 24 * 60 * 60 + 5 * 60,
+                               80.0))
+                .written(),
+            "next rolling-period baseline must be stored");
+    const auto nextPeriod = EvaluateAndDeliverWeeklyQuotaAlert(
+        request, [&](const auto&) {
+            ++sends;
+            return true;
+        });
+    Require(nextPeriod.status == WeeklyQuotaAlertDeliveryStatus::kDelivered &&
+                sends == 1,
+            "malformed-state recovery must allow one notification in the next rolling period");
+}
+
 void TestWeeklyResetStartsANewNotificationCycle() {
     TemporaryDirectory temporary;
     auto request = Request(temporary);
@@ -239,6 +342,8 @@ int main() {
     TestStateFailureSuppressesNotification();
     TestRejectedNotificationRestoresPriorState();
     TestInsufficientHistoryNeverNotifies();
+    TestMalformedHistorySuppressesUntilAValidRewrite();
+    TestMalformedStateSuppressesOnlyTheCurrentPeriod();
     TestWeeklyResetStartsANewNotificationCycle();
     std::cout << "weekly_quota_alert_delivery_test: pass\n";
     return 0;

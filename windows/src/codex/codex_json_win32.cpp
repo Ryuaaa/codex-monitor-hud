@@ -194,10 +194,9 @@ bool ParseRateLimitWindow(const JsonObject& rate,
                              usedPercent, failure)) {
         return false;
     }
-    if (usedPercent < std::numeric_limits<std::int32_t>::min() ||
-        usedPercent > std::numeric_limits<std::int32_t>::max()) {
+    if (usedPercent < 0 || usedPercent > 100) {
         failure = Failure(MethodFailureKind::kUnexpectedType, usedField,
-                          L"Integer is outside the schema int32 range");
+                          L"Percent is outside the supported 0..100 range");
         return false;
     }
 
