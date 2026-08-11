@@ -14,6 +14,13 @@ enum class Page {
     kComputer,
 };
 
+enum class HudTheme {
+    kBlue,
+    kGreen,
+    kPurple,
+    kOrange,
+};
+
 enum class ModuleId {
     kSystemDiagnosis,
     kTargetProcessTree,
@@ -61,6 +68,14 @@ struct SettingsState {
     std::array<bool, kModuleCount> homeVisible{};
     std::array<bool, kModuleCount> nativePageVisible{};
     std::optional<WindowPlacement> windowPlacement;
+    double windowScale = 1.0;
+    bool windowLocked = false;
+    int opacityPercent = 100;
+    HudTheme theme = HudTheme::kBlue;
+    // Transient migration marker. Old releases stored arbitrary width and
+    // height independently, so the UI rebuilds a uniform frame while keeping
+    // the saved origin. This marker is never serialized.
+    bool legacyWindowSizeNeedsMigration = false;
 };
 
 const std::array<ModuleDefinition, kModuleCount>& ModuleRegistry();

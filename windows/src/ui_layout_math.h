@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <vector>
 
 namespace codex_monitor::ui_layout {
 
@@ -46,6 +47,12 @@ struct UniformScaleLimits {
     // The minimum remains 75%; callers can then keep the frame visible by
     // clamping its origin rather than silently shrinking the HUD further.
     bool minimumFitsWorkArea = false;
+};
+
+struct VariableHeightGridRows {
+    std::vector<std::int32_t> offsets;
+    std::vector<std::int32_t> heights;
+    std::int32_t totalHeight = 0;
 };
 
 // Converts logical pixels at 96 DPI to physical pixels using integer rounding.
@@ -110,5 +117,20 @@ std::optional<PixelRect> PlaceFrameInWorkAreaCorner(
     PixelRect workArea,
     WorkAreaCorner corner,
     std::int32_t marginPixels);
+
+// Groups positive card heights into rows. Each row uses the tallest card in
+// that row, and offsets are measured from the top of the scrollable content.
+// Checked arithmetic prevents malformed text measurements from wrapping.
+std::optional<VariableHeightGridRows> BuildVariableHeightGridRows(
+    const std::vector<std::int32_t>& cardHeights,
+    std::int32_t columns,
+    std::int32_t gapPixels);
+
+// Clamps a pixel scroll position against variable-height content. Invalid or
+// empty dimensions safely collapse to the top.
+std::int32_t ClampPixelScrollOffset(
+    std::int32_t requestedOffset,
+    std::int32_t contentHeight,
+    std::int32_t viewportHeight);
 
 }  // namespace codex_monitor::ui_layout

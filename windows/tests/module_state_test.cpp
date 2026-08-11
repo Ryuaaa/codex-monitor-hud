@@ -109,13 +109,17 @@ void TestOrderSanitizationAndMovement() {
            "the first module must not move beyond the registry boundary");
 }
 
-void TestVersionEightRoundTripAndIndependentQuotaSwitches() {
+void TestVersionNineRoundTripAndIndependentQuotaSwitches() {
     using codex_monitor::ModuleId;
     using codex_monitor::Page;
 
     codex_monitor::SettingsState settings = codex_monitor::DefaultSettings();
     settings.currentPage = Page::kCodex;
     settings.alwaysOnTop = false;
+    settings.windowLocked = true;
+    settings.windowScale = 1.375;
+    settings.opacityPercent = 82;
+    settings.theme = codex_monitor::HudTheme::kPurple;
     settings.homeOrder = codex_monitor::SanitizeHomeOrder({
         ModuleId::kCodexWeeklyQuota,
         ModuleId::kTopMemoryProcesses,
@@ -131,13 +135,22 @@ void TestVersionEightRoundTripAndIndependentQuotaSwitches() {
     settings.windowPlacement = codex_monitor::WindowPlacement{-900, 120, 720, 640};
 
     const std::string serialized = codex_monitor::SerializeSettings(settings);
-    Expect(serialized.find("version=8\n") == 0,
-           "the settings whitelist must be serialized as version 8");
+    Expect(serialized.find("version=9\n") == 0,
+           "the settings whitelist must be serialized as version 9");
 
     const codex_monitor::SettingsState parsed = codex_monitor::ParseSettings(serialized);
     Expect(parsed.currentPage == Page::kCodex,
            "the current page must survive persistence");
     Expect(!parsed.alwaysOnTop, "the topmost preference must survive persistence");
+    Expect(parsed.windowLocked, "the position and size lock must survive persistence");
+    Expect(parsed.windowScale == 1.375,
+           "the uniform window scale must survive persistence");
+    Expect(parsed.opacityPercent == 82,
+           "the selected whole-window opacity must survive persistence");
+    Expect(parsed.theme == codex_monitor::HudTheme::kPurple,
+           "the low-saturation theme must survive persistence");
+    Expect(!parsed.legacyWindowSizeNeedsMigration,
+           "a version 9 uniform frame must not be treated as legacy shape data");
     Expect(parsed.homeOrder == settings.homeOrder,
            "the homepage module order must survive persistence");
     Expect(parsed.windowPlacement && parsed.windowPlacement->x == -900 &&
@@ -192,6 +205,34 @@ void TestVersionSevenIoMigrationPreservesExplicitChoices() {
                Contains(codex, ModuleId::kCodexWeeklyQuota) &&
                !Contains(codex, ModuleId::kCodexFiveHourQuota),
            "I/O migration must keep five-hour and weekly switches independent");
+}
+
+void TestLegacyShapeMigrationKeepsOriginAndResetsUniformScale() {
+    const codex_monitor::SettingsState migrated = codex_monitor::ParseSettings(
+        "version=8\n"
+        "window=-720,90,970,360\n"
+        "always_on_top=0\n");
+    Expect(migrated.windowPlacement && migrated.windowPlacement->x == -720 &&
+               migrated.windowPlacement->y == 90,
+           "legacy migration must retain the user's saved screen origin");
+    Expect(migrated.windowScale == 1.0,
+           "legacy independent width and height must reset to one uniform scale");
+    Expect(migrated.legacyWindowSizeNeedsMigration,
+           "legacy shape data must request a one-time uniform frame rebuild");
+
+    const codex_monitor::SettingsState damaged = codex_monitor::ParseSettings(
+        "version=9\n"
+        "window=10,20,800,240\n"
+        "window_scale=nan\n"
+        "opacity_percent=95\n"
+        "theme=neon\n");
+    Expect(damaged.windowScale == 1.0 &&
+               damaged.legacyWindowSizeNeedsMigration,
+           "a damaged scale must safely rebuild the saved shape at 100 percent");
+    Expect(damaged.opacityPercent == 100,
+           "unsupported opacity values must retain the safe opaque default");
+    Expect(damaged.theme == codex_monitor::HudTheme::kBlue,
+           "unknown themes must retain the low-saturation blue default");
 }
 
 void TestVersionThreeMigrationPreservesExplicitVisibility() {
@@ -454,8 +495,9 @@ void TestWindowPlacementReturnsToAVisibleWorkArea() {
 int main() {
     TestNewInstallDefaultsUseRegistryPolicy();
     TestOrderSanitizationAndMovement();
-    TestVersionEightRoundTripAndIndependentQuotaSwitches();
+    TestVersionNineRoundTripAndIndependentQuotaSwitches();
     TestVersionSevenIoMigrationPreservesExplicitChoices();
+    TestLegacyShapeMigrationKeepsOriginAndResetsUniformScale();
     TestVersionThreeMigrationPreservesExplicitVisibility();
     TestVersionOneMigrationPreservesOldHomeChoices();
     TestForecastNativeDefaultMigrationPolicy();

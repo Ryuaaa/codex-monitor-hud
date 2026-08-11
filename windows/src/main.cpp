@@ -25,12 +25,14 @@
 #include "settings_store_win32.h"
 #include "snapshot_math.h"
 #include "system_io_display.h"
+#include "ui_layout_math.h"
 #include "update/update_helper_win32.h"
 #include "update/update_helper_launcher_win32.h"
 #include "update/update_install_worker.h"
 #include "update/update_worker.h"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
@@ -40,6 +42,7 @@
 #include <cwctype>
 #include <filesystem>
 #include <iomanip>
+#include <limits>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -65,6 +68,8 @@ constexpr int kHomePageButtonId = 1010;
 constexpr int kCodexPageButtonId = 1011;
 constexpr int kComputerPageButtonId = 1012;
 constexpr int kSettingsButtonId = 1013;
+constexpr int kUpdateBannerButtonId = 1014;
+constexpr int kWindowLockButtonId = 1015;
 constexpr int kSettingsVisibleBaseId = 3000;
 constexpr int kSettingsMoveUpBaseId = 3100;
 constexpr int kSettingsMoveDownBaseId = 3200;
@@ -73,6 +78,10 @@ constexpr int kSettingsCloseId = 3301;
 constexpr int kSettingsCheckUpdatesId = 3302;
 constexpr int kSettingsInstallUpdateId = 3303;
 constexpr int kSettingsNativeVisibleBaseId = 3400;
+constexpr int kSettingsWindowLockId = 3500;
+constexpr int kSettingsCornerBaseId = 3510;
+constexpr int kSettingsOpacityBaseId = 3520;
+constexpr int kSettingsThemeBaseId = 3530;
 constexpr UINT_PTR kSampleTimerId = 2001;
 constexpr UINT kSampleReadyMessage = WM_APP + 1;
 constexpr UINT kCodexReadyMessage = WM_APP + 2;
@@ -82,8 +91,23 @@ constexpr UINT kUpdateInstallReadyMessage = WM_APP + 5;
 constexpr UINT kCodexActivityReadyMessage = WM_APP + 6;
 constexpr UINT kFastSampleIntervalMs = 5000;
 constexpr ULONGLONG kSlowSampleIntervalMs = 20000;
-constexpr int kMinimumWidth = 390;
-constexpr int kMinimumHeight = 360;
+constexpr int kBaseFrameWidth = 460;
+constexpr int kBaseFrameHeight = 680;
+constexpr int kResizeWorkAreaMargin = 12;
+constexpr std::array<int, 4> kOpacityChoices{70, 82, 90, 100};
+constexpr std::array<codex_monitor::HudTheme, 4> kThemeChoices{
+    codex_monitor::HudTheme::kBlue,
+    codex_monitor::HudTheme::kGreen,
+    codex_monitor::HudTheme::kPurple,
+    codex_monitor::HudTheme::kOrange,
+};
+constexpr std::array<codex_monitor::ui_layout::WorkAreaCorner, 4>
+    kCornerChoices{
+        codex_monitor::ui_layout::WorkAreaCorner::kTopLeft,
+        codex_monitor::ui_layout::WorkAreaCorner::kTopRight,
+        codex_monitor::ui_layout::WorkAreaCorner::kBottomLeft,
+        codex_monitor::ui_layout::WorkAreaCorner::kBottomRight,
+    };
 
 struct ModuleViews {
     codex_monitor::ModuleId id;
@@ -111,11 +135,20 @@ struct AppState {
     HWND codexPageButton = nullptr;
     HWND computerPageButton = nullptr;
     HWND settingsButton = nullptr;
+    HWND updateBannerButton = nullptr;
+    HWND windowLockButton = nullptr;
     HWND codexNotice = nullptr;
     HWND emptyHomeNotice = nullptr;
     HWND settingsWindow = nullptr;
     HWND settingsHeading = nullptr;
     HWND settingsTopmostCheck = nullptr;
+    HWND settingsWindowLockCheck = nullptr;
+    HWND settingsCornerLabel = nullptr;
+    std::array<HWND, 4> settingsCornerButtons{};
+    HWND settingsOpacityLabel = nullptr;
+    std::array<HWND, 4> settingsOpacityButtons{};
+    HWND settingsThemeLabel = nullptr;
+    std::array<HWND, 4> settingsThemeButtons{};
     HWND settingsUpdateStatus = nullptr;
     HWND settingsCheckUpdatesButton = nullptr;
     HWND settingsInstallUpdateButton = nullptr;
@@ -129,6 +162,10 @@ struct AppState {
     HFONT settingsSmallFont = nullptr;
     HBRUSH backgroundBrush = nullptr;
     HBRUSH cardBrush = nullptr;
+    COLORREF backgroundColor = RGB(20, 29, 40);
+    COLORREF cardColor = RGB(32, 46, 62);
+    COLORREF primaryTextColor = RGB(222, 232, 242);
+    COLORREF secondaryTextColor = RGB(176, 195, 214);
     bool samplingPaused = true;
     bool timerActive = false;
     bool windowMinimized = false;
@@ -150,13 +187,17 @@ struct AppState {
     bool updateWorkerAvailable = false;
     bool updateInstallWorkerAvailable = false;
     bool runningFromMsiInstalledHud = false;
-    int contentScrollRow = 0;
-    int contentScrollMaximumRow = 0;
-    int contentVisibleRows = 1;
+    int contentScrollOffset = 0;
+    int contentScrollMaximum = 0;
+    int contentViewportHeight = 1;
     int wheelDeltaRemainder = 0;
     int settingsScrollOffset = 0;
     int settingsScrollMaximum = 0;
     int settingsWheelDeltaRemainder = 0;
+    bool interactiveMoveOrResize = false;
+    RECT interactiveStartFrame{};
+    double interactiveStartScale = 1.0;
+    double appliedMainUiScale = 0.0;
     ULONGLONG nextSlowSampleTick = 0;
     std::filesystem::path settingsPath;
     codex_monitor::SettingsState settings = codex_monitor::DefaultSettings();
@@ -196,6 +237,8 @@ void UpdateServiceStatusDemand(HWND window, AppState& state);
 void PersistSettings(AppState& state);
 void RefreshSettingsControls(AppState& state);
 void RefreshUpdateControls(AppState& state);
+void ApplyWindowOpacity(HWND window, AppState& state);
+void ApplyTheme(HWND window, AppState& state);
 
 std::filesystem::path DefaultCodexSessionsRoot() {
     SetLastError(ERROR_SUCCESS);
@@ -216,8 +259,21 @@ int ScaleForDpi(HWND window, int value) {
     return MulDiv(value, static_cast<int>(dpi), 96);
 }
 
-HFONT CreateUiFont(HWND window, int pointSize, int weight) {
-    const int height = -MulDiv(pointSize, static_cast<int>(GetDpiForWindow(window)), 72);
+int ScaleForUi(HWND window, int value, double windowScale) {
+    const double safeScale = std::clamp(windowScale, 0.75, 8.0);
+    const long long dpiScaled = ScaleForDpi(window, value);
+    return static_cast<int>(std::clamp<long long>(
+        std::llround(static_cast<double>(dpiScaled) * safeScale), 1,
+        std::numeric_limits<int>::max()));
+}
+
+HFONT CreateUiFont(HWND window, int pointSize, int weight,
+                   double windowScale = 1.0) {
+    const int scaledPoints = std::max(
+        1, static_cast<int>(std::lround(pointSize *
+                                       std::clamp(windowScale, 0.75, 8.0))));
+    const int height = -MulDiv(
+        scaledPoints, static_cast<int>(GetDpiForWindow(window)), 72);
     return CreateFontW(height, 0, 0, 0, weight, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
                        OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                        DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
@@ -244,9 +300,12 @@ void RecreateFonts(HWND window, AppState& state) {
     const HFONT oldHeadingFont = state.headingFont;
     const HFONT oldBodyFont = state.bodyFont;
     const HFONT oldSmallFont = state.smallFont;
-    state.headingFont = CreateUiFont(window, 17, FW_SEMIBOLD);
-    state.bodyFont = CreateUiFont(window, 10, FW_MEDIUM);
-    state.smallFont = CreateUiFont(window, 9, FW_NORMAL);
+    state.headingFont = CreateUiFont(
+        window, 17, FW_SEMIBOLD, state.settings.windowScale);
+    state.bodyFont = CreateUiFont(
+        window, 10, FW_MEDIUM, state.settings.windowScale);
+    state.smallFont = CreateUiFont(
+        window, 9, FW_NORMAL, state.settings.windowScale);
 
     ApplyFont(state.heading, state.headingFont);
     ApplyFont(state.subtitle, state.smallFont);
@@ -257,6 +316,8 @@ void RecreateFonts(HWND window, AppState& state) {
     ApplyFont(state.codexPageButton, state.smallFont);
     ApplyFont(state.computerPageButton, state.smallFont);
     ApplyFont(state.settingsButton, state.smallFont);
+    ApplyFont(state.updateBannerButton, state.bodyFont);
+    ApplyFont(state.windowLockButton, state.smallFont);
     ApplyFont(state.codexNotice, state.bodyFont);
     ApplyFont(state.emptyHomeNotice, state.bodyFont);
     for (const ModuleViews& views : state.moduleViews) {
@@ -266,6 +327,7 @@ void RecreateFonts(HWND window, AppState& state) {
     if (oldHeadingFont) DeleteObject(oldHeadingFont);
     if (oldBodyFont) DeleteObject(oldBodyFont);
     if (oldSmallFont) DeleteObject(oldSmallFont);
+    state.appliedMainUiScale = state.settings.windowScale;
 }
 
 void RecreateSettingsFonts(HWND window, AppState& state) {
@@ -276,10 +338,23 @@ void RecreateSettingsFonts(HWND window, AppState& state) {
 
     ApplyFont(state.settingsHeading, state.settingsBodyFont);
     ApplyFont(state.settingsTopmostCheck, state.settingsSmallFont);
+    ApplyFont(state.settingsWindowLockCheck, state.settingsSmallFont);
+    ApplyFont(state.settingsCornerLabel, state.settingsSmallFont);
+    ApplyFont(state.settingsOpacityLabel, state.settingsSmallFont);
+    ApplyFont(state.settingsThemeLabel, state.settingsSmallFont);
     ApplyFont(state.settingsUpdateStatus, state.settingsSmallFont);
     ApplyFont(state.settingsCheckUpdatesButton, state.settingsSmallFont);
     ApplyFont(state.settingsInstallUpdateButton, state.settingsSmallFont);
     ApplyFont(state.settingsCloseButton, state.settingsSmallFont);
+    for (HWND control : state.settingsCornerButtons) {
+        ApplyFont(control, state.settingsSmallFont);
+    }
+    for (HWND control : state.settingsOpacityButtons) {
+        ApplyFont(control, state.settingsSmallFont);
+    }
+    for (HWND control : state.settingsThemeButtons) {
+        ApplyFont(control, state.settingsSmallFont);
+    }
     for (const SettingsRow& row : state.settingsRows) {
         ApplyFont(row.nameLabel, state.settingsSmallFont);
         ApplyFont(row.homeVisibleCheck, state.settingsSmallFont);
@@ -290,6 +365,75 @@ void RecreateSettingsFonts(HWND window, AppState& state) {
 
     if (oldBodyFont) DeleteObject(oldBodyFont);
     if (oldSmallFont) DeleteObject(oldSmallFont);
+}
+
+struct ThemeColors {
+    COLORREF background;
+    COLORREF card;
+    COLORREF primaryText;
+    COLORREF secondaryText;
+};
+
+ThemeColors ColorsForTheme(codex_monitor::HudTheme theme) {
+    switch (theme) {
+        case codex_monitor::HudTheme::kGreen:
+            return {RGB(23, 34, 31), RGB(34, 50, 44),
+                    RGB(222, 237, 229), RGB(178, 205, 192)};
+        case codex_monitor::HudTheme::kPurple:
+            return {RGB(29, 27, 40), RGB(44, 40, 57),
+                    RGB(234, 228, 242), RGB(197, 186, 214)};
+        case codex_monitor::HudTheme::kOrange:
+            return {RGB(38, 30, 23), RGB(56, 44, 33),
+                    RGB(240, 232, 221), RGB(214, 193, 169)};
+        case codex_monitor::HudTheme::kBlue:
+        default:
+            return {RGB(20, 29, 40), RGB(32, 46, 62),
+                    RGB(222, 232, 242), RGB(176, 195, 214)};
+    }
+}
+
+void ApplyTheme(HWND window, AppState& state) {
+    const ThemeColors colors = ColorsForTheme(state.settings.theme);
+    HBRUSH nextBackground = CreateSolidBrush(colors.background);
+    HBRUSH nextCard = CreateSolidBrush(colors.card);
+    if (!nextBackground || !nextCard) {
+        if (nextBackground) DeleteObject(nextBackground);
+        if (nextCard) DeleteObject(nextCard);
+        return;
+    }
+    if (state.backgroundBrush) DeleteObject(state.backgroundBrush);
+    if (state.cardBrush) DeleteObject(state.cardBrush);
+    state.backgroundBrush = nextBackground;
+    state.cardBrush = nextCard;
+    state.backgroundColor = colors.background;
+    state.cardColor = colors.card;
+    state.primaryTextColor = colors.primaryText;
+    state.secondaryTextColor = colors.secondaryText;
+    if (window) {
+        RedrawWindow(window, nullptr, nullptr,
+                     RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
+    }
+}
+
+void ApplyWindowOpacity(HWND window, AppState& state) {
+    if (!window) return;
+    const bool supported = std::find(
+        kOpacityChoices.begin(), kOpacityChoices.end(),
+        state.settings.opacityPercent) != kOpacityChoices.end();
+    if (!supported) state.settings.opacityPercent = 100;
+    LONG_PTR style = GetWindowLongPtrW(window, GWL_EXSTYLE);
+    if (state.settings.opacityPercent < 100) {
+        style |= WS_EX_LAYERED;
+        SetWindowLongPtrW(window, GWL_EXSTYLE, style);
+        const BYTE alpha = static_cast<BYTE>(std::clamp(
+            MulDiv(255, state.settings.opacityPercent, 100), 0, 255));
+        SetLayeredWindowAttributes(window, 0, alpha, LWA_ALPHA);
+    } else if ((style & WS_EX_LAYERED) != 0) {
+        style &= ~static_cast<LONG_PTR>(WS_EX_LAYERED);
+        SetWindowLongPtrW(window, GWL_EXSTYLE, style);
+        RedrawWindow(window, nullptr, nullptr,
+                     RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
+    }
 }
 
 std::wstring FormatBytes(std::uint64_t bytes) {
@@ -1538,6 +1682,16 @@ void UpdateTopmostState(HWND window, AppState& state, bool enabled, bool persist
     if (persist) PersistSettings(state);
 }
 
+void UpdateWindowLockState(AppState& state, bool locked, bool persist) {
+    state.settings.windowLocked = locked;
+    SetWindowTextW(state.windowLockButton, locked ? L"Unlock" : L"Lock");
+    if (state.settingsWindowLockCheck) {
+        SendMessageW(state.settingsWindowLockCheck, BM_SETCHECK,
+                     locked ? BST_CHECKED : BST_UNCHECKED, 0);
+    }
+    if (persist) PersistSettings(state);
+}
+
 void StopSamplingTimer(HWND window, AppState& state) {
     if (state.timerActive) KillTimer(window, kSampleTimerId);
     state.timerActive = false;
@@ -1575,6 +1729,7 @@ void ApplyPerformanceSnapshot(AppState& state, codex_monitor::CompletedSample co
         state.nextSlowSampleTick = GetTickCount64() + kSlowSampleIntervalMs;
     }
     UpdateModuleCards(state);
+    LayoutControls(state.mainWindow, state);
     UpdateStatusText(state);
 }
 
@@ -1600,6 +1755,7 @@ void ApplyCodexRefresh(
         state.latestCodexData.usage.lastValue.has_value() ||
         state.latestCodexData.threadList.lastValue.has_value();
     UpdateCodexCards(state);
+    LayoutControls(state.mainWindow, state);
     UpdateStatusText(state);
 }
 
@@ -1610,6 +1766,7 @@ void ApplyCodexActivityRefresh(
     state.codexActivityNextRefreshDelay = completed.nextRefreshDelay;
     state.hasCodexActivityRefresh = true;
     UpdateCodexActivityCards(state);
+    LayoutControls(state.mainWindow, state);
     UpdateStatusText(state);
 }
 
@@ -1623,6 +1780,7 @@ void ApplyServiceStatusRefresh(
     state.serviceStatusNextRefreshDelay = completed.nextRefreshDelay;
     state.hasServiceStatusRefresh = true;
     UpdateServiceStatusCards(state);
+    LayoutControls(state.mainWindow, state);
     UpdateStatusText(state);
 }
 
@@ -1633,6 +1791,7 @@ void ApplyWindowsUpdateCheck(
     state.latestUpdateInstall.reset();
     state.latestUpdateCheck = std::move(completed);
     RefreshUpdateControls(state);
+    LayoutControls(state.mainWindow, state);
     UpdateStatusText(state);
 }
 
@@ -1862,49 +2021,112 @@ void UpdatePageVisibility(AppState& state) {
 }
 
 void UpdateContentScrollBar(HWND window, AppState& state,
-                            int totalRows, int visibleRows) {
-    state.contentVisibleRows = std::max(1, visibleRows);
-    state.contentScrollMaximumRow = std::max(0, totalRows - state.contentVisibleRows);
-    state.contentScrollRow =
-        std::clamp(state.contentScrollRow, 0, state.contentScrollMaximumRow);
+                            int contentHeight, int viewportHeight) {
+    state.contentViewportHeight = std::max(1, viewportHeight);
+    state.contentScrollMaximum =
+        std::max(0, contentHeight - state.contentViewportHeight);
+    state.contentScrollOffset =
+        codex_monitor::ui_layout::ClampPixelScrollOffset(
+            state.contentScrollOffset, contentHeight,
+            state.contentViewportHeight);
 
     SCROLLINFO info{};
     info.cbSize = sizeof(info);
     info.fMask = SIF_RANGE | SIF_PAGE | SIF_POS;
     info.nMin = 0;
-    info.nMax = std::max(0, totalRows - 1);
-    info.nPage = static_cast<UINT>(state.contentVisibleRows);
-    info.nPos = state.contentScrollRow;
+    info.nMax = std::max(0, contentHeight - 1);
+    info.nPage = static_cast<UINT>(state.contentViewportHeight);
+    info.nPos = state.contentScrollOffset;
     SetScrollInfo(window, SB_VERT, &info, TRUE);
-    ShowScrollBar(window, SB_VERT, totalRows > state.contentVisibleRows);
+    ShowScrollBar(window, SB_VERT, contentHeight > state.contentViewportHeight);
+}
+
+int MeasureCardHeight(HWND window, const AppState& state, HWND card,
+                      int cardWidth) {
+    const int minimumHeight = ScaleForUi(
+        window, 96, state.settings.windowScale);
+    const int padding = ScaleForUi(
+        window, 10, state.settings.windowScale);
+    const int textWidth = std::max(1, cardWidth - padding * 2);
+    const int length = GetWindowTextLengthW(card);
+    if (length <= 0) return minimumHeight;
+    std::wstring text(static_cast<std::size_t>(length) + 1, L'\0');
+    const int copied = GetWindowTextW(card, text.data(), length + 1);
+    if (copied <= 0) return minimumHeight;
+    text.resize(static_cast<std::size_t>(copied));
+
+    HDC device = GetDC(card);
+    if (!device) return minimumHeight;
+    HFONT font = reinterpret_cast<HFONT>(
+        SendMessageW(card, WM_GETFONT, 0, 0));
+    HGDIOBJ oldFont = font ? SelectObject(device, font) : nullptr;
+    RECT measured{0, 0, textWidth, 0};
+    const int result = DrawTextW(
+        device, text.c_str(), static_cast<int>(text.size()), &measured,
+        DT_CALCRECT | DT_WORDBREAK | DT_EDITCONTROL | DT_NOPREFIX);
+    if (oldFont) SelectObject(device, oldFont);
+    ReleaseDC(card, device);
+    if (result <= 0) return minimumHeight;
+    const long long requested =
+        static_cast<long long>(measured.bottom - measured.top) + padding * 2LL;
+    return static_cast<int>(std::clamp<long long>(
+        requested, minimumHeight, std::numeric_limits<int>::max()));
+}
+
+void ClipCardToViewport(HWND card, int cardY, int cardWidth, int cardHeight,
+                        int viewportTop, int viewportBottom) {
+    const int visibleTop = std::max(cardY, viewportTop);
+    const int visibleBottom = std::min(cardY + cardHeight, viewportBottom);
+    if (visibleBottom <= visibleTop) {
+        ShowWindow(card, SW_HIDE);
+        return;
+    }
+    ShowWindow(card, SW_SHOW);
+    if (visibleTop == cardY && visibleBottom == cardY + cardHeight) {
+        SetWindowRgn(card, nullptr, TRUE);
+        return;
+    }
+    HRGN clip = CreateRectRgn(
+        0, visibleTop - cardY, cardWidth, visibleBottom - cardY);
+    if (clip && SetWindowRgn(card, clip, TRUE) == 0) DeleteObject(clip);
 }
 
 void LayoutCardGrid(HWND window, AppState& state, const std::vector<HWND>& cards,
                     int y, int width, int height, int margin, int gap) {
     if (cards.empty()) {
+        UpdateContentScrollBar(window, state, 0,
+                               std::max(1, height - y - margin));
+        return;
+    }
+    const bool useTwoColumns =
+        width >= ScaleForUi(window, 700, state.settings.windowScale) &&
+        cards.size() > 1;
+    const int columns = useTwoColumns ? 2 : 1;
+    const int cardWidth = (width - margin * 2 - gap * (columns - 1)) / columns;
+    std::vector<std::int32_t> cardHeights;
+    cardHeights.reserve(cards.size());
+    for (HWND card : cards) {
+        cardHeights.push_back(MeasureCardHeight(window, state, card, cardWidth));
+    }
+    const auto rows = codex_monitor::ui_layout::BuildVariableHeightGridRows(
+        cardHeights, columns, gap);
+    if (!rows) {
         UpdateContentScrollBar(window, state, 0, 1);
         return;
     }
-    const bool useTwoColumns = width >= ScaleForDpi(window, 700) && cards.size() > 1;
-    const int columns = useTwoColumns ? 2 : 1;
-    const int rows = (static_cast<int>(cards.size()) + columns - 1) / columns;
-    const int cardWidth = (width - margin * 2 - gap * (columns - 1)) / columns;
-    const int cardHeight = ScaleForDpi(window, 112);
-    const int rowStride = cardHeight + gap;
-    const int availableHeight = std::max(0, height - y - margin);
-    const int visibleRows = std::max(1, (availableHeight + gap) / rowStride);
-    UpdateContentScrollBar(window, state, rows, visibleRows);
+    const int viewportHeight = std::max(1, height - y - margin);
+    UpdateContentScrollBar(window, state, rows->totalHeight, viewportHeight);
+    const int viewportBottom = y + viewportHeight;
 
     for (std::size_t index = 0; index < cards.size(); ++index) {
-        const int row = static_cast<int>(index) / columns;
+        const std::size_t row = index / static_cast<std::size_t>(columns);
         const int column = static_cast<int>(index) % columns;
-        const bool rowVisible = row >= state.contentScrollRow &&
-            row < state.contentScrollRow + state.contentVisibleRows;
-        ShowWindow(cards[index], rowVisible ? SW_SHOW : SW_HIDE);
-        if (!rowVisible) continue;
         const int x = margin + column * (cardWidth + gap);
-        const int cardY = y + (row - state.contentScrollRow) * rowStride;
-        MoveWindow(cards[index], x, cardY, cardWidth, cardHeight, TRUE);
+        const int cardY = y + rows->offsets[row] - state.contentScrollOffset;
+        const int cardHeight = cardHeights[index];
+        MoveWindow(cards[index], x, cardY, cardWidth, cardHeight, FALSE);
+        ClipCardToViewport(cards[index], cardY, cardWidth, cardHeight,
+                           y, viewportBottom);
     }
 }
 
@@ -1913,25 +2135,32 @@ void LayoutControls(HWND window, AppState& state) {
     GetClientRect(window, &client);
     const int width = client.right - client.left;
     const int height = client.bottom - client.top;
-    const int margin = ScaleForDpi(window, 16);
-    const int gap = ScaleForDpi(window, 8);
-    const int actionButtonWidth = ScaleForDpi(window, 82);
-    const int buttonHeight = ScaleForDpi(window, 28);
+    const int margin = ScaleForUi(window, 16, state.settings.windowScale);
+    const int gap = ScaleForUi(window, 8, state.settings.windowScale);
+    const int actionButtonWidth =
+        ScaleForUi(window, 76, state.settings.windowScale);
+    const int buttonHeight =
+        ScaleForUi(window, 28, state.settings.windowScale);
 
-    const int actionsWidth = actionButtonWidth * 2 + gap;
-    const int headingWidth = std::max(ScaleForDpi(window, 110),
+    const int actionsWidth = actionButtonWidth * 3 + gap * 2;
+    const int headingWidth = std::max(
+        ScaleForUi(window, 96, state.settings.windowScale),
                                       width - margin * 2 - actionsWidth - gap);
-    MoveWindow(state.heading, margin, margin, headingWidth, ScaleForDpi(window, 28), TRUE);
+    MoveWindow(state.heading, margin, margin, headingWidth,
+               ScaleForUi(window, 28, state.settings.windowScale), TRUE);
     MoveWindow(state.pinButton, width - margin - actionsWidth, margin,
+               actionButtonWidth, buttonHeight, TRUE);
+    MoveWindow(state.windowLockButton,
+               width - margin - actionButtonWidth * 2 - gap, margin,
                actionButtonWidth, buttonHeight, TRUE);
     MoveWindow(state.minimizeButton, width - margin - actionButtonWidth, margin,
                actionButtonWidth, buttonHeight, TRUE);
 
-    int y = margin + ScaleForDpi(window, 38);
-    const int homeWidth = ScaleForDpi(window, 64);
-    const int codexWidth = ScaleForDpi(window, 64);
-    const int computerWidth = ScaleForDpi(window, 82);
-    const int settingsWidth = ScaleForDpi(window, 76);
+    int y = margin + ScaleForUi(window, 38, state.settings.windowScale);
+    const int homeWidth = ScaleForUi(window, 64, state.settings.windowScale);
+    const int codexWidth = ScaleForUi(window, 64, state.settings.windowScale);
+    const int computerWidth = ScaleForUi(window, 82, state.settings.windowScale);
+    const int settingsWidth = ScaleForUi(window, 76, state.settings.windowScale);
     int x = margin;
     MoveWindow(state.homePageButton, x, y, homeWidth, buttonHeight, TRUE);
     x += homeWidth + gap;
@@ -1941,30 +2170,49 @@ void LayoutControls(HWND window, AppState& state) {
     MoveWindow(state.settingsButton, width - margin - settingsWidth, y,
                settingsWidth, buttonHeight, TRUE);
 
-    y += ScaleForDpi(window, 36);
-    MoveWindow(state.subtitle, margin, y, width - margin * 2, ScaleForDpi(window, 22), TRUE);
-    y += ScaleForDpi(window, 24);
-    MoveWindow(state.status, margin, y, width - margin * 2, ScaleForDpi(window, 22), TRUE);
-    y += ScaleForDpi(window, 30);
+    y += ScaleForUi(window, 36, state.settings.windowScale);
+    MoveWindow(state.subtitle, margin, y, width - margin * 2,
+               ScaleForUi(window, 22, state.settings.windowScale), TRUE);
+    y += ScaleForUi(window, 24, state.settings.windowScale);
+    MoveWindow(state.status, margin, y, width - margin * 2,
+               ScaleForUi(window, 22, state.settings.windowScale), TRUE);
+    y += ScaleForUi(window, 30, state.settings.windowScale);
+
+    if (!state.availableUpdateVersion.empty()) {
+        const std::wstring version(
+            state.availableUpdateVersion.begin(),
+            state.availableUpdateVersion.end());
+        const std::wstring text = L"发现新版 " + version + L" · 点击查看更新";
+        SetWindowTextW(state.updateBannerButton, text.c_str());
+        const int bannerHeight =
+            ScaleForUi(window, 34, state.settings.windowScale);
+        MoveWindow(state.updateBannerButton, margin, y,
+                   width - margin * 2, bannerHeight, TRUE);
+        ShowWindow(state.updateBannerButton, SW_SHOW);
+        y += bannerHeight + ScaleForUi(window, 8, state.settings.windowScale);
+    } else {
+        ShowWindow(state.updateBannerButton, SW_HIDE);
+    }
 
     const std::vector<HWND> cards = VisiblePageCards(state);
     LayoutCardGrid(window, state, cards, y, width, height,
-                   margin, ScaleForDpi(window, 10));
+                   margin, ScaleForUi(window, 10, state.settings.windowScale));
     MoveWindow(state.codexNotice, margin, y, width - margin * 2,
-               std::max(ScaleForDpi(window, 130), height - y - margin), TRUE);
+               std::max(ScaleForUi(window, 130, state.settings.windowScale),
+                        height - y - margin), TRUE);
     MoveWindow(state.emptyHomeNotice, margin, y, width - margin * 2,
-               std::max(ScaleForDpi(window, 100), height - y - margin), TRUE);
+               std::max(ScaleForUi(window, 100, state.settings.windowScale),
+                        height - y - margin), TRUE);
 }
 
 bool CreateControls(HWND window, AppState& state) {
     state.mainWindow = window;
-    state.backgroundBrush = CreateSolidBrush(RGB(20, 24, 32));
-    state.cardBrush = CreateSolidBrush(RGB(31, 38, 50));
     state.heading = CreateLabel(window, L"Codex Monitor HUD", SS_LEFT | SS_CENTERIMAGE);
     state.subtitle = CreateLabel(window, L"Starting Windows product shell",
                                  SS_LEFT | SS_CENTERIMAGE);
     state.status = CreateLabel(window, L"Evaluating sampler demand", SS_LEFT | SS_CENTERIMAGE);
     state.pinButton = CreateButton(window, L"Unpin", kPinButtonId);
+    state.windowLockButton = CreateButton(window, L"Lock", kWindowLockButtonId);
     state.minimizeButton = CreateButton(window, L"Minimize", kMinimizeButtonId);
     state.homePageButton = CreateButton(window, L"Home", kHomePageButtonId,
                                         BS_AUTORADIOBUTTON | BS_PUSHLIKE | WS_GROUP);
@@ -1973,6 +2221,9 @@ bool CreateControls(HWND window, AppState& state) {
     state.computerPageButton = CreateButton(window, L"Computer", kComputerPageButtonId,
                                             BS_AUTORADIOBUTTON | BS_PUSHLIKE);
     state.settingsButton = CreateButton(window, L"Settings", kSettingsButtonId);
+    state.updateBannerButton = CreateButton(
+        window, L"发现新版 · 点击查看更新", kUpdateBannerButtonId,
+        BS_DEFPUSHBUTTON);
     state.codexNotice = CreateLabel(
         window,
         L"Codex 页面当前未选择任何模块。\r\n\r\n"
@@ -2002,8 +2253,10 @@ bool CreateControls(HWND window, AppState& state) {
         state.moduleViews.push_back(views);
     }
 
+    ApplyTheme(window, state);
     if (!state.backgroundBrush || !state.cardBrush || !state.heading || !state.subtitle ||
         !state.status || !state.pinButton || !state.minimizeButton ||
+        !state.windowLockButton || !state.updateBannerButton ||
         !state.homePageButton || !state.codexPageButton || !state.computerPageButton ||
         !state.settingsButton || !state.codexNotice || !state.emptyHomeNotice) {
         return false;
@@ -2014,6 +2267,8 @@ bool CreateControls(HWND window, AppState& state) {
 
     RecreateFonts(window, state);
     UpdateTopmostState(window, state, state.settings.alwaysOnTop, false);
+    UpdateWindowLockState(state, state.settings.windowLocked, false);
+    ApplyWindowOpacity(window, state);
     UpdatePageVisibility(state);
     LayoutControls(window, state);
     return true;
@@ -2037,6 +2292,7 @@ void CaptureWindowPlacement(HWND window, AppState& state) {
         rect.right - rect.left,
         rect.bottom - rect.top,
     };
+    state.settings.legacyWindowSizeNeedsMigration = false;
 }
 
 BOOL CALLBACK CollectMonitorWorkArea(HMONITOR monitor, HDC, LPRECT, LPARAM context) {
@@ -2060,31 +2316,136 @@ std::vector<codex_monitor::WindowPlacement> VisibleWorkAreas() {
     return areas;
 }
 
+codex_monitor::ui_layout::PixelRect ToPixelRect(const RECT& rect) {
+    return {rect.left, rect.top, rect.right, rect.bottom};
+}
+
+RECT ToWin32Rect(codex_monitor::ui_layout::PixelRect rect) {
+    return {rect.left, rect.top, rect.right, rect.bottom};
+}
+
+std::optional<RECT> MonitorWorkAreaForFrame(const RECT& frame) {
+    MONITORINFO info{};
+    info.cbSize = sizeof(info);
+    RECT mutableFrame = frame;
+    const HMONITOR monitor = MonitorFromRect(
+        &mutableFrame, MONITOR_DEFAULTTONEAREST);
+    if (!GetMonitorInfoW(monitor, &info)) return std::nullopt;
+    return info.rcWork;
+}
+
+std::optional<codex_monitor::ui_layout::PixelSize> BaseFrameSize(HWND window) {
+    return codex_monitor::ui_layout::ScaleLogicalSizeForDpi(
+        {kBaseFrameWidth, kBaseFrameHeight}, GetDpiForWindow(window));
+}
+
+std::optional<codex_monitor::ui_layout::UniformScaleLimits>
+ScaleLimitsForFrame(HWND window, const RECT& frame) {
+    const auto base = BaseFrameSize(window);
+    const auto work = MonitorWorkAreaForFrame(frame);
+    if (!base || !work) return std::nullopt;
+    return codex_monitor::ui_layout::ComputeUniformScaleLimits(
+        *base, ToPixelRect(*work),
+        ScaleForDpi(window, kResizeWorkAreaMargin));
+}
+
 void ClampWindowToVisibleScreens(HWND window, AppState& state) {
     if (!window || IsIconic(window)) return;
     RECT rect{};
     if (!GetWindowRect(window, &rect)) return;
-    const codex_monitor::WindowPlacement current{
-        rect.left,
-        rect.top,
-        rect.right - rect.left,
-        rect.bottom - rect.top,
-    };
-    const codex_monitor::WindowPlacement clamped =
-        codex_monitor::ClampWindowPlacement(current, VisibleWorkAreas());
-    if (clamped.x != current.x || clamped.y != current.y ||
-        clamped.width != current.width || clamped.height != current.height) {
-        SetWindowPos(window, nullptr, clamped.x, clamped.y, clamped.width, clamped.height,
+    const auto base = BaseFrameSize(window);
+    const auto work = MonitorWorkAreaForFrame(rect);
+    const auto limits = ScaleLimitsForFrame(window, rect);
+    if (!base || !work || !limits) return;
+    state.settings.windowScale = std::clamp(
+        state.settings.windowScale, limits->minimumScale,
+        limits->maximumScale);
+    const auto size = codex_monitor::ui_layout::FrameSizeForUniformScale(
+        *base, state.settings.windowScale);
+    if (!size) return;
+    const codex_monitor::ui_layout::PixelRect uniform{
+        rect.left, rect.top, rect.left + size->width, rect.top + size->height};
+    const auto clamped = codex_monitor::ui_layout::ClampFrameToWorkArea(
+        uniform, ToPixelRect(*work));
+    if (!clamped) return;
+    const RECT target = ToWin32Rect(*clamped);
+    if (target.left != rect.left || target.top != rect.top ||
+        target.right != rect.right || target.bottom != rect.bottom) {
+        SetWindowPos(window, nullptr, target.left, target.top,
+                     target.right - target.left, target.bottom - target.top,
                      SWP_NOACTIVATE | SWP_NOZORDER);
     }
-    state.settings.windowPlacement = clamped;
+    state.settings.windowPlacement = codex_monitor::WindowPlacement{
+        target.left, target.top, target.right - target.left,
+        target.bottom - target.top};
 }
 
-bool SetContentScrollRow(HWND window, AppState& state, int requestedRow) {
+void PlaceMainWindowInCorner(AppState& state,
+                             codex_monitor::ui_layout::WorkAreaCorner corner) {
+    if (!state.mainWindow || IsIconic(state.mainWindow)) return;
+    RECT frame{};
+    if (!GetWindowRect(state.mainWindow, &frame)) return;
+    const auto work = MonitorWorkAreaForFrame(frame);
+    if (!work) return;
+    const codex_monitor::ui_layout::PixelSize size{
+        frame.right - frame.left, frame.bottom - frame.top};
+    const auto placed = codex_monitor::ui_layout::PlaceFrameInWorkAreaCorner(
+        size, ToPixelRect(*work), corner,
+        ScaleForDpi(state.mainWindow, 24));
+    if (!placed) return;
+    SetWindowPos(state.mainWindow, nullptr, placed->left, placed->top, 0, 0,
+                 SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOZORDER);
+    CaptureWindowPlacement(state.mainWindow, state);
+    PersistSettings(state);
+}
+
+std::optional<codex_monitor::ui_layout::ResizeHandle>
+ResizeHandleFromSizingEdge(WPARAM edge) {
+    using codex_monitor::ui_layout::ResizeHandle;
+    switch (edge) {
+        case WMSZ_LEFT:
+            return ResizeHandle::kLeft;
+        case WMSZ_RIGHT:
+            return ResizeHandle::kRight;
+        case WMSZ_TOP:
+            return ResizeHandle::kTop;
+        case WMSZ_BOTTOM:
+            return ResizeHandle::kBottom;
+        case WMSZ_TOPLEFT:
+            return ResizeHandle::kTopLeft;
+        case WMSZ_TOPRIGHT:
+            return ResizeHandle::kTopRight;
+        case WMSZ_BOTTOMLEFT:
+            return ResizeHandle::kBottomLeft;
+        case WMSZ_BOTTOMRIGHT:
+            return ResizeHandle::kBottomRight;
+        default:
+            return std::nullopt;
+    }
+}
+
+bool ConstrainInteractiveSizing(HWND window, AppState& state,
+                                WPARAM sizingEdge, RECT& proposed) {
+    const auto handle = ResizeHandleFromSizingEdge(sizingEdge);
+    const auto base = BaseFrameSize(window);
+    const auto limits = ScaleLimitsForFrame(window, proposed);
+    if (!handle || !base || !limits) return false;
+    const auto constrained = codex_monitor::ui_layout::ConstrainUniformResize(
+        ToPixelRect(state.interactiveStartFrame), ToPixelRect(proposed), *base,
+        *handle, state.interactiveStartScale, *limits);
+    if (!constrained) return false;
+    proposed = ToWin32Rect(*constrained);
+    state.settings.windowScale = std::clamp(
+        static_cast<double>(proposed.right - proposed.left) / base->width,
+        limits->minimumScale, limits->maximumScale);
+    return true;
+}
+
+bool SetContentScrollOffset(HWND window, AppState& state, int requestedOffset) {
     const int clamped =
-        std::clamp(requestedRow, 0, state.contentScrollMaximumRow);
-    if (clamped == state.contentScrollRow) return false;
-    state.contentScrollRow = clamped;
+        std::clamp(requestedOffset, 0, state.contentScrollMaximum);
+    if (clamped == state.contentScrollOffset) return false;
+    state.contentScrollOffset = clamped;
     LayoutControls(window, state);
     return true;
 }
@@ -2092,7 +2453,7 @@ bool SetContentScrollRow(HWND window, AppState& state, int requestedRow) {
 void SwitchPage(HWND window, AppState& state, codex_monitor::Page page) {
     if (state.settings.currentPage == page) return;
     state.settings.currentPage = page;
-    state.contentScrollRow = 0;
+    state.contentScrollOffset = 0;
     state.wheelDeltaRemainder = 0;
     UpdatePageVisibility(state);
     if (state.hasPerformanceSnapshot) UpdateModuleCards(state);
@@ -2258,6 +2619,20 @@ void RefreshSettingsControls(AppState& state) {
     }
     SendMessageW(state.settingsTopmostCheck, BM_SETCHECK,
                  state.settings.alwaysOnTop ? BST_CHECKED : BST_UNCHECKED, 0);
+    SendMessageW(state.settingsWindowLockCheck, BM_SETCHECK,
+                 state.settings.windowLocked ? BST_CHECKED : BST_UNCHECKED, 0);
+    for (std::size_t index = 0; index < kOpacityChoices.size(); ++index) {
+        SendMessageW(state.settingsOpacityButtons[index], BM_SETCHECK,
+                     state.settings.opacityPercent == kOpacityChoices[index]
+                         ? BST_CHECKED
+                         : BST_UNCHECKED,
+                     0);
+        SendMessageW(state.settingsThemeButtons[index], BM_SETCHECK,
+                     state.settings.theme == kThemeChoices[index]
+                         ? BST_CHECKED
+                         : BST_UNCHECKED,
+                     0);
+    }
     RefreshUpdateControls(state);
     LayoutSettingsControls(state.settingsWindow, state);
 }
@@ -2283,8 +2658,7 @@ void LayoutSettingsControls(HWND window, AppState& state) {
     const int rowCount = static_cast<int>(state.settings.homeOrder.size());
     const int contentHeight = margin + headingAdvance +
         rowCount * (rowHeight + gap) + ScaleForDpi(window, 4) +
-        rowHeight + ScaleForDpi(window, 8) + rowHeight +
-        ScaleForDpi(window, 12) + rowHeight + margin;
+        rowHeight * 7 + ScaleForDpi(window, 68) + margin;
     state.settingsScrollMaximum = std::max(0, contentHeight - height);
     state.settingsScrollOffset =
         std::clamp(state.settingsScrollOffset, 0, state.settingsScrollMaximum);
@@ -2322,6 +2696,42 @@ void LayoutSettingsControls(HWND window, AppState& state) {
     MoveWindow(state.settingsTopmostCheck, margin, y,
                width - margin * 2, rowHeight, TRUE);
     y += rowHeight + ScaleForDpi(window, 8);
+    MoveWindow(state.settingsWindowLockCheck, margin, y,
+               width - margin * 2, rowHeight, TRUE);
+    y += rowHeight + ScaleForDpi(window, 8);
+
+    const int optionLabelWidth = ScaleForDpi(window, 104);
+    const int optionGap = ScaleForDpi(window, 5);
+    const int optionWidth = std::max(
+        ScaleForDpi(window, 58),
+        (width - margin * 2 - optionLabelWidth - optionGap * 4) / 4);
+    MoveWindow(state.settingsCornerLabel, margin, y,
+               optionLabelWidth, rowHeight, TRUE);
+    int optionX = margin + optionLabelWidth + optionGap;
+    for (HWND button : state.settingsCornerButtons) {
+        MoveWindow(button, optionX, y, optionWidth, rowHeight, TRUE);
+        optionX += optionWidth + optionGap;
+    }
+    y += rowHeight + ScaleForDpi(window, 8);
+
+    MoveWindow(state.settingsOpacityLabel, margin, y,
+               optionLabelWidth, rowHeight, TRUE);
+    optionX = margin + optionLabelWidth + optionGap;
+    for (HWND button : state.settingsOpacityButtons) {
+        MoveWindow(button, optionX, y, optionWidth, rowHeight, TRUE);
+        optionX += optionWidth + optionGap;
+    }
+    y += rowHeight + ScaleForDpi(window, 8);
+
+    MoveWindow(state.settingsThemeLabel, margin, y,
+               optionLabelWidth, rowHeight, TRUE);
+    optionX = margin + optionLabelWidth + optionGap;
+    for (HWND button : state.settingsThemeButtons) {
+        MoveWindow(button, optionX, y, optionWidth, rowHeight, TRUE);
+        optionX += optionWidth + optionGap;
+    }
+    y += rowHeight + ScaleForDpi(window, 8);
+
     const int updateButtonWidth = ScaleForDpi(window, 104);
     const int installButtonWidth = ScaleForDpi(window, 112);
     const int updateButtonsWidth = updateButtonWidth + installButtonWidth + gap;
@@ -2389,6 +2799,41 @@ bool CreateSettingsControls(HWND window, AppState& state) {
         0, 0, 0, 0, window,
         reinterpret_cast<HMENU>(static_cast<INT_PTR>(kSettingsTopmostId)),
         GetModuleHandleW(nullptr), nullptr);
+    state.settingsWindowLockCheck = CreateWindowExW(
+        0, L"BUTTON", L"锁定主窗口位置和大小",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
+        0, 0, 0, 0, window,
+        reinterpret_cast<HMENU>(static_cast<INT_PTR>(kSettingsWindowLockId)),
+        GetModuleHandleW(nullptr), nullptr);
+    state.settingsCornerLabel = CreateLabel(
+        window, L"窗口位置", SS_LEFT | SS_CENTERIMAGE);
+    constexpr std::array<const wchar_t*, 4> cornerLabels{
+        L"左上", L"右上", L"左下", L"右下"};
+    for (std::size_t index = 0; index < cornerLabels.size(); ++index) {
+        state.settingsCornerButtons[index] = CreateButton(
+            window, cornerLabels[index],
+            kSettingsCornerBaseId + static_cast<int>(index));
+    }
+    state.settingsOpacityLabel = CreateLabel(
+        window, L"整体透明度", SS_LEFT | SS_CENTERIMAGE);
+    constexpr std::array<const wchar_t*, 4> opacityLabels{
+        L"70%", L"82%", L"90%", L"100%"};
+    for (std::size_t index = 0; index < opacityLabels.size(); ++index) {
+        state.settingsOpacityButtons[index] = CreateButton(
+            window, opacityLabels[index],
+            kSettingsOpacityBaseId + static_cast<int>(index),
+            BS_AUTORADIOBUTTON | (index == 0 ? WS_GROUP : 0));
+    }
+    state.settingsThemeLabel = CreateLabel(
+        window, L"低饱和主题", SS_LEFT | SS_CENTERIMAGE);
+    constexpr std::array<const wchar_t*, 4> themeLabels{
+        L"蓝", L"绿", L"紫", L"橙"};
+    for (std::size_t index = 0; index < themeLabels.size(); ++index) {
+        state.settingsThemeButtons[index] = CreateButton(
+            window, themeLabels[index],
+            kSettingsThemeBaseId + static_cast<int>(index),
+            BS_AUTORADIOBUTTON | (index == 0 ? WS_GROUP : 0));
+    }
     state.settingsUpdateStatus = CreateLabel(
         window, L"每天自动检查一次，也可以手动检查",
         SS_LEFT | SS_CENTERIMAGE);
@@ -2399,6 +2844,8 @@ bool CreateSettingsControls(HWND window, AppState& state) {
     state.settingsCloseButton = CreateButton(window, L"Close", kSettingsCloseId);
 
     if (!state.settingsHeading || !state.settingsTopmostCheck ||
+        !state.settingsWindowLockCheck || !state.settingsCornerLabel ||
+        !state.settingsOpacityLabel || !state.settingsThemeLabel ||
         !state.settingsUpdateStatus || !state.settingsCheckUpdatesButton ||
         !state.settingsInstallUpdateButton || !state.settingsCloseButton) {
         return false;
@@ -2406,6 +2853,13 @@ bool CreateSettingsControls(HWND window, AppState& state) {
     for (const SettingsRow& row : state.settingsRows) {
         if (!row.nameLabel || !row.homeVisibleCheck || !row.nativeVisibleCheck ||
             !row.moveUpButton || !row.moveDownButton) return false;
+    }
+    for (std::size_t index = 0; index < 4; ++index) {
+        if (!state.settingsCornerButtons[index] ||
+            !state.settingsOpacityButtons[index] ||
+            !state.settingsThemeButtons[index]) {
+            return false;
+        }
     }
 
     RecreateSettingsFonts(window, state);
@@ -2416,7 +2870,6 @@ bool CreateSettingsControls(HWND window, AppState& state) {
 void OpenSettingsWindow(HWND owner, AppState& state) {
     if (state.settingsWindow) {
         ShowWindow(state.settingsWindow, SW_SHOWNORMAL);
-        SetForegroundWindow(state.settingsWindow);
         return;
     }
 
@@ -2538,6 +2991,43 @@ LRESULT CALLBACK SettingsWindowProcedure(HWND window, UINT message,
                 const bool enabled =
                     SendMessageW(state->settingsTopmostCheck, BM_GETCHECK, 0, 0) == BST_CHECKED;
                 UpdateTopmostState(state->mainWindow, *state, enabled, true);
+                return 0;
+            }
+            if (controlId == kSettingsWindowLockId) {
+                const bool locked =
+                    SendMessageW(state->settingsWindowLockCheck,
+                                 BM_GETCHECK, 0, 0) == BST_CHECKED;
+                UpdateWindowLockState(*state, locked, true);
+                return 0;
+            }
+            if (controlId >= kSettingsCornerBaseId &&
+                controlId < kSettingsCornerBaseId +
+                                static_cast<int>(kCornerChoices.size())) {
+                const std::size_t index = static_cast<std::size_t>(
+                    controlId - kSettingsCornerBaseId);
+                PlaceMainWindowInCorner(*state, kCornerChoices[index]);
+                return 0;
+            }
+            if (controlId >= kSettingsOpacityBaseId &&
+                controlId < kSettingsOpacityBaseId +
+                                static_cast<int>(kOpacityChoices.size())) {
+                const std::size_t index = static_cast<std::size_t>(
+                    controlId - kSettingsOpacityBaseId);
+                state->settings.opacityPercent = kOpacityChoices[index];
+                ApplyWindowOpacity(state->mainWindow, *state);
+                RefreshSettingsControls(*state);
+                PersistSettings(*state);
+                return 0;
+            }
+            if (controlId >= kSettingsThemeBaseId &&
+                controlId < kSettingsThemeBaseId +
+                                static_cast<int>(kThemeChoices.size())) {
+                const std::size_t index = static_cast<std::size_t>(
+                    controlId - kSettingsThemeBaseId);
+                state->settings.theme = kThemeChoices[index];
+                ApplyTheme(state->mainWindow, *state);
+                RefreshSettingsControls(*state);
+                PersistSettings(*state);
                 return 0;
             }
             if (controlId == kSettingsCheckUpdatesId) {
@@ -2686,6 +3176,13 @@ LRESULT CALLBACK SettingsWindowProcedure(HWND window, UINT message,
                 state->settingsWindow = nullptr;
                 state->settingsHeading = nullptr;
                 state->settingsTopmostCheck = nullptr;
+                state->settingsWindowLockCheck = nullptr;
+                state->settingsCornerLabel = nullptr;
+                state->settingsCornerButtons.fill(nullptr);
+                state->settingsOpacityLabel = nullptr;
+                state->settingsOpacityButtons.fill(nullptr);
+                state->settingsThemeLabel = nullptr;
+                state->settingsThemeButtons.fill(nullptr);
                 state->settingsUpdateStatus = nullptr;
                 state->settingsCheckUpdatesButton = nullptr;
                 state->settingsInstallUpdateButton = nullptr;
@@ -2754,6 +3251,10 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
                 case kPinButtonId:
                     UpdateTopmostState(window, *state, !state->settings.alwaysOnTop, true);
                     return 0;
+                case kWindowLockButtonId:
+                    UpdateWindowLockState(
+                        *state, !state->settings.windowLocked, true);
+                    return 0;
                 case kMinimizeButtonId:
                     ShowWindow(window, SW_MINIMIZE);
                     return 0;
@@ -2769,8 +3270,58 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
                 case kSettingsButtonId:
                     OpenSettingsWindow(window, *state);
                     return 0;
+                case kUpdateBannerButtonId:
+                    OpenSettingsWindow(window, *state);
+                    return 0;
                 default:
                     break;
+            }
+            break;
+
+        case WM_SYSCOMMAND:
+            if (state && state->settings.windowLocked) {
+                const WPARAM command = wParam & 0xFFF0U;
+                if (command == SC_MOVE || command == SC_SIZE) return 0;
+            }
+            break;
+
+        case WM_ENTERSIZEMOVE:
+            if (state && GetWindowRect(window, &state->interactiveStartFrame)) {
+                state->interactiveMoveOrResize = true;
+                state->interactiveStartScale = state->settings.windowScale;
+            }
+            return 0;
+
+        case WM_SIZING:
+            if (state) {
+                auto* proposed = reinterpret_cast<RECT*>(lParam);
+                if (!proposed) return FALSE;
+                if (state->settings.windowLocked) {
+                    if (!state->interactiveMoveOrResize) {
+                        GetWindowRect(window, &state->interactiveStartFrame);
+                    }
+                    *proposed = state->interactiveStartFrame;
+                    return TRUE;
+                }
+                if (!state->interactiveMoveOrResize &&
+                    GetWindowRect(window, &state->interactiveStartFrame)) {
+                    state->interactiveMoveOrResize = true;
+                    state->interactiveStartScale = state->settings.windowScale;
+                }
+                return ConstrainInteractiveSizing(
+                           window, *state, wParam, *proposed)
+                           ? TRUE
+                           : FALSE;
+            }
+            return FALSE;
+
+        case WM_MOVING:
+            if (state && state->settings.windowLocked && lParam != 0) {
+                if (!state->interactiveMoveOrResize) {
+                    GetWindowRect(window, &state->interactiveStartFrame);
+                }
+                *reinterpret_cast<RECT*>(lParam) = state->interactiveStartFrame;
+                return TRUE;
             }
             break;
 
@@ -2872,25 +3423,29 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
 
         case WM_VSCROLL:
             if (state) {
-                int requestedRow = state->contentScrollRow;
+                int requestedOffset = state->contentScrollOffset;
+                const int line = ScaleForUi(
+                    window, 36, state->settings.windowScale);
+                const int page = std::max(
+                    line, state->contentViewportHeight - line);
                 switch (LOWORD(wParam)) {
                     case SB_LINEUP:
-                        --requestedRow;
+                        requestedOffset -= line;
                         break;
                     case SB_LINEDOWN:
-                        ++requestedRow;
+                        requestedOffset += line;
                         break;
                     case SB_PAGEUP:
-                        requestedRow -= state->contentVisibleRows;
+                        requestedOffset -= page;
                         break;
                     case SB_PAGEDOWN:
-                        requestedRow += state->contentVisibleRows;
+                        requestedOffset += page;
                         break;
                     case SB_TOP:
-                        requestedRow = 0;
+                        requestedOffset = 0;
                         break;
                     case SB_BOTTOM:
-                        requestedRow = state->contentScrollMaximumRow;
+                        requestedOffset = state->contentScrollMaximum;
                         break;
                     case SB_THUMBPOSITION:
                     case SB_THUMBTRACK: {
@@ -2898,14 +3453,14 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
                         info.cbSize = sizeof(info);
                         info.fMask = SIF_TRACKPOS;
                         if (GetScrollInfo(window, SB_VERT, &info)) {
-                            requestedRow = info.nTrackPos;
+                            requestedOffset = info.nTrackPos;
                         }
                         break;
                     }
                     default:
                         return 0;
                 }
-                SetContentScrollRow(window, *state, requestedRow);
+                SetContentScrollOffset(window, *state, requestedOffset);
             }
             return 0;
 
@@ -2915,8 +3470,11 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
                 const int steps = state->wheelDeltaRemainder / WHEEL_DELTA;
                 state->wheelDeltaRemainder -= steps * WHEEL_DELTA;
                 if (steps != 0) {
-                    SetContentScrollRow(
-                        window, *state, state->contentScrollRow - steps);
+                    SetContentScrollOffset(
+                        window, *state,
+                        state->contentScrollOffset -
+                            steps * ScaleForUi(
+                                window, 48, state->settings.windowScale));
                 }
             }
             return 0;
@@ -2931,6 +3489,10 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
                         ClampWindowToVisibleScreens(window, *state);
                         CaptureWindowPlacement(window, *state);
                         PersistSettings(*state);
+                    }
+                    if (std::fabs(state->appliedMainUiScale -
+                                  state->settings.windowScale) >= 0.01) {
+                        RecreateFonts(window, *state);
                     }
                     LayoutControls(window, *state);
                 }
@@ -2952,6 +3514,10 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
 
         case WM_EXITSIZEMOVE:
             if (state) {
+                state->interactiveMoveOrResize = false;
+                RecreateFonts(window, *state);
+                ClampWindowToVisibleScreens(window, *state);
+                LayoutControls(window, *state);
                 CaptureWindowPlacement(window, *state);
                 PersistSettings(*state);
             }
@@ -2976,10 +3542,18 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
                         monitorInfo.rcWork.right - monitorInfo.rcWork.left;
                     const int workHeight =
                         monitorInfo.rcWork.bottom - monitorInfo.rcWork.top;
-                    limits->ptMinTrackSize.x =
-                        std::min(ScaleForDpi(window, kMinimumWidth), workWidth);
-                    limits->ptMinTrackSize.y =
-                        std::min(ScaleForDpi(window, kMinimumHeight), workHeight);
+                    const auto base = BaseFrameSize(window);
+                    const auto minimum = base
+                        ? codex_monitor::ui_layout::FrameSizeForUniformScale(
+                              *base,
+                              codex_monitor::ui_layout::kMinimumUniformScale)
+                        : std::nullopt;
+                    limits->ptMinTrackSize.x = minimum
+                        ? std::min(minimum->width, workWidth)
+                        : std::min(ScaleForDpi(window, 345), workWidth);
+                    limits->ptMinTrackSize.y = minimum
+                        ? std::min(minimum->height, workHeight)
+                        : std::min(ScaleForDpi(window, 510), workHeight);
                     limits->ptMaxTrackSize.x = workWidth;
                     limits->ptMaxTrackSize.y = workHeight;
                 }
@@ -2989,10 +3563,43 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         case WM_DPICHANGED:
             if (state) {
                 const auto* suggested = reinterpret_cast<const RECT*>(lParam);
-                SetWindowPos(window, nullptr, suggested->left, suggested->top,
-                             suggested->right - suggested->left,
-                             suggested->bottom - suggested->top,
-                             SWP_NOACTIVATE | SWP_NOZORDER);
+                const UINT newDpi = LOWORD(wParam);
+                const auto base =
+                    codex_monitor::ui_layout::ScaleLogicalSizeForDpi(
+                        {kBaseFrameWidth, kBaseFrameHeight}, newDpi);
+                const auto work = MonitorWorkAreaForFrame(*suggested);
+                if (base && work) {
+                    const auto scaleLimits =
+                        codex_monitor::ui_layout::ComputeUniformScaleLimits(
+                            *base, ToPixelRect(*work),
+                            MulDiv(kResizeWorkAreaMargin,
+                                   static_cast<int>(newDpi), 96));
+                    if (scaleLimits) {
+                        state->settings.windowScale = std::clamp(
+                            state->settings.windowScale,
+                            scaleLimits->minimumScale,
+                            scaleLimits->maximumScale);
+                    }
+                    const auto size =
+                        codex_monitor::ui_layout::FrameSizeForUniformScale(
+                            *base, state->settings.windowScale);
+                    if (size) {
+                        const codex_monitor::ui_layout::PixelRect desired{
+                            suggested->left, suggested->top,
+                            suggested->left + size->width,
+                            suggested->top + size->height};
+                        const auto clamped =
+                            codex_monitor::ui_layout::ClampFrameToWorkArea(
+                                desired, ToPixelRect(*work));
+                        if (clamped) {
+                            SetWindowPos(
+                                window, nullptr, clamped->left, clamped->top,
+                                clamped->right - clamped->left,
+                                clamped->bottom - clamped->top,
+                                SWP_NOACTIVATE | SWP_NOZORDER);
+                        }
+                    }
+                }
                 ClampWindowToVisibleScreens(window, *state);
                 RecreateFonts(window, *state);
                 LayoutControls(window, *state);
@@ -3007,7 +3614,8 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
                 HWND control = reinterpret_cast<HWND>(lParam);
                 SetBkMode(device, TRANSPARENT);
                 const bool isCard = IsCardControl(*state, control);
-                SetTextColor(device, isCard ? RGB(228, 233, 241) : RGB(203, 211, 223));
+                SetTextColor(device, isCard ? state->primaryTextColor
+                                            : state->secondaryTextColor);
                 return reinterpret_cast<INT_PTR>(isCard ? state->cardBrush
                                                         : state->backgroundBrush);
             }
@@ -3079,31 +3687,53 @@ bool RegisterWindowClasses(HINSTANCE instance) {
     return RegisterClassExW(&settingsClass) != 0;
 }
 
-codex_monitor::WindowPlacement DefaultWindowPlacement(UINT dpi) {
-    const int width = MulDiv(460, static_cast<int>(dpi), 96);
-    const int height = MulDiv(680, static_cast<int>(dpi), 96);
+codex_monitor::WindowPlacement InitialWindowPlacement(AppState& state, UINT dpi) {
     RECT workArea{};
     SystemParametersInfoW(SPI_GETWORKAREA, 0, &workArea, 0);
-    const int edgeMargin = MulDiv(24, static_cast<int>(dpi), 96);
-    return {
-        workArea.left + edgeMargin,
-        std::max(workArea.top + edgeMargin, workArea.bottom - height - edgeMargin),
-        width,
-        height,
-    };
-}
-
-codex_monitor::WindowPlacement InitialWindowPlacement(const AppState& state, UINT dpi) {
-    codex_monitor::WindowPlacement placement = DefaultWindowPlacement(dpi);
     if (state.settings.windowPlacement) {
-        const int minimumWidth = MulDiv(kMinimumWidth, static_cast<int>(dpi), 96);
-        const int minimumHeight = MulDiv(kMinimumHeight, static_cast<int>(dpi), 96);
-        if (state.settings.windowPlacement->width >= minimumWidth &&
-            state.settings.windowPlacement->height >= minimumHeight) {
-            placement = *state.settings.windowPlacement;
+        const auto& saved = *state.settings.windowPlacement;
+        RECT probe{saved.x, saved.y, saved.x + std::max(saved.width, 1),
+                   saved.y + std::max(saved.height, 1)};
+        MONITORINFO info{};
+        info.cbSize = sizeof(info);
+        if (GetMonitorInfoW(
+                MonitorFromRect(&probe, MONITOR_DEFAULTTONEAREST), &info)) {
+            workArea = info.rcWork;
         }
     }
-    return codex_monitor::ClampWindowPlacement(placement, VisibleWorkAreas());
+    const auto base = codex_monitor::ui_layout::ScaleLogicalSizeForDpi(
+        {kBaseFrameWidth, kBaseFrameHeight}, dpi);
+    if (!base) return {};
+    const auto limits = codex_monitor::ui_layout::ComputeUniformScaleLimits(
+        *base, ToPixelRect(workArea),
+        MulDiv(kResizeWorkAreaMargin, static_cast<int>(dpi), 96));
+    if (limits) {
+        state.settings.windowScale = std::clamp(
+            state.settings.windowScale, limits->minimumScale,
+            limits->maximumScale);
+    } else {
+        state.settings.windowScale = 1.0;
+    }
+    const auto size = codex_monitor::ui_layout::FrameSizeForUniformScale(
+        *base, state.settings.windowScale);
+    if (!size) return {};
+
+    const int edgeMargin = MulDiv(24, static_cast<int>(dpi), 96);
+    int x = workArea.left + edgeMargin;
+    int y = std::max(
+        workArea.top + edgeMargin,
+        workArea.bottom - size->height - edgeMargin);
+    if (state.settings.windowPlacement) {
+        x = state.settings.windowPlacement->x;
+        y = state.settings.windowPlacement->y;
+    }
+    const auto clamped = codex_monitor::ui_layout::ClampFrameToWorkArea(
+        {x, y, x + size->width, y + size->height}, ToPixelRect(workArea));
+    if (!clamped) return {};
+    state.settings.legacyWindowSizeNeedsMigration = false;
+    return {clamped->left, clamped->top,
+            clamped->right - clamped->left,
+            clamped->bottom - clamped->top};
 }
 
 }  // namespace
@@ -3128,8 +3758,6 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand) {
     HANDLE singleton = CreateMutexW(nullptr, TRUE, kSingletonName);
     if (!singleton) return 1;
     if (GetLastError() == ERROR_ALREADY_EXISTS) {
-        MessageBoxW(nullptr, L"Codex Monitor HUD is already running.", kWindowTitle,
-                    MB_OK | MB_ICONINFORMATION);
         CloseHandle(singleton);
         return 0;
     }
@@ -3149,7 +3777,10 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand) {
     const DWORD windowStyle = WS_CAPTION | WS_SYSMENU | WS_THICKFRAME |
                               WS_MINIMIZEBOX | WS_CLIPCHILDREN | WS_VSCROLL;
     const DWORD extendedStyle = WS_EX_APPWINDOW |
-                                (state.settings.alwaysOnTop ? WS_EX_TOPMOST : 0);
+                                (state.settings.alwaysOnTop ? WS_EX_TOPMOST : 0) |
+                                (state.settings.opacityPercent < 100
+                                     ? WS_EX_LAYERED
+                                     : 0);
     HWND window = CreateWindowExW(
         extendedStyle, kWindowClassName, kWindowTitle, windowStyle,
         placement.x, placement.y, placement.width, placement.height,

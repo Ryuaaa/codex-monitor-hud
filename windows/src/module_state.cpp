@@ -2,6 +2,9 @@
 
 #include <algorithm>
 #include <charconv>
+#include <cmath>
+#include <cstdlib>
+#include <iomanip>
 #include <sstream>
 
 namespace codex_monitor {
@@ -178,6 +181,28 @@ Page PageFromKey(std::string_view key) {
     return Page::kHome;
 }
 
+std::string_view ThemeKey(HudTheme theme) {
+    switch (theme) {
+        case HudTheme::kBlue:
+            return "blue";
+        case HudTheme::kGreen:
+            return "green";
+        case HudTheme::kPurple:
+            return "purple";
+        case HudTheme::kOrange:
+            return "orange";
+    }
+    return "blue";
+}
+
+std::optional<HudTheme> ThemeFromKey(std::string_view key) {
+    if (key == "blue") return HudTheme::kBlue;
+    if (key == "green") return HudTheme::kGreen;
+    if (key == "purple") return HudTheme::kPurple;
+    if (key == "orange") return HudTheme::kOrange;
+    return std::nullopt;
+}
+
 std::vector<std::string_view> Split(std::string_view value, char delimiter) {
     std::vector<std::string_view> result;
     std::size_t start = 0;
@@ -200,6 +225,21 @@ std::optional<int> ParseInt(std::string_view value) {
     const auto result = std::from_chars(begin, end, parsed);
     if (result.ec != std::errc{} || result.ptr != end) return std::nullopt;
     return parsed;
+}
+
+std::optional<double> ParseDouble(std::string_view value) {
+    if (value.empty() || value.size() > 32) return std::nullopt;
+    const std::string copy(value);
+    char* end = nullptr;
+    const double parsed = std::strtod(copy.c_str(), &end);
+    if (!end || end != copy.c_str() + copy.size() || !std::isfinite(parsed)) {
+        return std::nullopt;
+    }
+    return parsed;
+}
+
+bool IsSupportedOpacity(int value) {
+    return value == 70 || value == 82 || value == 90 || value == 100;
 }
 
 long long IntersectionArea(const WindowPlacement& left, const WindowPlacement& right) {
@@ -336,9 +376,18 @@ bool MoveHomeModule(SettingsState& settings, ModuleId id, int direction) {
 std::string SerializeSettings(const SettingsState& settings) {
     const std::vector<ModuleId> order = SanitizeHomeOrder(settings.homeOrder);
     std::ostringstream output;
-    output << "version=8\n";
+    output << "version=9\n";
     output << "page=" << PageKey(settings.currentPage) << '\n';
     output << "always_on_top=" << (settings.alwaysOnTop ? 1 : 0) << '\n';
+    output << "window_locked=" << (settings.windowLocked ? 1 : 0) << '\n';
+    output << "window_scale=" << std::fixed << std::setprecision(4)
+           << std::clamp(settings.windowScale, 0.75, 8.0) << '\n';
+    output << "opacity_percent="
+           << (IsSupportedOpacity(settings.opacityPercent)
+                   ? settings.opacityPercent
+                   : 100)
+           << '\n';
+    output << "theme=" << ThemeKey(settings.theme) << '\n';
     output << "home_order=";
     for (std::size_t index = 0; index < order.size(); ++index) {
         if (index > 0) output << ',';
@@ -374,6 +423,8 @@ SettingsState ParseSettings(std::string_view text) {
     bool homeVisibleKeyFound = false;
     bool nativeVisibleKeyFound = false;
     bool nativeVisibleKeySeen = false;
+    bool windowKeyFound = false;
+    bool windowScaleKeyFound = false;
     std::optional<int> version;
     std::vector<ModuleId> requestedOrder;
 
@@ -391,6 +442,22 @@ SettingsState ParseSettings(std::string_view text) {
         } else if (key == "always_on_top") {
             if (value == "0") settings.alwaysOnTop = false;
             if (value == "1") settings.alwaysOnTop = true;
+        } else if (key == "window_locked") {
+            if (value == "0") settings.windowLocked = false;
+            if (value == "1") settings.windowLocked = true;
+        } else if (key == "window_scale") {
+            if (const auto scale = ParseDouble(value);
+                scale && *scale >= 0.75 && *scale <= 8.0) {
+                settings.windowScale = *scale;
+                windowScaleKeyFound = true;
+            }
+        } else if (key == "opacity_percent") {
+            if (const auto opacity = ParseInt(value);
+                opacity && IsSupportedOpacity(*opacity)) {
+                settings.opacityPercent = *opacity;
+            }
+        } else if (key == "theme") {
+            if (const auto theme = ThemeFromKey(value)) settings.theme = *theme;
         } else if (key == "home_order") {
             requestedOrder.clear();
             for (std::string_view token : Split(value, ',')) {
@@ -432,6 +499,7 @@ SettingsState ParseSettings(std::string_view text) {
             const auto height = ParseInt(parts[3]);
             if (x && y && width && height && *width >= 100 && *height >= 100) {
                 settings.windowPlacement = WindowPlacement{*x, *y, *width, *height};
+                windowKeyFound = true;
             }
         }
     }
@@ -458,10 +526,12 @@ SettingsState ParseSettings(std::string_view text) {
         // any file exists. An empty file is damaged existing state, so it must
         // not silently opt the user into newly introduced work.
         const bool useForecastDefault =
-            (version == 5 || version == 6 || version == 7 || version == 8) &&
+            (version == 5 || version == 6 || version == 7 || version == 8 ||
+             version == 9) &&
             !nativeVisibleKeySeen;
         const bool useActivityDefault =
-            (version == 7 || version == 8) && !nativeVisibleKeySeen;
+            (version == 7 || version == 8 || version == 9) &&
+            !nativeVisibleKeySeen;
         if (!useForecastDefault) {
             settings.nativePageVisible[ModuleIndex(ModuleId::kCodexQuotaForecast)] =
                 false;
@@ -471,6 +541,8 @@ SettingsState ParseSettings(std::string_view text) {
                 false;
         }
     }
+    settings.legacyWindowSizeNeedsMigration =
+        windowKeyFound && !windowScaleKeyFound;
     return settings;
 }
 

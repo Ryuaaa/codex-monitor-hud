@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <limits>
+#include <vector>
 
 namespace {
 
@@ -328,6 +329,35 @@ void TestCoordinateOverflowIsRejected() {
            "a RECT whose mathematical width exceeds signed range must be rejected");
 }
 
+void TestVariableHeightGridAndPixelScrolling() {
+    const auto rows = layout::BuildVariableHeightGridRows(
+        {80, 140, 100, 220, 90}, 2, 12);
+    Expect(rows.has_value(), "variable-height cards must produce row geometry");
+    Expect(rows->offsets == std::vector<std::int32_t>({0, 152, 384}),
+           "row offsets must include the preceding tallest card and gap");
+    Expect(rows->heights == std::vector<std::int32_t>({140, 220, 90}),
+           "each grid row must use its tallest card");
+    Expect(rows->totalHeight == 474,
+           "the final content height must omit a trailing gap");
+
+    Expect(layout::ClampPixelScrollOffset(70, rows->totalHeight, 300) == 70,
+           "pixel scrolling must retain an in-range offset");
+    Expect(layout::ClampPixelScrollOffset(999, rows->totalHeight, 300) == 174,
+           "pixel scrolling must stop at the content bottom");
+    Expect(layout::ClampPixelScrollOffset(-20, rows->totalHeight, 300) == 0,
+           "pixel scrolling must stop at the content top");
+    Expect(layout::ClampPixelScrollOffset(40, 200, 300) == 0,
+           "content shorter than its viewport must not scroll");
+
+    Expect(!layout::BuildVariableHeightGridRows({80, 0}, 2, 8),
+           "zero-height cards must be rejected");
+    Expect(!layout::BuildVariableHeightGridRows({80}, 0, 8),
+           "zero columns must be rejected");
+    Expect(!layout::BuildVariableHeightGridRows(
+               {std::numeric_limits<std::int32_t>::max(), 1}, 1, 1),
+           "grid content arithmetic must reject signed overflow");
+}
+
 }  // namespace
 
 int main() {
@@ -338,6 +368,7 @@ int main() {
     TestConstrainedResizeComposition();
     TestFourCornerPlacementAndWorkAreaClamping();
     TestCoordinateOverflowIsRejected();
+    TestVariableHeightGridAndPixelScrolling();
     std::cout << "windows_ui_layout_math_tests=pass\n";
     return 0;
 }

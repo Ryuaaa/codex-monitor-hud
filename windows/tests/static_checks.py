@@ -513,6 +513,10 @@ def main() -> None:
             "restored and resized frames can be moved back onscreen",
         "ScaleLogicalSizeForDpi":
             "DPI conversion is checked independently of Win32 window state",
+        "BuildVariableHeightGridRows":
+            "variable-height cards share portable checked row geometry",
+        "ClampPixelScrollOffset":
+            "pixel scroll bounds are portable and deterministic",
         "kInt32Maximum":
             "coordinate arithmetic has explicit signed 32-bit bounds",
     }
@@ -536,6 +540,10 @@ def main() -> None:
             "DPI overflow behavior is fixed",
         "a RECT whose mathematical width exceeds signed range must be rejected":
             "coordinate overflow behavior is fixed",
+        "each grid row must use its tallest card":
+            "variable-height two-column layout is fixed by a sample",
+        "pixel scrolling must stop at the content bottom":
+            "long-card scrolling has a fixed pixel boundary sample",
     }
     for token, reason in ui_layout_math_test_contracts.items():
         require(UI_LAYOUT_MATH_TEST, token, reason)
@@ -673,15 +681,17 @@ def main() -> None:
         "intentionally empty homepage": "all-hidden homepage intent is fixed",
         "unknown page must fall back to home": "damaged settings have a safe fallback",
         "off-screen saved window must return": "monitor removal recovery is fixed",
-        "TestVersionEightRoundTripAndIndependentQuotaSwitches":
-            "the independent quota switches and version 8 schema have a round-trip test",
+        "TestVersionNineRoundTripAndIndependentQuotaSwitches":
+            "the independent quota switches and version 9 appearance schema have a round-trip test",
         "TestVersionSevenIoMigrationPreservesExplicitChoices":
             "the new I/O module migrates version 7 settings without coupling quotas",
+        "TestLegacyShapeMigrationKeepsOriginAndResetsUniformScale":
+            "old independently shaped windows migrate to a uniform frame",
         "TestVersionThreeMigrationPreservesExplicitVisibility":
             "version 3 settings retain explicit visibility when the service module is added",
         "TestVersionOneMigrationPreservesOldHomeChoices":
             "version 1 settings migrate without enabling new Home work",
-        '"version=8\\n"': "the current persisted settings schema is version 8",
+        '"version=9\\n"': "the current persisted settings schema is version 9",
         '"version=1\\n"': "the previous settings schema has an explicit migration fixture",
     }
     for token, reason in state_test_contracts.items():
@@ -1630,7 +1640,26 @@ def main() -> None:
         "app-server 进程范围": "task status is visibly scoped to this app-server process",
         "WM_VSCROLL": "overflowing cards support scrollbar navigation",
         "WM_MOUSEWHEEL": "overflowing cards support wheel navigation",
-        "UpdateContentScrollBar": "scroll range follows visible card rows",
+        "UpdateContentScrollBar": "scroll range follows measured card pixels",
+        "MeasureCardHeight": "card height follows its wrapped display text",
+        "BuildVariableHeightGridRows":
+            "dynamic card rows use the tested portable layout model",
+        "SetContentScrollOffset":
+            "wheel and native scrollbar input share pixel clamping",
+        "WM_ENTERSIZEMOVE":
+            "interactive resize captures a stable opposite-edge anchor",
+        "WM_SIZING": "corner and side dragging are constrained uniformly",
+        "ConstrainUniformResize":
+            "interactive Win32 sizing uses the tested portable math",
+        "windowScale": "uniform visual scale is persisted and applied",
+        "kSettingsWindowLockId":
+            "settings expose a position-and-size lock",
+        "kSettingsCornerBaseId": "settings expose four corner presets",
+        "kSettingsOpacityBaseId": "settings expose bounded whole-window opacity",
+        "kSettingsThemeBaseId": "settings expose four low-saturation themes",
+        "kWindowLockButtonId": "the main window exposes a direct lock toggle",
+        "kUpdateBannerButtonId":
+            "an available update is a visible user-clicked path",
         "homeVisibleCheck": "settings expose the Home visibility checkbox",
         "nativeVisibleCheck": "settings expose the own-page visibility checkbox",
         "kSettingsVisibleBaseId": "Home checkbox commands are independently routed",
@@ -1663,6 +1692,10 @@ def main() -> None:
     }
     for token, reason in main_codex_contracts.items():
         require(MAIN, token, reason)
+    reject(MAIN, "SetForegroundWindow",
+           "settings and automatic update paths must not force foreground focus")
+    reject(MAIN, "MessageBox",
+           "background and duplicate-instance paths must not interrupt the user")
     if MAIN.count("UpdateCodexDemand(") < 5:
         raise AssertionError(
             "Codex demand must be reconsidered on startup, page/settings changes, and minimize/restore"

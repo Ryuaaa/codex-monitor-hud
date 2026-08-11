@@ -342,4 +342,46 @@ std::optional<PixelRect> PlaceFrameInWorkAreaCorner(
     return CheckedRect(left, top, frameSize.width, frameSize.height);
 }
 
+std::optional<VariableHeightGridRows> BuildVariableHeightGridRows(
+    const std::vector<std::int32_t>& cardHeights,
+    std::int32_t columns,
+    std::int32_t gapPixels) {
+    if (columns <= 0 || gapPixels < 0) return std::nullopt;
+    VariableHeightGridRows result;
+    if (cardHeights.empty()) return result;
+
+    std::int64_t offset = 0;
+    for (std::size_t start = 0; start < cardHeights.size();
+         start += static_cast<std::size_t>(columns)) {
+        std::int32_t rowHeight = 0;
+        const std::size_t end = std::min(
+            cardHeights.size(),
+            start + static_cast<std::size_t>(columns));
+        for (std::size_t index = start; index < end; ++index) {
+            if (cardHeights[index] <= 0) return std::nullopt;
+            rowHeight = std::max(rowHeight, cardHeights[index]);
+        }
+        if (offset > kInt32Maximum) return std::nullopt;
+        result.offsets.push_back(static_cast<std::int32_t>(offset));
+        result.heights.push_back(rowHeight);
+        offset += rowHeight;
+        if (end < cardHeights.size()) offset += gapPixels;
+        if (offset > kInt32Maximum) return std::nullopt;
+    }
+    result.totalHeight = static_cast<std::int32_t>(offset);
+    return result;
+}
+
+std::int32_t ClampPixelScrollOffset(
+    std::int32_t requestedOffset,
+    std::int32_t contentHeight,
+    std::int32_t viewportHeight) {
+    if (contentHeight <= 0 || viewportHeight <= 0 ||
+        contentHeight <= viewportHeight) {
+        return 0;
+    }
+    const std::int32_t maximum = contentHeight - viewportHeight;
+    return std::clamp(requestedOffset, 0, maximum);
+}
+
 }  // namespace codex_monitor::ui_layout
