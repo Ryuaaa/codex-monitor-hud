@@ -588,8 +588,8 @@ def main() -> None:
     for token, reason in system_io_native_contracts.items():
         require(SYSTEM_IO_SAMPLER, token, reason)
     require(SYSTEM_IO_SAMPLER,
-            "#include <sdkddkver.h>\n#include <winsock2.h>\n#include <windows.h>\n#include <iphlpapi.h>",
-            "the SDK target gate and Winsock order must precede the IP Helper API")
+            "#include <sdkddkver.h>\n#include <winsock2.h>\n#include <ws2tcpip.h>\n#include <windows.h>\n#include <iphlpapi.h>",
+            "the SDK target gate and Winsock IP definitions must precede the IP Helper API")
     require(SYSTEM_IO_SAMPLER, "#include <iphlpapi.h>",
             "the supported IP Helper umbrella header exposes GetIfTable2 and MIB_IF_TABLE2")
     reject(SYSTEM_IO_SAMPLER_HEADER, "winsock2.h",
