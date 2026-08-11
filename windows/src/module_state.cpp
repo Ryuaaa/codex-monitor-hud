@@ -79,7 +79,7 @@ constexpr std::array<ModuleDefinition, kModuleCount> kRegistry{{
      true,
      false,
      false,
-     false,
+     true,
      true},
     {ModuleId::kCodexWeeklyQuota,
      "codex-weekly-quota",
@@ -89,7 +89,7 @@ constexpr std::array<ModuleDefinition, kModuleCount> kRegistry{{
      true,
      false,
      false,
-     false,
+     true,
      true},
     {ModuleId::kCodexQuotaForecast,
      "codex-quota-forecast",
@@ -130,7 +130,7 @@ constexpr std::array<ModuleDefinition, kModuleCount> kRegistry{{
      false,
      false,
      false,
-     false},
+     true},
     {ModuleId::kCodexTaskActivity,
      "codex-task-activity",
      L"Codex current task activity (local estimate)",
@@ -139,7 +139,7 @@ constexpr std::array<ModuleDefinition, kModuleCount> kRegistry{{
      false,
      true,
      false,
-     false,
+     true,
      true},
     {ModuleId::kCodexRecentTasks,
      "codex-recent-tasks",
@@ -573,12 +573,19 @@ SettingsState ParseSettings(std::string_view text) {
     }
 
     settings.homeOrder = SanitizeHomeOrder(requestedOrder);
-    // Missing visibility keys mean an older settings file. Registry defaults
-    // enable the current performance cards, keep Codex Home cards off, and
-    // establish independent defaults for the native pages.
+    // Missing visibility keys mean an older or damaged settings file. Keep
+    // newly defaulted Codex homepage work off here; a genuine new install is
+    // created directly through DefaultSettings() before any file exists.
     if (!homeVisibleKeyFound) {
         for (std::size_t index = 0; index < kRegistry.size(); ++index) {
             settings.homeVisible[index] = kRegistry[index].defaultHomeVisible;
+        }
+        for (const ModuleId id : {
+                 ModuleId::kCodexFiveHourQuota,
+                 ModuleId::kCodexWeeklyQuota,
+                 ModuleId::kCodexTaskActivity,
+             }) {
+            settings.homeVisible[ModuleIndex(id)] = false;
         }
     }
     if (!nativeVisibleKeyFound) {
@@ -608,6 +615,11 @@ SettingsState ParseSettings(std::string_view text) {
             settings.nativePageVisible[ModuleIndex(ModuleId::kCodexTaskActivity)] =
                 false;
         }
+        // Cost history performs a bounded local session scan. Only a genuine
+        // new install may receive its new default; a missing or damaged
+        // existing native selection must not silently start that work.
+        settings.nativePageVisible[
+            ModuleIndex(ModuleId::kCodexTokenCostEstimate)] = false;
     }
     settings.legacyWindowSizeNeedsMigration =
         windowKeyFound && !windowScaleKeyFound;

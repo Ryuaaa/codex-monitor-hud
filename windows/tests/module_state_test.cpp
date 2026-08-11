@@ -31,16 +31,21 @@ void TestNewInstallDefaultsUseRegistryPolicy() {
            "every registered module must have a homepage order entry");
 
     const std::vector<ModuleId> home = codex_monitor::VisibleHomeModules(settings);
-    Expect(home.size() == 5,
-           "the system diagnosis and four original performance modules are visible on a new homepage");
+    Expect(home.size() == 8,
+           "a new homepage must combine five core performance cards with quotas and current activity");
     Expect(Contains(home, ModuleId::kSystemDiagnosis),
            "the system diagnosis must be visible on a new homepage");
     Expect(codex_monitor::HomeNeedsPerformanceData(settings),
            "the default homepage must request performance data");
-    Expect(!codex_monitor::HomeNeedsCodexData(settings),
-           "new Codex modules must not silently add homepage data work");
-    Expect(!codex_monitor::HomeNeedsCodexActivity(settings),
-           "task activity must not add homepage filesystem work by default");
+    Expect(Contains(home, ModuleId::kCodexFiveHourQuota) &&
+               Contains(home, ModuleId::kCodexWeeklyQuota),
+           "a new homepage must show both independently selectable quota windows");
+    Expect(Contains(home, ModuleId::kCodexTaskActivity),
+           "a new homepage must show current task activity at a glance");
+    Expect(codex_monitor::HomeNeedsCodexData(settings),
+           "visible homepage quotas must request the existing low-frequency Codex refresh");
+    Expect(codex_monitor::HomeNeedsCodexActivity(settings),
+           "visible current activity must request its demand-gated local scan");
     Expect(!codex_monitor::HomeNeedsServiceStatus(settings),
            "the service-status module must not add homepage network work by default");
 
@@ -66,8 +71,8 @@ void TestNewInstallDefaultsUseRegistryPolicy() {
 
     const std::vector<ModuleId> codex =
         codex_monitor::VisibleModulesForNativePage(settings, Page::kCodex);
-    Expect(codex.size() == 7,
-           "the Codex page defaults to quotas, forecast, subscription, current activity, recent history, and service status");
+    Expect(codex.size() == 8,
+           "the Codex page defaults to quotas, forecast, subscription, cost estimate, current activity, recent history, and service status");
     Expect(Contains(codex, ModuleId::kCodexFiveHourQuota),
            "the five-hour quota must be visible on a new Codex page");
     Expect(Contains(codex, ModuleId::kCodexWeeklyQuota),
@@ -82,8 +87,10 @@ void TestNewInstallDefaultsUseRegistryPolicy() {
            "OpenAI service status must be visible on a new Codex page");
     Expect(!Contains(codex, ModuleId::kCodexAccountTokenUsage),
            "account Token usage must default to off");
-    Expect(!Contains(codex, ModuleId::kCodexTokenCostEstimate),
-           "Token cost Beta must default to off until the user enables it");
+    Expect(Contains(codex, ModuleId::kCodexTokenCostEstimate),
+           "Token and API-equivalent cost estimates must be visible on the Codex page but remain off the homepage");
+    Expect(!Contains(home, ModuleId::kCodexTokenCostEstimate),
+           "the heavier local cost scan must not run from the homepage by default");
     Expect(codex_monitor::VisibleModulesForNativePage(settings, Page::kHome).empty(),
            "Home is composed by its own order and must not be a native module page");
 }
