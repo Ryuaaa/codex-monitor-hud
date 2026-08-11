@@ -170,26 +170,30 @@ std::optional<std::filesystem::path> NormalizeAbsolutePath(
 
 WindowsMsiIdentityVerificationStatus OpenAndHoldSafeAncestors(
     const std::filesystem::path& absolutePath,
-    std::vector<FileHandle>* heldAncestors) {
+    std::vector<FileHandle>* heldAncestors,
+    bool callerHoldsActiveLocks) {
     const std::filesystem::path parent = absolutePath.parent_path();
     if (parent.empty() || parent.root_path().empty()) {
         return WindowsMsiIdentityVerificationStatus::kPathResolutionFailed;
     }
 
-    const auto openAndHold = [heldAncestors](
+    const auto openAndHold = [heldAncestors, callerHoldsActiveLocks](
                                  const std::filesystem::path& current,
                                  bool volumeRoot) {
-        // Permit ordinary reads and writes inside the directory while
-        // withholding FILE_SHARE_DELETE so this exact ancestor cannot be
-        // renamed or replaced until verification finishes.
+        // Standalone verification actively withholds FILE_SHARE_DELETE.
+        // Inside the apply transaction, the caller already holds that lock;
+        // this second identity handle must share DELETE to avoid conflicting
+        // with the retained outer handle.
+        const DWORD desiredAccess = FILE_READ_ATTRIBUTES |
+            ((!volumeRoot && !callerHoldsActiveLocks) ? DELETE : 0U);
+        const DWORD shareMode = FILE_SHARE_READ | FILE_SHARE_WRITE |
+            (callerHoldsActiveLocks ? FILE_SHARE_DELETE : 0U);
         FileHandle ancestor(CreateFileW(
-            current.c_str(), FILE_READ_ATTRIBUTES |
-                (volumeRoot ? 0U : DELETE),
-            FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+            current.c_str(), desiredAccess, shareMode, nullptr,
             OPEN_EXISTING,
             FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
             nullptr));
-        if (!ancestor && !volumeRoot &&
+        if (!ancestor && !callerHoldsActiveLocks && !volumeRoot &&
             GetLastError() == ERROR_ACCESS_DENIED) {
             // The same token cannot rename an ancestor on which DELETE is
             // denied. Retain an identity handle for that protected ancestor;
@@ -592,11 +596,12 @@ WindowsMsiIdentityPolicyStatus ValidateWindowsMsiIdentity(
 }
 
 WindowsMsiIdentityVerificationResult
-VerifyWindowsMsiIdentityAndPublisher(
+VerifyWindowsMsiIdentityAndPublisherImpl(
     const std::filesystem::path& installerPath,
     std::string_view expectedVersion,
     const std::optional<PublisherCertificateSha256>&
-        trustedPublisherFingerprint) noexcept {
+        trustedPublisherFingerprint,
+    bool callerHoldsActiveLocks) noexcept {
     if (!trustedPublisherFingerprint.has_value()) {
         return VerificationFailure(
             WindowsMsiIdentityVerificationStatus::
@@ -622,7 +627,9 @@ VerifyWindowsMsiIdentityAndPublisher(
 
         std::vector<FileHandle> heldAncestors;
         const WindowsMsiIdentityVerificationStatus ancestorStatus =
-            OpenAndHoldSafeAncestors(*normalizedPath, &heldAncestors);
+            OpenAndHoldSafeAncestors(
+                *normalizedPath, &heldAncestors,
+                callerHoldsActiveLocks);
         if (ancestorStatus != WindowsMsiIdentityVerificationStatus::kVerified) {
             return VerificationFailure(ancestorStatus);
         }
@@ -755,6 +762,7 @@ VerifyWindowsMsiIdentityAndPublisher(
         return result;
 #else
         (void)installerPath;
+        (void)callerHoldsActiveLocks;
         return VerificationFailure(
             WindowsMsiIdentityVerificationStatus::kUnsupportedPlatform);
 #endif
@@ -762,6 +770,26 @@ VerifyWindowsMsiIdentityAndPublisher(
         return VerificationFailure(
             WindowsMsiIdentityVerificationStatus::kUnexpected);
     }
+}
+
+WindowsMsiIdentityVerificationResult
+VerifyWindowsMsiIdentityAndPublisher(
+    const std::filesystem::path& installerPath,
+    std::string_view expectedVersion,
+    const std::optional<PublisherCertificateSha256>&
+        trustedPublisherFingerprint) noexcept {
+    return VerifyWindowsMsiIdentityAndPublisherImpl(
+        installerPath, expectedVersion, trustedPublisherFingerprint, false);
+}
+
+WindowsMsiIdentityVerificationResult
+VerifyLockedWindowsMsiIdentityAndPublisher(
+    const std::filesystem::path& installerPath,
+    std::string_view expectedVersion,
+    const std::optional<PublisherCertificateSha256>&
+        trustedPublisherFingerprint) noexcept {
+    return VerifyWindowsMsiIdentityAndPublisherImpl(
+        installerPath, expectedVersion, trustedPublisherFingerprint, true);
 }
 
 }  // namespace codex_monitor::update

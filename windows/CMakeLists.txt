@@ -314,6 +314,34 @@ if(BUILD_TESTING)
     add_test(NAME windows_update_helper
         COMMAND CodexMonitorUpdateHelperTests)
     set_tests_properties(windows_update_helper PROPERTIES TIMEOUT 20)
+
+    add_executable(CodexMonitorUpdateInstallTests
+        src/update/github_release_selector.cpp
+        src/update/update_apply_transaction_win32.cpp
+        src/update/update_asset_download_win32.cpp
+        src/update/update_helper_launcher_win32.cpp
+        src/update/update_helper_win32.cpp
+        src/update/update_install_win32.cpp
+        src/update/update_installed_hud_win32.cpp
+        src/update/update_installer_verifier_win32.cpp
+        src/update/update_msi_identity_win32.cpp
+        tests/update_install_test.cpp
+    )
+    configure_codex_monitor_target(CodexMonitorUpdateInstallTests)
+    if(WIN32)
+        target_compile_definitions(CodexMonitorUpdateInstallTests PRIVATE
+            UNICODE
+            _UNICODE
+            NOMINMAX
+            WINVER=0x0A00
+            _WIN32_WINNT=0x0A00
+        )
+        target_link_libraries(CodexMonitorUpdateInstallTests PRIVATE
+            advapi32 bcrypt crypt32 msi shell32 user32 version winhttp wintrust)
+    endif()
+    add_test(NAME windows_update_install
+        COMMAND CodexMonitorUpdateInstallTests)
+    set_tests_properties(windows_update_install PROPERTIES TIMEOUT 20)
 endif()
 
 if(WIN32)
@@ -434,6 +462,24 @@ if(WIN32)
         add_test(NAME windows_update_worker
             COMMAND CodexMonitorUpdateWorkerTests)
         set_tests_properties(windows_update_worker PROPERTIES TIMEOUT 20)
+
+        add_executable(CodexMonitorUpdateInstallWorkerTests
+            src/update/update_install_worker.cpp
+            tests/update_install_worker_test.cpp
+        )
+        configure_codex_monitor_target(CodexMonitorUpdateInstallWorkerTests)
+        target_compile_definitions(CodexMonitorUpdateInstallWorkerTests PRIVATE
+            UNICODE
+            _UNICODE
+            NOMINMAX
+            WINVER=0x0A00
+            _WIN32_WINNT=0x0A00
+        )
+        target_link_libraries(CodexMonitorUpdateInstallWorkerTests PRIVATE
+            user32)
+        add_test(NAME windows_update_install_worker
+            COMMAND CodexMonitorUpdateInstallWorkerTests)
+        set_tests_properties(windows_update_install_worker PROPERTIES TIMEOUT 20)
 
         add_executable(CodexMonitorServiceStatusWorkerTests
             src/service_status_worker.cpp
@@ -578,6 +624,8 @@ if(WIN32)
         src/update/update_fetch_win32.cpp
         src/update/update_helper_win32.cpp
         src/update/update_helper_launcher_win32.cpp
+        src/update/update_install_win32.cpp
+        src/update/update_install_worker.cpp
         src/update/update_installed_hud_win32.cpp
         src/update/update_installer_verifier_win32.cpp
         src/update/update_msi_identity_win32.cpp

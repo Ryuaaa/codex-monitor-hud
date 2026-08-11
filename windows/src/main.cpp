@@ -23,8 +23,9 @@
 #include "service_status_worker.h"
 #include "settings_store_win32.h"
 #include "snapshot_math.h"
-#include "update/update_worker.h"
 #include "update/update_helper_win32.h"
+#include "update/update_install_worker.h"
+#include "update/update_worker.h"
 
 #include <algorithm>
 #include <chrono>
@@ -67,12 +68,14 @@ constexpr int kSettingsMoveDownBaseId = 3200;
 constexpr int kSettingsTopmostId = 3300;
 constexpr int kSettingsCloseId = 3301;
 constexpr int kSettingsCheckUpdatesId = 3302;
+constexpr int kSettingsInstallUpdateId = 3303;
 constexpr int kSettingsNativeVisibleBaseId = 3400;
 constexpr UINT_PTR kSampleTimerId = 2001;
 constexpr UINT kSampleReadyMessage = WM_APP + 1;
 constexpr UINT kCodexReadyMessage = WM_APP + 2;
 constexpr UINT kServiceStatusReadyMessage = WM_APP + 3;
 constexpr UINT kUpdateReadyMessage = WM_APP + 4;
+constexpr UINT kUpdateInstallReadyMessage = WM_APP + 5;
 constexpr UINT kFastSampleIntervalMs = 5000;
 constexpr ULONGLONG kSlowSampleIntervalMs = 20000;
 constexpr int kMinimumWidth = 390;
@@ -111,6 +114,7 @@ struct AppState {
     HWND settingsTopmostCheck = nullptr;
     HWND settingsUpdateStatus = nullptr;
     HWND settingsCheckUpdatesButton = nullptr;
+    HWND settingsInstallUpdateButton = nullptr;
     HWND settingsCloseButton = nullptr;
     std::vector<ModuleViews> moduleViews;
     std::vector<SettingsRow> settingsRows;
@@ -137,6 +141,7 @@ struct AppState {
     bool serviceStatusLastRefreshSucceeded = false;
     bool serviceStatusShowingLastKnown = false;
     bool updateWorkerAvailable = false;
+    bool updateInstallWorkerAvailable = false;
     int contentScrollRow = 0;
     int contentScrollMaximumRow = 0;
     int contentVisibleRows = 1;
@@ -163,8 +168,11 @@ struct AppState {
         serviceStatusLastSuccessfulRefresh;
     std::chrono::seconds serviceStatusNextRefreshDelay{60};
     codex_monitor::update::WindowsUpdateWorker updateWorker;
+    codex_monitor::update::WindowsUpdateInstallWorker updateInstallWorker;
     std::optional<codex_monitor::update::CompletedWindowsUpdateCheck>
         latestUpdateCheck;
+    std::optional<codex_monitor::update::WindowsUpdateInstallResult>
+        latestUpdateInstall;
     std::string availableUpdateVersion;
 };
 
@@ -244,6 +252,7 @@ void RecreateSettingsFonts(HWND window, AppState& state) {
     ApplyFont(state.settingsTopmostCheck, state.settingsSmallFont);
     ApplyFont(state.settingsUpdateStatus, state.settingsSmallFont);
     ApplyFont(state.settingsCheckUpdatesButton, state.settingsSmallFont);
+    ApplyFont(state.settingsInstallUpdateButton, state.settingsSmallFont);
     ApplyFont(state.settingsCloseButton, state.settingsSmallFont);
     for (const SettingsRow& row : state.settingsRows) {
         ApplyFont(row.nameLabel, state.settingsSmallFont);
@@ -1336,7 +1345,9 @@ void UpdateStatusText(AppState& state) {
     if (!needsPerformance && !needsCodex && !needsService) {
         output << L"  |  No active data modules";
     }
-    if (!state.availableUpdateVersion.empty()) {
+    if (state.updateInstallWorker.IsBusy()) {
+        output << L"  |  Update: preparing";
+    } else if (!state.availableUpdateVersion.empty()) {
         output << L"  |  Update: "
                << std::wstring(state.availableUpdateVersion.begin(),
                                state.availableUpdateVersion.end());
@@ -1443,6 +1454,7 @@ void ApplyWindowsUpdateCheck(
     AppState& state,
     codex_monitor::update::CompletedWindowsUpdateCheck completed) {
     state.availableUpdateVersion = completed.availableVersion;
+    state.latestUpdateInstall.reset();
     state.latestUpdateCheck = std::move(completed);
     RefreshUpdateControls(state);
     UpdateStatusText(state);
@@ -1883,14 +1895,71 @@ void SwitchPage(HWND window, AppState& state, codex_monitor::Page page) {
     PersistSettings(state);
 }
 
+const codex_monitor::update::SelectedWindowsRelease*
+FreshWindowsReleaseForInstall(const AppState& state) {
+    if (!state.latestUpdateCheck || state.latestUpdateCheck->fromCache ||
+        state.latestUpdateCheck->result.status !=
+            codex_monitor::update::WindowsUpdateCheckStatus::kUpdateAvailable ||
+        !state.latestUpdateCheck->result.release.has_value() ||
+        state.latestUpdateCheck->availableVersion !=
+            state.latestUpdateCheck->result.release->version.canonical) {
+        return nullptr;
+    }
+    return &*state.latestUpdateCheck->result.release;
+}
+
+std::wstring WindowsUpdateInstallFailureText(
+    codex_monitor::update::WindowsUpdateInstallStatus status) {
+    using codex_monitor::update::WindowsUpdateInstallStatus;
+    switch (status) {
+        case WindowsUpdateInstallStatus::kHelperStarted:
+            return L"更新已校验，正在安全重启…";
+        case WindowsUpdateInstallStatus::kCancelled:
+            return L"更新已取消；当前版本继续运行";
+        case WindowsUpdateInstallStatus::kPublisherNotConfigured:
+            return L"此构建未配置正式发布者签名";
+        case WindowsUpdateInstallStatus::kUpdateDirectoryUnavailable:
+            return L"无法创建安全更新目录；未安装";
+        case WindowsUpdateInstallStatus::kChecksumDownloadFailed:
+        case WindowsUpdateInstallStatus::kChecksumReadFailed:
+        case WindowsUpdateInstallStatus::kChecksumRejected:
+            return L"更新校验文件失败；未安装";
+        case WindowsUpdateInstallStatus::kInstallerDownloadFailed:
+            return L"安装包下载失败；未安装";
+        case WindowsUpdateInstallStatus::kHelperLaunchFailed:
+            return L"安全启动检查失败；未安装";
+        case WindowsUpdateInstallStatus::kInvalidInput:
+            return L"更新信息不完整；请重新检查";
+        case WindowsUpdateInstallStatus::kUnsupportedPlatform:
+            return L"当前系统不支持自动安装";
+        case WindowsUpdateInstallStatus::kUnexpected:
+            return L"自动更新失败；当前版本继续运行";
+    }
+    return L"自动更新失败；当前版本继续运行";
+}
+
 void RefreshUpdateControls(AppState& state) {
-    if (!state.settingsUpdateStatus || !state.settingsCheckUpdatesButton) {
+    if (!state.settingsUpdateStatus || !state.settingsCheckUpdatesButton ||
+        !state.settingsInstallUpdateButton) {
         return;
     }
+    const bool checking =
+        state.updateWorkerAvailable && state.updateWorker.IsBusy();
+    const bool installing = state.updateInstallWorkerAvailable &&
+                            state.updateInstallWorker.IsBusy();
+    const bool publisherConfigured =
+        codex_monitor::update::
+            ConfiguredWindowsUpdatePublisherFingerprint().has_value();
+    const auto* freshRelease = FreshWindowsReleaseForInstall(state);
     std::wstring message;
-    if (!state.updateWorkerAvailable) {
+    if (installing) {
+        message = L"正在下载并校验 Windows 更新…";
+    } else if (state.latestUpdateInstall.has_value()) {
+        message = WindowsUpdateInstallFailureText(
+            state.latestUpdateInstall->status);
+    } else if (!state.updateWorkerAvailable) {
         message = L"Windows 更新检查当前不可用";
-    } else if (state.updateWorker.IsBusy()) {
+    } else if (checking) {
         message = L"正在检查 Windows 更新…";
     } else if (!state.latestUpdateCheck) {
         message = L"每天自动检查一次，也可以手动检查";
@@ -1925,7 +1994,17 @@ void RefreshUpdateControls(AppState& state) {
     }
     SetWindowTextW(state.settingsUpdateStatus, message.c_str());
     EnableWindow(state.settingsCheckUpdatesButton,
-                 state.updateWorkerAvailable && !state.updateWorker.IsBusy());
+                 state.updateWorkerAvailable && !checking && !installing);
+    const bool installEnabled =
+        state.updateInstallWorkerAvailable && publisherConfigured &&
+        freshRelease != nullptr && !state.settingsPath.empty() &&
+        !checking && !installing;
+    EnableWindow(state.settingsInstallUpdateButton, installEnabled);
+    SetWindowTextW(
+        state.settingsInstallUpdateButton,
+        installing ? L"正在准备…"
+                   : (!publisherConfigured ? L"签名后启用"
+                                           : L"安装更新"));
 }
 
 void RefreshSettingsControls(AppState& state) {
@@ -2016,13 +2095,19 @@ void LayoutSettingsControls(HWND window, AppState& state) {
                width - margin * 2, rowHeight, TRUE);
     y += rowHeight + ScaleForDpi(window, 8);
     const int updateButtonWidth = ScaleForDpi(window, 104);
+    const int installButtonWidth = ScaleForDpi(window, 112);
+    const int updateButtonsWidth = updateButtonWidth + installButtonWidth + gap;
     MoveWindow(state.settingsUpdateStatus, margin, y,
                std::max(ScaleForDpi(window, 180),
-                        width - margin * 2 - updateButtonWidth - gap),
+                        width - margin * 2 - updateButtonsWidth - gap),
                rowHeight, TRUE);
     MoveWindow(state.settingsCheckUpdatesButton,
-               width - margin - updateButtonWidth, y,
+               width - margin - installButtonWidth - gap - updateButtonWidth,
+               y,
                updateButtonWidth, rowHeight, TRUE);
+    MoveWindow(state.settingsInstallUpdateButton,
+               width - margin - installButtonWidth, y,
+               installButtonWidth, rowHeight, TRUE);
     y += rowHeight + ScaleForDpi(window, 12);
     MoveWindow(state.settingsCloseButton, width - margin - ScaleForDpi(window, 82), y,
                ScaleForDpi(window, 82), rowHeight, TRUE);
@@ -2081,11 +2166,13 @@ bool CreateSettingsControls(HWND window, AppState& state) {
         SS_LEFT | SS_CENTERIMAGE);
     state.settingsCheckUpdatesButton =
         CreateButton(window, L"检查更新", kSettingsCheckUpdatesId);
+    state.settingsInstallUpdateButton =
+        CreateButton(window, L"安装更新", kSettingsInstallUpdateId);
     state.settingsCloseButton = CreateButton(window, L"Close", kSettingsCloseId);
 
     if (!state.settingsHeading || !state.settingsTopmostCheck ||
         !state.settingsUpdateStatus || !state.settingsCheckUpdatesButton ||
-        !state.settingsCloseButton) {
+        !state.settingsInstallUpdateButton || !state.settingsCloseButton) {
         return false;
     }
     for (const SettingsRow& row : state.settingsRows) {
@@ -2225,9 +2312,30 @@ LRESULT CALLBACK SettingsWindowProcedure(HWND window, UINT message,
             }
             if (controlId == kSettingsCheckUpdatesId) {
                 if (state->updateWorkerAvailable &&
+                    !state->updateInstallWorker.IsBusy() &&
                     state->updateWorker.RequestManualCheck()) {
+                    state->latestUpdateInstall.reset();
                     RefreshUpdateControls(*state);
                     UpdateStatusText(*state);
+                }
+                return 0;
+            }
+            if (controlId == kSettingsInstallUpdateId) {
+                const auto* release = FreshWindowsReleaseForInstall(*state);
+                if (release && !state->settingsPath.empty() &&
+                    state->updateInstallWorkerAvailable &&
+                    !state->updateWorker.IsBusy()) {
+                    codex_monitor::update::WindowsUpdateInstallRequest request;
+                    request.release = *release;
+                    request.currentVersion = kApplicationVersion;
+                    request.updatesRoot =
+                        state->settingsPath.parent_path() / L"updates";
+                    if (state->updateInstallWorker.Request(
+                            std::move(request))) {
+                        state->latestUpdateInstall.reset();
+                        RefreshUpdateControls(*state);
+                        UpdateStatusText(*state);
+                    }
                 }
                 return 0;
             }
@@ -2348,6 +2456,7 @@ LRESULT CALLBACK SettingsWindowProcedure(HWND window, UINT message,
                 state->settingsTopmostCheck = nullptr;
                 state->settingsUpdateStatus = nullptr;
                 state->settingsCheckUpdatesButton = nullptr;
+                state->settingsInstallUpdateButton = nullptr;
                 state->settingsCloseButton = nullptr;
                 state->settingsRows.clear();
                 state->settingsScrollOffset = 0;
@@ -2391,6 +2500,9 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
                     ? std::filesystem::path{}
                     : state->settingsPath.parent_path() /
                           L"update-state.ini");
+            state->updateInstallWorkerAvailable =
+                state->updateInstallWorker.Start(
+                    window, kUpdateInstallReadyMessage);
             UpdateSamplingDemand(window, *state);
             UpdateCodexDemand(window, *state);
             UpdateServiceStatusDemand(window, *state);
@@ -2477,6 +2589,26 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
                     completed = state->updateWorker.TakeLatest();
                 if (completed) {
                     ApplyWindowsUpdateCheck(*state, std::move(*completed));
+                } else {
+                    RefreshUpdateControls(*state);
+                    UpdateStatusText(*state);
+                }
+            }
+            return 0;
+
+        case kUpdateInstallReadyMessage:
+            if (state) {
+                std::optional<
+                    codex_monitor::update::WindowsUpdateInstallResult>
+                    completed = state->updateInstallWorker.TakeLatest();
+                if (completed) {
+                    const bool helperStarted = completed->helperStarted();
+                    state->latestUpdateInstall = std::move(*completed);
+                    RefreshUpdateControls(*state);
+                    UpdateStatusText(*state);
+                    if (helperStarted) {
+                        PostMessageW(window, WM_CLOSE, 0, 0);
+                    }
                 } else {
                     RefreshUpdateControls(*state);
                     UpdateStatusText(*state);
@@ -2643,6 +2775,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
                 state->codexWorker.StopAndJoin();
                 state->serviceStatusWorker.StopAndJoin();
                 state->updateWorker.RequestStop();
+                state->updateInstallWorker.RequestStop();
                 if (state->settingsWindow) DestroyWindow(state->settingsWindow);
                 DeleteFonts(*state);
                 if (state->backgroundBrush) DeleteObject(state->backgroundBrush);
@@ -2785,6 +2918,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand) {
     // The window is already gone, so a slow synchronous network teardown can
     // no longer freeze visible UI while the worker finishes its in-flight call.
     state.updateWorker.StopAndJoin();
+    state.updateInstallWorker.StopAndJoin();
     CloseHandle(singleton);
     return static_cast<int>(message.wParam);
 }

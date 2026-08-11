@@ -504,7 +504,7 @@ WindowsUpdateApplyResult ApplyVerifiedWindowsMsiUpdateImpl(
             return result;
         }
 
-        result.publisherAndIdentity = VerifyWindowsMsiIdentityAndPublisher(
+        result.publisherAndIdentity = VerifyLockedWindowsMsiIdentityAndPublisher(
             locked.canonicalPath, expectedVersionCopy, fingerprintCopy);
         if (!result.publisherAndIdentity.verified()) {
             result.status =

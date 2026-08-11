@@ -96,4 +96,15 @@ VerifyWindowsMsiIdentityAndPublisher(
     const std::optional<PublisherCertificateSha256>&
         trustedPublisherFingerprint) noexcept;
 
+// Internal companion for update_apply_transaction_win32.cpp only. The caller
+// must already hold every canonical ancestor and the MSI itself without delete
+// or write sharing for the complete call. This avoids acquiring the same
+// active DELETE locks twice while retaining all signature and identity gates.
+[[nodiscard]] WindowsMsiIdentityVerificationResult
+VerifyLockedWindowsMsiIdentityAndPublisher(
+    const std::filesystem::path& installerPath,
+    std::string_view expectedVersion,
+    const std::optional<PublisherCertificateSha256>&
+        trustedPublisherFingerprint) noexcept;
+
 }  // namespace codex_monitor::update

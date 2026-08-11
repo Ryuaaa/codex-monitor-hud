@@ -179,13 +179,27 @@ void TestPlatformVerificationBoundary() {
     const auto unsignedResult = ApplyVerifiedWindowsMsiUpdateForTesting(
         installer, kFileName, Manifest(kUnsignedSha256), "1.2.3",
         fingerprint, callback);
-    Require(unsignedResult.status ==
-                WindowsUpdateApplyStatus::kPublisherOrIdentityRejected &&
-                unsignedResult.checksum.checksumVerified() &&
-                unsignedResult.publisherAndIdentity.status ==
-                    WindowsMsiIdentityVerificationStatus::
-                        kSignatureVerificationFailed &&
-                callbackCount == 0 && !unsignedResult.installAttempted,
+    const bool unsignedRejected =
+        unsignedResult.status ==
+            WindowsUpdateApplyStatus::kPublisherOrIdentityRejected &&
+        unsignedResult.checksum.checksumVerified() &&
+        unsignedResult.publisherAndIdentity.status ==
+            WindowsMsiIdentityVerificationStatus::
+                kSignatureVerificationFailed &&
+        callbackCount == 0 && !unsignedResult.installAttempted;
+    if (!unsignedRejected) {
+        std::cerr << "unsigned_status="
+                  << static_cast<int>(unsignedResult.status)
+                  << " checksum_status="
+                  << static_cast<int>(unsignedResult.checksum.status)
+                  << " identity_status="
+                  << static_cast<int>(
+                         unsignedResult.publisherAndIdentity.status)
+                  << " callback_count=" << callbackCount
+                  << " install_attempted="
+                  << unsignedResult.installAttempted << '\n';
+    }
+    Require(unsignedRejected,
             "an unsigned MSI must fail after SHA-256 and before the callback");
 
     const std::filesystem::path nonCanonical =

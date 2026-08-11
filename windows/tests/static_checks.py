@@ -170,6 +170,18 @@ UPDATE_HELPER_LAUNCHER = (
 UPDATE_HELPER_LAUNCHER_HEADER = (
     WINDOWS_ROOT / "src" / "update" / "update_helper_launcher_win32.h"
 ).read_text(encoding="utf-8")
+UPDATE_INSTALL = (
+    WINDOWS_ROOT / "src" / "update" / "update_install_win32.cpp"
+).read_text(encoding="utf-8")
+UPDATE_INSTALL_HEADER = (
+    WINDOWS_ROOT / "src" / "update" / "update_install_win32.h"
+).read_text(encoding="utf-8")
+UPDATE_INSTALL_WORKER = (
+    WINDOWS_ROOT / "src" / "update" / "update_install_worker.cpp"
+).read_text(encoding="utf-8")
+UPDATE_INSTALL_WORKER_HEADER = (
+    WINDOWS_ROOT / "src" / "update" / "update_install_worker.h"
+).read_text(encoding="utf-8")
 UPDATE_INSTALLED_HUD = (
     WINDOWS_ROOT / "src" / "update" / "update_installed_hud_win32.cpp"
 ).read_text(encoding="utf-8")
@@ -500,7 +512,9 @@ def main() -> None:
                       UPDATE_MSI_IDENTITY + UPDATE_APPLY_TRANSACTION_HEADER +
                       UPDATE_APPLY_TRANSACTION + UPDATE_HELPER_HEADER +
                       UPDATE_HELPER + UPDATE_HELPER_LAUNCHER_HEADER +
-                      UPDATE_HELPER_LAUNCHER + UPDATE_INSTALLED_HUD_HEADER +
+                      UPDATE_HELPER_LAUNCHER + UPDATE_INSTALL_HEADER +
+                      UPDATE_INSTALL + UPDATE_INSTALL_WORKER_HEADER +
+                      UPDATE_INSTALL_WORKER + UPDATE_INSTALLED_HUD_HEADER +
                       UPDATE_INSTALLED_HUD + UPDATE_WORKER_HEADER +
                       UPDATE_WORKER + MAIN)
     for token, reason in update_contracts.items():
@@ -580,8 +594,8 @@ def main() -> None:
             "the locked MSI denies write and delete replacement",
         "VerifyDownloadedWindowsInstallerChecksum":
             "the locked transaction includes the SHA-256 gate",
-        "VerifyWindowsMsiIdentityAndPublisher":
-            "the locked transaction includes Authenticode and MSI identity",
+        "VerifyLockedWindowsMsiIdentityAndPublisher":
+            "the locked transaction includes Authenticode and MSI identity without reacquiring its locks",
         "installCallback(locked.canonicalPath)":
             "the install callback runs before the path locks leave scope",
         "MsiInstallProductW":
@@ -688,6 +702,41 @@ def main() -> None:
             "portable or unexpected launch locations cannot self-update",
     }.items():
         require(UPDATE_HELPER_LAUNCHER, token, reason)
+    for token, reason in {
+        "ConfiguredWindowsUpdatePublisherFingerprint":
+            "the publisher pin is checked before update assets are downloaded",
+        "BCryptGenRandom":
+            "each update preparation uses a fresh unpredictable directory",
+        "kMaximumSha256ManifestBytes":
+            "the checksum download and read remain tightly bounded",
+        "kMaximumWindowsInstallerBytes":
+            "the MSI download keeps the fixed hard size limit",
+        "ParseWindowsInstallerSha256Manifest":
+            "the downloaded checksum must name the exact selected MSI",
+        "LaunchPreparedWindowsUpdateHelper":
+            "only the verified helper boundary can start installation",
+        "BestEffortRemoveFailedPreparation":
+            "failed preparation removes only its exact bounded files",
+    }.items():
+        require(UPDATE_INSTALL, token, reason)
+    for token, reason in {
+        "cancellationEpoch_":
+            "window shutdown cancels an in-flight download worker",
+        "pending_.has_value()":
+            "one-click update requests are serialized",
+        "PostMessageW":
+            "download completion returns to the UI without blocking it",
+    }.items():
+        require(UPDATE_INSTALL_WORKER_HEADER + UPDATE_INSTALL_WORKER,
+                token, reason)
+    reject(UPDATE_INSTALL, "ShellExecute",
+           "one-click update must not delegate an unchecked path to the shell")
+    require_regex(
+        MAIN,
+        r"const bool helperStarted = completed->helperStarted\(\);.*?"
+        r"if \(helperStarted\) \{\s*PostMessageW\(window, WM_CLOSE",
+        "the running HUD may close only after the verified helper has started",
+    )
     require_regex(
         MAIN,
         r"TryRunWindowsUpdateHelperCommandLine\(\).*?SetProcessDpiAwarenessContext",
@@ -1136,8 +1185,15 @@ def main() -> None:
         "kSettingsVisibleBaseId": "Home checkbox commands are independently routed",
         "kSettingsNativeVisibleBaseId": "own-page checkbox commands are independently routed",
         "kSettingsCheckUpdatesId": "settings expose an explicit update check button",
+        "kSettingsInstallUpdateId": "settings expose an explicit one-click update button",
         "kUpdateReadyMessage": "update completion has a dedicated UI message",
+        "kUpdateInstallReadyMessage":
+            "download and helper completion has a dedicated UI message",
         "updateWorker.StopAndJoin": "window teardown stops the update worker",
+        "updateInstallWorker.StopAndJoin":
+            "window teardown joins the cancellable install worker",
+        "FreshWindowsReleaseForInstall":
+            "cached version notices cannot install without a fresh checked release",
         "BS_AUTOCHECKBOX": "visibility controls have visible native check states",
         "BM_GETCHECK": "visibility changes read the actual checkbox state",
         "settingsScrollMaximum": "small high-DPI screens have bounded settings scrolling",
@@ -1194,6 +1250,10 @@ def main() -> None:
             "the controlled exit/install/restart helper mode is compiled into the HUD",
         "src/update/update_helper_launcher_win32.cpp":
             "the verified temporary helper launcher is compiled into the HUD",
+        "src/update/update_install_win32.cpp":
+            "the bounded one-click update preparation is compiled into the HUD",
+        "src/update/update_install_worker.cpp":
+            "the cancellable update preparation worker is compiled into the HUD",
         "src/update/update_installed_hud_win32.cpp":
             "post-install executable verification is compiled into the HUD",
         "src/update/update_worker.cpp":
@@ -1281,6 +1341,10 @@ def main() -> None:
             "the continuous-lock update transaction is registered with CTest",
         "add_test(NAME windows_update_helper":
             "the controlled helper sequencing tests are registered with CTest",
+        "add_test(NAME windows_update_install":
+            "the one-click preparation order is registered with CTest",
+        "add_test(NAME windows_update_install_worker":
+            "the serialized cancellable install worker is registered with CTest",
         "add_executable(CodexMonitorCodexProcessTests":
             "bounded process integration tests are buildable",
         "add_test(NAME windows_codex_process":
