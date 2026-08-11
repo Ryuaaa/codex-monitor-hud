@@ -663,6 +663,24 @@ std::wstring BuildTargetCardText(const codex_monitor::PerformanceSnapshot& snaps
     } else {
         output << L"unavailable";
     }
+    if (snapshot.largestTargetWorkingSetProcess) {
+        output << L"\r\nLargest RAM process: "
+               << TruncatedProcessName(
+                      snapshot.largestTargetWorkingSetProcess->executableName)
+               << L"  "
+               << FormatBytes(
+                      snapshot.largestTargetWorkingSetProcess->workingSetBytes);
+    }
+    output << L"\r\nProcess I/O read: "
+           << codex_monitor::FormatSystemIoByteRate(
+                  snapshot.targetIoReadBytesPerSecond,
+                  snapshot.targetIoNeedsBaseline)
+           << L"  |  write: "
+           << codex_monitor::FormatSystemIoByteRate(
+                  snapshot.targetIoWriteBytesPerSecond,
+                  snapshot.targetIoNeedsBaseline);
+    if (snapshot.targetIoPartial) output << L" (partial)";
+    output << L"\r\nProcess I/O is not disk-only";
     return output.str();
 }
 
@@ -776,7 +794,22 @@ std::wstring BuildCommitCardText(const codex_monitor::PerformanceSnapshot& snaps
 
 std::wstring BuildRankingCardText(const codex_monitor::PerformanceSnapshot& snapshot) {
     std::wostringstream output;
-    output << L"TOP 5 PROCESSES BY WORKING SET\r\n";
+    output << L"TOP PROCESSES · CPU / MEMORY\r\nCPU (20 s):\r\n";
+    if (!snapshot.topCpuRankingAvailable || snapshot.topCpuProcesses.empty()) {
+        output << L"Waiting for the next slow CPU sample\r\n";
+    } else {
+        const std::size_t cpuCount =
+            std::min<std::size_t>(3, snapshot.topCpuProcesses.size());
+        for (std::size_t index = 0; index < cpuCount; ++index) {
+            const codex_monitor::RankedCpuProcess& process =
+                snapshot.topCpuProcesses[index];
+            output << index + 1 << L". "
+                   << TruncatedProcessName(process.executableName)
+                   << L"  " << std::fixed << std::setprecision(1)
+                   << process.wholeMachineCpuPercent << L"%\r\n";
+        }
+    }
+    output << L"Memory working set:\r\n";
     if (!snapshot.topMemoryRankingAvailable || snapshot.topMemoryProcesses.empty()) {
         output << L"Working-set metrics unavailable\r\n";
     } else {
@@ -867,6 +900,32 @@ std::wstring BuildDiagnosisCardText(
            << L"\r\nCPU " << DiagnosisPercent(diagnosis.cpuPercent)
            << L"  |  RAM " << DiagnosisPercent(diagnosis.physicalMemoryPercent)
            << L"  |  Commit " << DiagnosisPercent(diagnosis.commitPercent)
+           << L"\r\nCodex CPU "
+           << FormatPercent(snapshot.targetCpuPercent,
+                            snapshot.systemCpuNeedsBaseline,
+                            snapshot.targetCpuPartial)
+           << L"  |  RAM ";
+    if (snapshot.targetWorkingSetAvailable &&
+        snapshot.raw.physicalMemoryAvailable &&
+        snapshot.raw.physicalTotalBytes > 0) {
+        const double targetRamPercent = 100.0 *
+            static_cast<double>(snapshot.targetWorkingSetBytes) /
+            static_cast<double>(snapshot.raw.physicalTotalBytes);
+        output << FormatBytes(snapshot.targetWorkingSetBytes)
+               << L" (" << std::fixed << std::setprecision(1)
+               << std::clamp(targetRamPercent, 0.0, 100.0) << L"%)";
+        if (snapshot.targetWorkingSetPartial) output << L" partial";
+    } else {
+        output << L"unavailable";
+    }
+    output << L"\r\nCodex process I/O R "
+           << codex_monitor::FormatSystemIoByteRate(
+                  snapshot.targetIoReadBytesPerSecond,
+                  snapshot.targetIoNeedsBaseline)
+           << L"  |  W "
+           << codex_monitor::FormatSystemIoByteRate(
+                  snapshot.targetIoWriteBytesPerSecond,
+                  snapshot.targetIoNeedsBaseline)
            << L"\r\nConfidence: " << ConfidenceLabel(diagnosis.confidence)
            << L"  |  snapshot";
     return output.str();

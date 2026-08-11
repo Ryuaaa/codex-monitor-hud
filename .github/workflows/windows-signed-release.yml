@@ -1,0 +1,166 @@
+name: Windows signed release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing stable SemVer tag, for example v1.0.0
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  windows-x64-signed-release:
+    name: Build, sign, verify, and publish Windows x64
+    runs-on: windows-latest
+    timeout-minutes: 30
+    environment: windows-release
+
+    steps:
+      - name: Check out the exact release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_tag }}
+          fetch-depth: 0
+
+      - name: Verify tag and source version
+        id: version
+        shell: pwsh
+        run: |
+          $tag = "${{ inputs.release_tag }}"
+          if ($tag -notmatch '^v?([0-9]+\.[0-9]+\.[0-9]+)$') {
+            throw "Windows release tag must be a stable three-part SemVer"
+          }
+          $tagVersion = $Matches[1]
+          $cmake = Get-Content -LiteralPath "windows/CMakeLists.txt" -Raw
+          if ($cmake -notmatch `
+              'project\(CodexMonitorHUDWindows VERSION ([0-9]+\.[0-9]+\.[0-9]+)') {
+            throw "Could not read the Windows source version"
+          }
+          if ($Matches[1] -ne $tagVersion) {
+            throw "Tag version $tagVersion does not match Windows source $($Matches[1])"
+          }
+          git rev-parse --verify "refs/tags/$tag^{commit}" | Out-Null
+          "version=$tagVersion" >> $env:GITHUB_OUTPUT
+
+      - name: Materialize release certificate
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE_PFX_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_PFX_BASE64 }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CERTIFICATE_PFX_BASE64)) {
+            throw "WINDOWS_CERTIFICATE_PFX_BASE64 is not configured"
+          }
+          $bytes = [Convert]::FromBase64String(
+            $env:WINDOWS_CERTIFICATE_PFX_BASE64)
+          [IO.File]::WriteAllBytes(
+            (Join-Path $env:RUNNER_TEMP "windows-release.pfx"), $bytes)
+
+      - name: Resolve pinned publisher certificate
+        id: publisher
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CERTIFICATE_PASSWORD)) {
+            throw "WINDOWS_CERTIFICATE_PASSWORD is not configured"
+          }
+          $fingerprint = ./windows/sign-release-artifacts.ps1 `
+            -Action Fingerprint `
+            -CertificatePath (Join-Path $env:RUNNER_TEMP "windows-release.pfx") `
+            -CertificatePassword $env:WINDOWS_CERTIFICATE_PASSWORD
+          if ($fingerprint -notmatch '^[0-9a-f]{64}$') {
+            throw "The release publisher fingerprint is invalid"
+          }
+          "sha256=$fingerprint" >> $env:GITHUB_OUTPUT
+
+      - name: Configure with pinned publisher
+        shell: pwsh
+        run: |
+          cmake -S windows -B windows/out/build -A x64 `
+            "-DCODEX_MONITOR_WINDOWS_PUBLISHER_SHA256=${{ steps.publisher.outputs.sha256 }}"
+
+      - name: Build and test Windows x64
+        shell: pwsh
+        run: |
+          cmake --build windows/out/build --config Release --parallel
+          ctest --test-dir windows/out/build -C Release --output-on-failure
+
+      - name: Sign and verify executable
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          ./windows/sign-release-artifacts.ps1 `
+            -Action SignAndVerify `
+            -CertificatePath (Join-Path $env:RUNNER_TEMP "windows-release.pfx") `
+            -CertificatePassword $env:WINDOWS_CERTIFICATE_PASSWORD `
+            -FilePath "windows/out/build/Release/CodexMonitorHUD.exe"
+
+      - name: Build installer from signed executable
+        shell: pwsh
+        run: |
+          ./windows/build-installer.ps1 `
+            -BinaryPath "windows/out/build/Release/CodexMonitorHUD.exe" `
+            -OutputDirectory "windows/out/installer"
+
+      - name: Sign installer and regenerate checksums
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          $installer = Get-ChildItem -LiteralPath "windows/out/installer" `
+            -Filter "CodexMonitorHUD-windows-x64-*.msi" -File |
+            Select-Object -First 1
+          if ($null -eq $installer) { throw "Windows MSI was not produced" }
+          ./windows/sign-release-artifacts.ps1 `
+            -Action SignAndVerify `
+            -CertificatePath (Join-Path $env:RUNNER_TEMP "windows-release.pfx") `
+            -CertificatePassword $env:WINDOWS_CERTIFICATE_PASSWORD `
+            -FilePath $installer.FullName
+          $hash = (Get-FileHash -LiteralPath $installer.FullName `
+            -Algorithm SHA256).Hash.ToLowerInvariant()
+          [IO.File]::WriteAllText(
+            "$($installer.FullName).sha256",
+            "$hash  $($installer.Name)`n",
+            [Text.Encoding]::ASCII)
+          ./windows/package-release.ps1 `
+            -BinaryPath "windows/out/build/Release/CodexMonitorHUD.exe" `
+            -OutputDirectory "windows/out/release"
+
+      - name: Publish signed Windows assets
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "${{ inputs.release_tag }}"
+          $assets = @(
+            (Get-ChildItem -LiteralPath "windows/out/installer" `
+              -Filter "CodexMonitorHUD-windows-x64-*.msi" -File).FullName,
+            (Get-ChildItem -LiteralPath "windows/out/installer" `
+              -Filter "CodexMonitorHUD-windows-x64-*.msi.sha256" -File).FullName,
+            (Resolve-Path "windows/out/release/CodexMonitorHUD-windows-x64.zip").Path,
+            (Resolve-Path "windows/out/release/CodexMonitorHUD-windows-x64.zip.sha256").Path
+          )
+          if ($assets.Count -ne 4 -or $assets -contains $null) {
+            throw "The signed Windows release asset set is incomplete"
+          }
+          gh release view $tag | Out-Null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag @assets --clobber
+          } else {
+            gh release create $tag @assets --verify-tag `
+              --title "Codex Monitor HUD $tag" `
+              --notes "Signed Windows x64 release."
+          }
+
+      - name: Remove release certificate
+        if: always()
+        shell: pwsh
+        run: |
+          $certificate = Join-Path $env:RUNNER_TEMP "windows-release.pfx"
+          if (Test-Path -LiteralPath $certificate) {
+            Remove-Item -LiteralPath $certificate -Force
+          }

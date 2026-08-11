@@ -73,7 +73,7 @@ constexpr std::array<ModuleDefinition, kModuleCount> kRegistry{{
      true},
     {ModuleId::kTopMemoryProcesses,
      "top-memory-processes",
-     L"Top processes by memory",
+     L"Top processes by CPU & memory",
      Page::kComputer,
      true,
      false,

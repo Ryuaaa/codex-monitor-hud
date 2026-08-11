@@ -99,15 +99,19 @@ void CapturePageFiles(RawPerformanceSnapshot& destination) {
     destination.pageFilePeakBytes = totals.peakBytes;
 }
 
-void CaptureProcessMetrics(ProcessSnapshot& process, bool captureAllProcessMemory) {
+void CaptureProcessMetrics(ProcessSnapshot& process,
+                           bool captureAllProcessMemory,
+                           bool captureAllProcessCpu) {
     if (process.processId == 0) return;
 
-    const bool captureCpu = process.isTargetTree;
+    const bool captureCpu = process.isTargetTree || captureAllProcessCpu;
     const bool captureMemory = process.isTargetTree || captureAllProcessMemory;
-    if (!captureCpu && !captureMemory) return;
+    const bool captureIo = process.isTargetTree;
+    if (!captureCpu && !captureMemory && !captureIo) return;
 
     process.cpuTimeAttempted = captureCpu;
     process.workingSetAttempted = captureMemory;
+    process.ioAttempted = captureIo;
 
     HANDLE handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, process.processId);
     if (!handle) return;
@@ -134,10 +138,22 @@ void CaptureProcessMetrics(ProcessSnapshot& process, bool captureAllProcessMemor
             process.workingSetBytes = static_cast<std::uint64_t>(memory.WorkingSetSize);
         }
     }
+    if (captureIo && process.cpuTimeAvailable) {
+        IO_COUNTERS counters{};
+        if (GetProcessIoCounters(handle, &counters)) {
+            process.ioAvailable = true;
+            process.ioReadTransferBytes =
+                static_cast<std::uint64_t>(counters.ReadTransferCount);
+            process.ioWriteTransferBytes =
+                static_cast<std::uint64_t>(counters.WriteTransferCount);
+        }
+    }
     CloseHandle(handle);
 }
 
-void CaptureProcesses(RawPerformanceSnapshot& destination, bool captureAllProcessMemory) {
+void CaptureProcesses(RawPerformanceSnapshot& destination,
+                      bool captureAllProcessMemory,
+                      bool captureAllProcessCpu) {
     HANDLE processList = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
     if (processList == INVALID_HANDLE_VALUE) return;
 
@@ -161,7 +177,8 @@ void CaptureProcesses(RawPerformanceSnapshot& destination, bool captureAllProces
     for (ProcessSnapshot& process : destination.processes) {
         process.isTargetRoot = IsTargetRootExecutable(process.executableName);
         process.isTargetTree = targetIds.find(process.processId) != targetIds.end();
-        CaptureProcessMetrics(process, captureAllProcessMemory);
+        CaptureProcessMetrics(
+            process, captureAllProcessMemory, captureAllProcessCpu);
     }
 }
 
@@ -182,7 +199,8 @@ RawPerformanceSnapshot WindowsSampler::CaptureRawSnapshot(SampleMode mode) {
         CaptureCommitMemory(snapshot);
         CapturePageFiles(snapshot);
     }
-    CaptureProcesses(snapshot, mode == SampleMode::kFastAndSlow);
+    const bool slowSample = mode == SampleMode::kFastAndSlow;
+    CaptureProcesses(snapshot, slowSample, slowSample);
     return snapshot;
 }
 
@@ -223,6 +241,16 @@ void WindowsSampler::UpdateAndApplySlowMetrics(RawPerformanceSnapshot& raw,
             } else if (!slowMetricsCache_.rankingAvailable) {
                 snapshot.unreadableProcessMetricCount = unreadableCount;
             }
+
+            if (snapshot.topCpuRankingAvailable) {
+                slowMetricsCache_.cpuRankingAvailable = true;
+                slowMetricsCache_.unreadableCpuProcessCount =
+                    snapshot.unreadableCpuProcessCount;
+                slowMetricsCache_.topCpuProcesses = snapshot.topCpuProcesses;
+            } else if (!slowMetricsCache_.cpuRankingAvailable) {
+                slowMetricsCache_.unreadableCpuProcessCount =
+                    snapshot.unreadableCpuProcessCount;
+            }
         }
     }
 
@@ -244,6 +272,15 @@ void WindowsSampler::UpdateAndApplySlowMetrics(RawPerformanceSnapshot& raw,
             slowMetricsCache_.readableWorkingSetProcessCount;
         snapshot.unreadableProcessMetricCount = slowMetricsCache_.unreadableProcessMetricCount;
         snapshot.topMemoryProcesses = slowMetricsCache_.topMemoryProcesses;
+    }
+    if (slowMetricsCache_.cpuRankingAvailable) {
+        snapshot.topCpuRankingAvailable = true;
+        snapshot.unreadableCpuProcessCount =
+            slowMetricsCache_.unreadableCpuProcessCount;
+        snapshot.topCpuProcesses = slowMetricsCache_.topCpuProcesses;
+    } else if (snapshot.unreadableCpuProcessCount == 0) {
+        snapshot.unreadableCpuProcessCount =
+            slowMetricsCache_.unreadableCpuProcessCount;
     }
 }
 
@@ -273,6 +310,13 @@ PerformanceSnapshot WindowsSampler::BuildPerformanceSnapshot(RawPerformanceSnaps
                 snapshot.targetWorkingSetAvailable = true;
                 snapshot.targetWorkingSetBytes =
                     SaturatingAdd(snapshot.targetWorkingSetBytes, process.workingSetBytes);
+                if (!snapshot.largestTargetWorkingSetProcess ||
+                    process.workingSetBytes >
+                        snapshot.largestTargetWorkingSetProcess->workingSetBytes) {
+                    snapshot.largestTargetWorkingSetProcess = RankedProcess{
+                        process.processId, process.executableName,
+                        process.workingSetBytes};
+                }
             } else {
                 snapshot.targetWorkingSetPartial = true;
             }
@@ -292,7 +336,7 @@ PerformanceSnapshot WindowsSampler::BuildPerformanceSnapshot(RawPerformanceSnaps
             if (!hasCpuDelta) ++targetCpuMissingCount;
         }
 
-        if (process.cpuTimeAvailable) {
+        if (process.isTargetTree && process.cpuTimeAvailable) {
             nextProcessCpu.emplace(
                 process.processId,
                 ProcessCpuBaseline{process.creationTime100ns, process.cpuTime100ns});
@@ -306,6 +350,8 @@ PerformanceSnapshot WindowsSampler::BuildPerformanceSnapshot(RawPerformanceSnaps
         snapshot.targetCpuPartial = targetCpuMissingCount > 0;
     }
 
+    processAttributionTracker_.Apply(
+        raw, mode == SampleMode::kFastAndSlow, snapshot);
     UpdateAndApplySlowMetrics(raw, snapshot, mode);
     snapshot.raw = std::move(raw);
 
@@ -328,6 +374,7 @@ void WindowsSampler::ResetCpuBaseline() {
     previousSystemCpu_.reset();
     previousProcessCpu_.clear();
     previousSystemIo_ = {};
+    processAttributionTracker_.Reset();
 }
 
 }  // namespace codex_monitor

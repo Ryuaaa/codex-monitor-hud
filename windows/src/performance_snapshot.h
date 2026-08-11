@@ -31,6 +31,13 @@ struct ProcessSnapshot {
     bool workingSetAttempted = false;
     bool workingSetAvailable = false;
     std::uint64_t workingSetBytes = 0;
+
+    // IO_COUNTERS is cumulative process I/O. It includes more than physical
+    // disk traffic, so the UI must label derived rates as process I/O.
+    bool ioAttempted = false;
+    bool ioAvailable = false;
+    std::uint64_t ioReadTransferBytes = 0;
+    std::uint64_t ioWriteTransferBytes = 0;
 };
 
 struct RawPerformanceSnapshot {
@@ -64,6 +71,12 @@ struct RankedProcess {
     std::uint64_t workingSetBytes = 0;
 };
 
+struct RankedCpuProcess {
+    std::uint32_t processId = 0;
+    std::wstring executableName;
+    double wholeMachineCpuPercent = 0.0;
+};
+
 struct PerformanceSnapshot {
     RawPerformanceSnapshot raw;
 
@@ -76,13 +89,23 @@ struct PerformanceSnapshot {
     std::uint64_t targetWorkingSetBytes = 0;
     bool targetWorkingSetAvailable = false;
     bool targetWorkingSetPartial = false;
+    std::optional<RankedProcess> largestTargetWorkingSetProcess;
     std::uint32_t targetRootCount = 0;
     std::uint32_t targetProcessCount = 0;
+
+    std::optional<double> targetIoReadBytesPerSecond;
+    std::optional<double> targetIoWriteBytesPerSecond;
+    bool targetIoNeedsBaseline = false;
+    bool targetIoPartial = false;
 
     std::uint32_t readableWorkingSetProcessCount = 0;
     std::uint32_t unreadableProcessMetricCount = 0;
     bool topMemoryRankingAvailable = false;
     std::vector<RankedProcess> topMemoryProcesses;
+
+    bool topCpuRankingAvailable = false;
+    std::uint32_t unreadableCpuProcessCount = 0;
+    std::vector<RankedCpuProcess> topCpuProcesses;
 };
 
 }  // namespace codex_monitor

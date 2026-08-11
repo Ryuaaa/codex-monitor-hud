@@ -68,6 +68,14 @@ if(BUILD_TESTING)
     add_test(NAME windows_performance_trend
         COMMAND CodexMonitorPerformanceTrendTests)
 
+    add_executable(CodexMonitorProcessAttributionTests
+        src/process_attribution.cpp
+        tests/process_attribution_test.cpp
+    )
+    configure_codex_monitor_target(CodexMonitorProcessAttributionTests)
+    add_test(NAME windows_process_attribution
+        COMMAND CodexMonitorProcessAttributionTests)
+
     add_executable(CodexMonitorServiceStatusModelTests
         src/service_status_model.cpp
         tests/service_status_model_test.cpp
@@ -763,6 +771,7 @@ if(WIN32)
         src/module_state.cpp
         src/performance_diagnosis.cpp
         src/performance_trend.cpp
+        src/process_attribution.cpp
         src/performance_worker.cpp
         src/sampling_schedule.cpp
         src/service_status_fetch_win32.cpp
@@ -810,6 +819,19 @@ if(WIN32)
         user32 gdi32 comctl32 psapi shell32 ole32 winhttp windowsapp bcrypt
         iphlpapi mincore pdh
         wintrust crypt32 msi advapi32 version)
+    if(BUILD_TESTING)
+        add_executable(CodexMonitorWindowRuntimeSmokeTests
+            tests/window_runtime_smoke_test.cpp)
+        configure_codex_monitor_target(CodexMonitorWindowRuntimeSmokeTests)
+        target_compile_definitions(CodexMonitorWindowRuntimeSmokeTests PRIVATE
+            UNICODE _UNICODE NOMINMAX WINVER=0x0A00 _WIN32_WINNT=0x0A00)
+        target_link_libraries(CodexMonitorWindowRuntimeSmokeTests PRIVATE user32)
+        add_test(NAME windows_window_runtime_smoke
+            COMMAND CodexMonitorWindowRuntimeSmokeTests
+                    $<TARGET_FILE:CodexMonitorHUD>)
+        set_tests_properties(windows_window_runtime_smoke PROPERTIES
+            RUN_SERIAL TRUE TIMEOUT 40)
+    endif()
 else()
     message(STATUS "Non-Windows host: configuring portable snapshot and state tests only.")
 endif()

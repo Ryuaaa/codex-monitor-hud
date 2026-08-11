@@ -73,6 +73,15 @@ PERFORMANCE_TREND_HEADER = (
 PERFORMANCE_TREND_TEST = (
     WINDOWS_ROOT / "tests" / "performance_trend_test.cpp"
 ).read_text(encoding="utf-8")
+PROCESS_ATTRIBUTION = (
+    WINDOWS_ROOT / "src" / "process_attribution.cpp"
+).read_text(encoding="utf-8")
+PROCESS_ATTRIBUTION_HEADER = (
+    WINDOWS_ROOT / "src" / "process_attribution.h"
+).read_text(encoding="utf-8")
+PROCESS_ATTRIBUTION_TEST = (
+    WINDOWS_ROOT / "tests" / "process_attribution_test.cpp"
+).read_text(encoding="utf-8")
 SCHEDULE_TEST = (WINDOWS_ROOT / "tests" / "sampling_schedule_test.cpp").read_text(encoding="utf-8")
 CMAKE = (WINDOWS_ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
 PACKAGE_SCRIPT = (WINDOWS_ROOT / "package-release.ps1").read_text(encoding="utf-8")
@@ -82,6 +91,16 @@ INSTALLER_SOURCE = (
 ).read_text(encoding="utf-8")
 WINDOWS_WORKFLOW = (
     REPOSITORY_ROOT / ".github" / "workflows" / "windows-ci.yml"
+).read_text(encoding="utf-8")
+SIGNED_RELEASE_WORKFLOW = (
+    REPOSITORY_ROOT / ".github" / "workflows" /
+    "windows-signed-release.yml"
+).read_text(encoding="utf-8")
+RELEASE_SIGNING_SCRIPT = (
+    WINDOWS_ROOT / "sign-release-artifacts.ps1"
+).read_text(encoding="utf-8")
+WINDOW_RUNTIME_SMOKE_TEST = (
+    WINDOWS_ROOT / "tests" / "window_runtime_smoke_test.cpp"
 ).read_text(encoding="utf-8")
 MSI_MAJOR_UPGRADE_TEST = (
     WINDOWS_ROOT / "tests" / "test-msi-major-upgrade.ps1"
@@ -404,7 +423,10 @@ def main() -> None:
         "CODEX / CHATGPT PROCESS TREE": "the first card displays target aggregation",
         "SYSTEM CPU & PHYSICAL MEMORY": "the second card displays system metrics",
         "COMMIT & PAGE FILE": "the third card displays commit and page-file metrics",
-        "TOP 5 PROCESSES BY WORKING SET": "the fourth card displays the memory ranking",
+        "TOP PROCESSES · CPU / MEMORY":
+            "the ranking card displays both CPU and memory attribution",
+        "Process I/O is not disk-only":
+            "process transfer counters are not mislabeled as physical disk traffic",
         "BuildSystemIoThroughputCardText":
             "the live network and disk rates are connected to a performance card",
         "Thermal pressure: system not provided": "unsupported thermal pressure is explicit",
@@ -468,18 +490,23 @@ def main() -> None:
         "OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION": "per-process access stays read-only and limited",
         "GetProcessTimes": "process CPU uses cumulative native counters",
         "GetProcessMemoryInfo": "working-set memory uses the native process API",
+        "GetProcessIoCounters":
+            "target process I/O reuses the existing read-only process handle",
         "QueryUnbiasedInterruptTime":
             "the CPU trend receives a monotonic timestamp that excludes sleep",
         "BuildTargetProcessSet": "Codex and ChatGPT descendants are resolved",
         "ComputeSystemCpuPercent": "system CPU is calculated from two snapshots",
         "ComputeWholeMachineCpuShare": "target CPU is normalized to the machine denominator",
         "SelectTopMemoryProcesses(raw.processes, 5)": "exactly five top-memory entries are requested",
-        "const bool captureCpu = process.isTargetTree": "non-target processes do not receive CPU queries",
+        "process.isTargetTree || captureAllProcessCpu":
+            "non-target CPU counters are limited to slow samples",
         "process.isTargetTree || captureAllProcessMemory": "all-process memory is limited to slow samples",
         "if (mode == SampleMode::kFastAndSlow)": "slow APIs have an explicit cadence gate",
         "slowMetricsCache_.commitAvailable": "last valid commit values survive fast samples or failures",
         "slowMetricsCache_.pageFileAvailable": "last valid page-file values survive fast samples or failures",
         "slowMetricsCache_.rankingAvailable": "last valid ranking survives fast samples or failures",
+        "slowMetricsCache_.cpuRankingAvailable":
+            "last valid top-CPU ranking survives fast samples",
         "systemIoSampler_.Capture()": "network and disk counters share the serial native sampler",
         "ComputeSystemIoRates(previousSystemIo_": "whole-machine byte rates use cumulative deltas",
         "previousSystemIo_ = {}": "pause and resume require fresh I/O rate baselines",
@@ -495,6 +522,11 @@ def main() -> None:
         "bool workingSetAttempted": "intentional fast-sample omissions are not permission failures",
         "bool processListAvailable": "process enumeration failure is represented explicitly",
         "bool topMemoryRankingAvailable": "a cached empty state is distinguishable from unavailable data",
+        "bool ioAvailable": "target process I/O permission failures remain explicit",
+        "targetIoReadBytesPerSecond":
+            "target process I/O rates cross the snapshot boundary",
+        "bool topCpuRankingAvailable":
+            "the twenty-second CPU ranking has an explicit availability state",
         "SystemIoCounters systemIo": "raw network and disk counters cross the snapshot boundary",
         "SystemIoRates systemIoRates": "derived byte-per-second results cross the UI boundary",
         "capturedAtUnbiasedTimeAvailable":
@@ -534,6 +566,37 @@ def main() -> None:
     }
     for token, reason in test_contracts.items():
         require(TEST, token, reason)
+
+    attribution_sources = PROCESS_ATTRIBUTION_HEADER + PROCESS_ATTRIBUTION
+    attribution_contracts = {
+        "kMaximumTargetIoInterval100ns":
+            "target I/O rejects stale sample intervals",
+        "previousTargetIo_":
+            "target I/O uses identity-matched cumulative baselines",
+        "previousSlowCpu_":
+            "whole-machine CPU ranking has an independent slow baseline",
+        "SystemCpuTotalDelta":
+            "process CPU uses the same whole-machine denominator",
+        "targetIoPartial":
+            "process churn is exposed as a partial lower bound",
+        "SortAndLimitCpu(ranked, 5)":
+            "top CPU attribution remains bounded",
+    }
+    for token, reason in attribution_contracts.items():
+        require(attribution_sources, token, reason)
+    for token, reason in {
+        "the first target I/O sample must request a baseline":
+            "first-frame process I/O behavior is fixed",
+        "new and exited target processes must make the aggregate a partial lower bound":
+            "process churn cannot silently look complete",
+        "a rolled-back process I/O counter must not fabricate a negative rate":
+            "counter reset behavior is fixed",
+        "an available process list with no target is a real zero":
+            "not detected remains distinct from unavailable",
+        "slow CPU ranking must order only identity-matched processes":
+            "PID reuse and new processes are excluded from CPU deltas",
+    }.items():
+        require(PROCESS_ATTRIBUTION_TEST, token, reason)
 
     ui_layout_math_contracts = {
         "kMinimumUniformScale = 0.75":
@@ -1240,6 +1303,77 @@ def main() -> None:
     for token, reason in package_workflow_contracts.items():
         require(WINDOWS_WORKFLOW, token, reason)
 
+    runtime_smoke_contracts = {
+        "CodexMonitorHUDWindowsWindow":
+            "the runtime test finds the actual native HUD window",
+        "WS_CAPTION":
+            "standard title-bar behavior is tested on Windows",
+        "WS_THICKFRAME":
+            "the runtime window remains resizable",
+        "WS_MINIMIZEBOX":
+            "taskbar minimization remains available",
+        "IsIconic(window)":
+            "the visible Minimize control is exercised",
+        "CodexMonitorHUDWindowsSettingsWindow":
+            "the settings window is opened during the smoke run",
+        "SYSTEM + CODEX/CHATGPT":
+            "the real Computer page renders a performance card",
+        "WM_CLOSE":
+            "the runtime test exercises graceful shutdown",
+    }
+    for token, reason in runtime_smoke_contracts.items():
+        require(WINDOW_RUNTIME_SMOKE_TEST, token, reason)
+
+    signing_script_contracts = {
+        'ValidateSet("Fingerprint", "SignAndVerify")':
+            "publisher pin derivation and artifact signing are explicit modes",
+        "X509Certificate2":
+            "the compiled publisher pin comes from the actual release certificate",
+        "1.3.6.1.5.5.7.3.3":
+            "the PFX must carry the code-signing extended key usage",
+        "signtool.exe":
+            "release files use the Windows SDK signing tool",
+        "/fd SHA256":
+            "Authenticode file digests use SHA-256",
+        "/td SHA256":
+            "RFC3161 timestamp digests use SHA-256",
+        "/tr $TimestampUrl":
+            "release signatures receive a trusted timestamp",
+        "verify /pa /all /v":
+            "each signed file is verified against Windows Authenticode policy",
+        "Remove-Item -LiteralPath $storePath -DeleteKey -Force":
+            "temporary imported signing keys are removed",
+    }
+    for token, reason in signing_script_contracts.items():
+        require(RELEASE_SIGNING_SCRIPT, token, reason)
+
+    signed_release_contracts = {
+        "workflow_dispatch":
+            "signed publication is an explicit release action",
+        "environment: windows-release":
+            "GitHub can apply a protected release environment",
+        "WINDOWS_CERTIFICATE_PFX_BASE64":
+            "the release certificate is sourced only from an encrypted secret",
+        "WINDOWS_CERTIFICATE_PASSWORD":
+            "the PFX password is sourced only from an encrypted secret",
+        "CODEX_MONITOR_WINDOWS_PUBLISHER_SHA256":
+            "the update verifier is compiled with the exact release publisher pin",
+        "Sign and verify executable":
+            "the executable is signed before packaging",
+        "Build installer from signed executable":
+            "the MSI embeds the already signed executable",
+        "Sign installer and regenerate checksums":
+            "the MSI checksum is generated only after final signing",
+        "gh release upload $tag @assets --clobber":
+            "Windows assets can join an existing macOS GitHub Release",
+        "Remove release certificate":
+            "the PFX is removed from the hosted runner even after failure",
+    }
+    for token, reason in signed_release_contracts.items():
+        require(SIGNED_RELEASE_WORKFLOW, token, reason)
+    reject(SIGNED_RELEASE_WORKFLOW, "echo $env:WINDOWS_CERTIFICATE",
+           "release secrets must never be printed")
+
     installer_contracts = {
         'InstallScope="perUser"': "the MSI defaults to a no-admin per-user install",
         'Platform="x64"': "the MSI declares its x64 platform",
@@ -1942,6 +2076,8 @@ def main() -> None:
             "tested I/O throughput presentation is compiled into the HUD",
         "src/performance_trend.cpp":
             "the bounded in-memory CPU trend is compiled into the HUD",
+        "src/process_attribution.cpp":
+            "bounded CPU and target I/O attribution is compiled into the HUD",
         "src/main.cpp": "the product window is compiled into the HUD",
     }
     for token, reason in hud_source_contracts.items():
@@ -1968,6 +2104,8 @@ def main() -> None:
         "src/performance_worker.cpp": "the HUD builds its serial background worker",
         "src/performance_diagnosis.cpp": "the HUD builds the pure diagnosis model",
         "src/performance_trend.cpp": "the HUD builds the pure CPU trend model",
+        "src/process_attribution.cpp":
+            "the HUD builds the pure process attribution model",
         "src/sampling_schedule.cpp": "the request scheduler is shared with fixed tests",
         "src/module_state.cpp": "the module state model is compiled into the HUD",
         "src/settings_store_win32.cpp": "the per-user settings store is compiled into the HUD",
@@ -1980,6 +2118,16 @@ def main() -> None:
             "portable ten-minute trend tests are buildable",
         "add_test(NAME windows_performance_trend":
             "portable ten-minute trend tests are registered with CTest",
+        "add_executable(CodexMonitorProcessAttributionTests":
+            "portable process attribution tests are buildable",
+        "add_test(NAME windows_process_attribution":
+            "portable process attribution tests are registered with CTest",
+        "add_executable(CodexMonitorWindowRuntimeSmokeTests":
+            "the actual Windows HUD runtime smoke test is buildable",
+        "add_test(NAME windows_window_runtime_smoke":
+            "the actual Windows HUD runtime smoke test is registered",
+        "RUN_SERIAL TRUE TIMEOUT 40":
+            "the single-instance HUD smoke test is bounded and isolated",
         "add_test(NAME windows_snapshot_math": "portable tests are registered with CTest",
         "add_executable(CodexMonitorUILayoutMathTests":
             "portable uniform resize tests are buildable",
