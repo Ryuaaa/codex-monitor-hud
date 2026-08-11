@@ -583,6 +583,8 @@ def main() -> None:
         "PdhCloseQuery": "the persistent native disk query is released",
         "kDiskQueryRetryInterval100ns":
             "a transient PDH startup failure is retried with a bounded low-frequency interval",
+        "ResetDiskQueryAfterFailure":
+            "a runtime PDH failure cannot leave the 24-hour monitor permanently unavailable",
         "QueryUnbiasedInterruptTimePrecise": "rate timing excludes suspended time",
     }
     for token, reason in system_io_native_contracts.items():

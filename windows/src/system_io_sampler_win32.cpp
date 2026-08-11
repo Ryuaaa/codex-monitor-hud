@@ -25,6 +25,15 @@ constexpr std::uint64_t kDiskSourceIdentity = 1;
 constexpr std::uint64_t kDiskQueryRetryInterval100ns =
     60ULL * kSystemIoHundredNanosecondsPerSecond;
 
+std::uint64_t DiskRetryDeadline(std::uint64_t capturedAt100ns) noexcept {
+    if (capturedAt100ns >
+        std::numeric_limits<std::uint64_t>::max() -
+            kDiskQueryRetryInterval100ns) {
+        return std::numeric_limits<std::uint64_t>::max();
+    }
+    return capturedAt100ns + kDiskQueryRetryInterval100ns;
+}
+
 bool CheckedAdd(std::uint64_t value, std::uint64_t* total) noexcept {
     if (!total || value > std::numeric_limits<std::uint64_t>::max() - *total) return false;
     *total += value;
@@ -93,8 +102,7 @@ bool WindowsSystemIoCounterSampler::EnsureDiskQuery(std::uint64_t capturedAt100n
         return false;
     }
     diskQueryInitializationAttempted_ = true;
-    nextDiskQueryRetryAt100ns_ =
-        capturedAt100ns + kDiskQueryRetryInterval100ns;
+    nextDiskQueryRetryAt100ns_ = DiskRetryDeadline(capturedAt100ns);
 
     PDH_HQUERY query = nullptr;
     PDH_HCOUNTER readCounter = nullptr;
@@ -113,10 +121,21 @@ bool WindowsSystemIoCounterSampler::EnsureDiskQuery(std::uint64_t capturedAt100n
     return true;
 }
 
+void WindowsSystemIoCounterSampler::ResetDiskQueryAfterFailure(
+    std::uint64_t capturedAt100ns) noexcept {
+    if (diskQuery_) PdhCloseQuery(diskQuery_);
+    diskQuery_ = nullptr;
+    diskReadCounter_ = nullptr;
+    diskWriteCounter_ = nullptr;
+    diskQueryInitializationAttempted_ = true;
+    nextDiskQueryRetryAt100ns_ = DiskRetryDeadline(capturedAt100ns);
+}
+
 DiskIoCounters WindowsSystemIoCounterSampler::CaptureDisk(std::uint64_t capturedAt100ns) {
     DiskIoCounters result{};
-    if (!EnsureDiskQuery(capturedAt100ns) ||
-        PdhCollectQueryData(diskQuery_) != ERROR_SUCCESS) {
+    if (!EnsureDiskQuery(capturedAt100ns)) return result;
+    if (PdhCollectQueryData(diskQuery_) != ERROR_SUCCESS) {
+        ResetDiskQueryAfterFailure(capturedAt100ns);
         return result;
     }
 
@@ -131,6 +150,7 @@ DiskIoCounters WindowsSystemIoCounterSampler::CaptureDisk(std::uint64_t captured
         PdhGetRawCounterValue(diskWriteCounter_, &writeType, &write) != ERROR_SUCCESS ||
         readType != PERF_COUNTER_BULK_COUNT || writeType != PERF_COUNTER_BULK_COUNT ||
         !IsValidRawCounter(read) || !IsValidRawCounter(write)) {
+        ResetDiskQueryAfterFailure(capturedAt100ns);
         return result;
     }
 

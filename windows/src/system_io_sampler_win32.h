@@ -19,6 +19,7 @@ public:
 
 private:
     bool EnsureDiskQuery(std::uint64_t capturedAt100ns);
+    void ResetDiskQueryAfterFailure(std::uint64_t capturedAt100ns) noexcept;
     DiskIoCounters CaptureDisk(std::uint64_t capturedAt100ns);
 
     bool diskQueryInitializationAttempted_ = false;
