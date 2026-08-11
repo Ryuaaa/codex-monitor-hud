@@ -22,11 +22,13 @@ jobs:
   windows-x64-release:
     name: MSVC x64 Release
     runs-on: windows-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
 
     steps:
       - name: Check out source
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -207,6 +209,18 @@ jobs:
             Get-Content -LiteralPath $uninstallLog -Tail 100
             throw "MSI uninstall left the application executable behind"
           }
+
+      - name: Test real MSI major upgrade from 0.2.0
+        shell: pwsh
+        run: |
+          $installers = @(Get-ChildItem -LiteralPath "windows/out/installer" `
+            -Filter "CodexMonitorHUD-windows-x64-*.msi" -File)
+          if ($installers.Count -ne 1) {
+            throw "Expected exactly one current Windows MSI, found $($installers.Count)"
+          }
+          ./windows/tests/test-msi-major-upgrade.ps1 `
+            -CurrentBinaryPath "windows/out/build/Release/CodexMonitorHUD.exe" `
+            -CurrentInstallerPath $installers[0].FullName
 
       - name: Test Authenticode publisher pin against built MSI
         # Keep the ephemeral signing key only in CurrentUser\My. Hosted runners

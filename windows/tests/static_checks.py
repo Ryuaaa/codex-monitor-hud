@@ -35,6 +35,9 @@ INSTALLER_SOURCE = (
 WINDOWS_WORKFLOW = (
     REPOSITORY_ROOT / ".github" / "workflows" / "windows-ci.yml"
 ).read_text(encoding="utf-8")
+MSI_MAJOR_UPGRADE_TEST = (
+    WINDOWS_ROOT / "tests" / "test-msi-major-upgrade.ps1"
+).read_text(encoding="utf-8")
 CODEX_TYPES = (WINDOWS_ROOT / "src" / "codex" / "codex_types.h").read_text(
     encoding="utf-8"
 )
@@ -933,6 +936,40 @@ def main() -> None:
     }
     for token, reason in installer_workflow_contracts.items():
         require(WINDOWS_WORKFLOW, token, reason)
+
+    upgrade_workflow_contracts = {
+        "fetch-depth: 0":
+            "Windows CI keeps the pinned previous source available",
+        "Test real MSI major upgrade from 0.2.0":
+            "Windows CI exercises a real previous-to-current upgrade",
+        "./windows/tests/test-msi-major-upgrade.ps1":
+            "the fixed major-upgrade test is part of the release gate",
+    }
+    for token, reason in upgrade_workflow_contracts.items():
+        require(WINDOWS_WORKFLOW, token, reason)
+
+    upgrade_test_contracts = {
+        "2c2a103534596b1f191d6e9475b32738794bf9a2":
+            "the previous 0.2.0 source baseline cannot drift",
+        'expectedPreviousVersion = "0.2.0"':
+            "the previous MSI identity is explicit",
+        "MsiEnumRelatedProducts":
+            "the test proves only one related product remains registered",
+        "Major-upgrade MSI files must have different ProductCodes":
+            "a same-product reinstall cannot masquerade as an upgrade",
+        "Previous and current MSI UpgradeCodes do not match":
+            "the major-upgrade family identity must remain stable",
+        "preserve across upgrade":
+            "the customized install directory keeps user-created content",
+        "Previous MSI unexpectedly downgraded":
+            "the current install is protected from rollback",
+        "Related products remain registered after cleanup":
+            "the real MSI test fails when it leaves runner state behind",
+    }
+    for token, reason in upgrade_test_contracts.items():
+        require(MSI_MAJOR_UPGRADE_TEST, token, reason)
+    reject(MSI_MAJOR_UPGRADE_TEST, "Win32_Product",
+           "upgrade verification must not trigger unrelated MSI self-repair")
 
     persistence_contracts = {
         "FOLDERID_LocalAppData": "settings live in the per-user Windows data directory",
