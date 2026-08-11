@@ -14,6 +14,7 @@
 #endif
 #include <windows.h>
 #include <msi.h>
+#include <msiquery.h>
 #endif
 
 namespace {
