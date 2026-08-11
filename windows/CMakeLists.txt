@@ -428,7 +428,7 @@ if(WIN32)
             _WIN32_WINNT=0x0A00
         )
         target_link_libraries(CodexMonitorSystemIoSamplerTests PRIVATE
-            iphlpapi pdh)
+            iphlpapi mincore pdh)
         add_test(NAME windows_system_io_sampler
             COMMAND CodexMonitorSystemIoSamplerTests)
 
@@ -762,7 +762,7 @@ if(WIN32)
             "CODEX_MONITOR_WINDOWS_PUBLISHER_SHA256=\"${CODEX_MONITOR_WINDOWS_PUBLISHER_SHA256}\"")
     endif()
     target_link_libraries(CodexMonitorHUD PRIVATE
-        user32 gdi32 psapi shell32 ole32 winhttp windowsapp bcrypt iphlpapi pdh
+        user32 gdi32 psapi shell32 ole32 winhttp windowsapp bcrypt iphlpapi mincore pdh
         wintrust crypt32 msi advapi32 version)
 else()
     message(STATUS "Non-Windows host: configuring portable snapshot and state tests only.")

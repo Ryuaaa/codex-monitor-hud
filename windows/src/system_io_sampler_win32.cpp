@@ -164,7 +164,7 @@ DiskIoCounters WindowsSystemIoCounterSampler::CaptureDisk(std::uint64_t captured
 
 SystemIoCounters WindowsSystemIoCounterSampler::Capture() {
     ULONGLONG capturedAt100ns = 0;
-    QueryUnbiasedInterruptTimePrecise(&capturedAt100ns);
+    if (!QueryUnbiasedInterruptTime(&capturedAt100ns)) return {};
 
     SystemIoCounters result{};
     result.network = CaptureNetwork(static_cast<std::uint64_t>(capturedAt100ns));
