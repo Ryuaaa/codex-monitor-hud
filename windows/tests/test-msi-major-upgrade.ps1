@@ -15,6 +15,7 @@ $expectedPreviousVersion = "0.2.0"
 $expectedUpgradeCode = "{0CA9E00B-2AAF-4393-B466-1AF0F8C2C21F}"
 $successExitCodes = @(0, 3010)
 $absentProductExitCodes = @(1605, 1614)
+$expectedDowngradeMessage = "A newer version of Codex Monitor HUD is already installed."
 
 Add-Type -TypeDefinition @'
 using System;
@@ -523,6 +524,11 @@ try {
         -Target $oldInstaller -LogPath $downgradeLog
     if ($downgradeStatus -in $successExitCodes) {
         throw "Previous MSI unexpectedly downgraded the current installation"
+    }
+    $downgradeLogText = Get-Content -LiteralPath $downgradeLog -Raw
+    if ($downgradeLogText -notmatch "WIX_DOWNGRADE_DETECTED" -or
+        $downgradeLogText -notmatch [regex]::Escape($expectedDowngradeMessage)) {
+        throw "Previous MSI failed for a reason other than the expected downgrade gate"
     }
     if (-not (Test-Path -LiteralPath $installedBinary -PathType Leaf)) {
         throw "Rejected downgrade removed the current executable"

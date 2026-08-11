@@ -963,6 +963,10 @@ def main() -> None:
             "the customized install directory keeps user-created content",
         "Previous MSI unexpectedly downgraded":
             "the current install is protected from rollback",
+        "WIX_DOWNGRADE_DETECTED":
+            "downgrade rejection is distinguished from unrelated MSI failures",
+        "reason other than the expected downgrade gate":
+            "an arbitrary MSI failure cannot masquerade as rollback protection",
         "Related products remain registered after cleanup":
             "the real MSI test fails when it leaves runner state behind",
     }
