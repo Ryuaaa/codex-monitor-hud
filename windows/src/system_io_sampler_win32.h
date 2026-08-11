@@ -2,7 +2,9 @@
 
 #include "system_io_rate.h"
 
+#include <winsock2.h>
 #include <windows.h>
+#include <iphlpapi.h>
 #include <pdh.h>
 
 namespace codex_monitor {

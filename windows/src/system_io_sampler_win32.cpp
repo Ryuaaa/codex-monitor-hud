@@ -1,6 +1,5 @@
 #include "system_io_sampler_win32.h"
 
-#include <iphlpapi.h>
 #include <pdhmsg.h>
 
 #include <algorithm>

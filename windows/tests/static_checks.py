@@ -41,6 +41,9 @@ SYSTEM_IO_RATE_TEST = (WINDOWS_ROOT / "tests" / "system_io_rate_test.cpp").read_
 SYSTEM_IO_SAMPLER = (
     WINDOWS_ROOT / "src" / "system_io_sampler_win32.cpp"
 ).read_text(encoding="utf-8")
+SYSTEM_IO_SAMPLER_HEADER = (
+    WINDOWS_ROOT / "src" / "system_io_sampler_win32.h"
+).read_text(encoding="utf-8")
 SYSTEM_IO_SAMPLER_TEST = (
     WINDOWS_ROOT / "tests" / "system_io_sampler_win32_test.cpp"
 ).read_text(encoding="utf-8")
@@ -559,6 +562,10 @@ def main() -> None:
     }
     for token, reason in system_io_native_contracts.items():
         require(SYSTEM_IO_SAMPLER, token, reason)
+    require(SYSTEM_IO_SAMPLER_HEADER, "#include <winsock2.h>",
+            "Winsock declarations must precede windows.h on MSVC")
+    require(SYSTEM_IO_SAMPLER_HEADER, "#include <iphlpapi.h>",
+            "the supported IP Helper umbrella header exposes GetIfTable2 and MIB_IF_TABLE2")
 
     system_io_test_contracts = {
         "the first sample must be unavailable rather than reported as zero":
