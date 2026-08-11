@@ -362,8 +362,10 @@ jobs:
             }
             Write-Host "phase=apply-transaction-wrong-checksum done"
 
-            $tamperedInstaller = Join-Path $temporaryDirectory `
-              "CodexMonitorHUD-windows-x64-tampered.msi"
+            $tamperedDirectory = Join-Path $temporaryDirectory "tampered"
+            New-Item -ItemType Directory -Path $tamperedDirectory | Out-Null
+            $tamperedInstaller = Join-Path $tamperedDirectory `
+              $installers[0].Name
             Copy-Item -LiteralPath $signedInstaller `
               -Destination $tamperedInstaller
             $tamperedBytes = [System.IO.File]::ReadAllBytes($tamperedInstaller)
