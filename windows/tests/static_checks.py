@@ -176,6 +176,15 @@ UPDATE_INSTALL = (
 UPDATE_INSTALL_HEADER = (
     WINDOWS_ROOT / "src" / "update" / "update_install_win32.h"
 ).read_text(encoding="utf-8")
+UPDATE_DIRECTORY_CLEANUP = (
+    WINDOWS_ROOT / "src" / "update" / "update_directory_cleanup_win32.cpp"
+).read_text(encoding="utf-8")
+UPDATE_DIRECTORY_CLEANUP_HEADER = (
+    WINDOWS_ROOT / "src" / "update" / "update_directory_cleanup_win32.h"
+).read_text(encoding="utf-8")
+UPDATE_DIRECTORY_CLEANUP_TEST = (
+    WINDOWS_ROOT / "tests" / "update_directory_cleanup_test.cpp"
+).read_text(encoding="utf-8")
 UPDATE_INSTALL_WORKER = (
     WINDOWS_ROOT / "src" / "update" / "update_install_worker.cpp"
 ).read_text(encoding="utf-8")
@@ -513,7 +522,8 @@ def main() -> None:
                       UPDATE_APPLY_TRANSACTION + UPDATE_HELPER_HEADER +
                       UPDATE_HELPER + UPDATE_HELPER_LAUNCHER_HEADER +
                       UPDATE_HELPER_LAUNCHER + UPDATE_INSTALL_HEADER +
-                      UPDATE_INSTALL + UPDATE_INSTALL_WORKER_HEADER +
+                      UPDATE_INSTALL + UPDATE_DIRECTORY_CLEANUP_HEADER +
+                      UPDATE_DIRECTORY_CLEANUP + UPDATE_INSTALL_WORKER_HEADER +
                       UPDATE_INSTALL_WORKER + UPDATE_INSTALLED_HUD_HEADER +
                       UPDATE_INSTALLED_HUD + UPDATE_WORKER_HEADER +
                       UPDATE_WORKER + MAIN)
@@ -725,6 +735,43 @@ def main() -> None:
             "failed preparation removes only its exact bounded files",
     }.items():
         require(UPDATE_INSTALL, token, reason)
+    cleanup_sources = (
+        UPDATE_DIRECTORY_CLEANUP_HEADER + UPDATE_DIRECTORY_CLEANUP
+    )
+    for token, reason in {
+        "kMinimumRetainedUpdateDirectories = 2U":
+            "maintenance always preserves the two newest managed directories",
+        "7ULL * 24ULL * 60ULL * 60ULL":
+            "maintenance never removes a directory from the last seven days",
+        "IsManagedWindowsUpdateDirectoryName":
+            "cleanup owns only the exact random update-directory namespace",
+        "FILE_ATTRIBUTE_REPARSE_POINT":
+            "cleanup rejects redirected directories and contents",
+        "FILE_FLAG_OPEN_REPARSE_POINT":
+            "cleanup opens deletion targets without following filesystem redirection",
+        "kMaximumRootEntriesToInspect":
+            "maintenance work stays bounded on an abnormal root",
+        "kMaximumFilesPerManagedDirectory":
+            "per-directory maintenance work stays bounded",
+        "BestEffortCleanupWindowsUpdateDirectories":
+            "cleanup failure cannot become an update failure",
+    }.items():
+        require(cleanup_sources, token, reason)
+    reject(cleanup_sources, "remove_all",
+           "cleanup must not recursively follow or erase an unchecked tree")
+    for token, reason in {
+        "TestExactManagedNameContract":
+            "fixed tests pin the lowercase 32-hex namespace",
+        "TestSevenDayAndNewestTwoRetention":
+            "fixed tests pin both retention safeguards",
+        "TestFilesReparsePointsAndUnknownTimesAreNeverSelected":
+            "fixed tests prove unsafe entries are skipped",
+        "TestFutureTimesFailClosed":
+            "clock rollback cannot select a directory for deletion",
+        "TestWindowsFilesystemCleanup":
+            "Windows CI removes only the stale third managed directory",
+    }.items():
+        require(UPDATE_DIRECTORY_CLEANUP_TEST, token, reason)
     for token, reason in {
         "cancellationEpoch_":
             "window shutdown cancels an in-flight download worker",
@@ -1264,6 +1311,8 @@ def main() -> None:
             "the controlled exit/install/restart helper mode is compiled into the HUD",
         "src/update/update_helper_launcher_win32.cpp":
             "the verified temporary helper launcher is compiled into the HUD",
+        "src/update/update_directory_cleanup_win32.cpp":
+            "bounded old update-directory cleanup is compiled into the HUD",
         "src/update/update_install_win32.cpp":
             "the bounded one-click update preparation is compiled into the HUD",
         "src/update/update_install_worker.cpp":
@@ -1355,6 +1404,8 @@ def main() -> None:
             "the continuous-lock update transaction is registered with CTest",
         "add_test(NAME windows_update_helper":
             "the controlled helper sequencing tests are registered with CTest",
+        "add_test(NAME windows_update_directory_cleanup":
+            "the bounded retention policy is registered with CTest",
         "add_test(NAME windows_update_install":
             "the one-click preparation order is registered with CTest",
         "add_test(NAME windows_update_install_worker":

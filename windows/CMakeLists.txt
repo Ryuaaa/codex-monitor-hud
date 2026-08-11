@@ -315,10 +315,29 @@ if(BUILD_TESTING)
         COMMAND CodexMonitorUpdateHelperTests)
     set_tests_properties(windows_update_helper PROPERTIES TIMEOUT 20)
 
+    add_executable(CodexMonitorUpdateDirectoryCleanupTests
+        src/update/update_directory_cleanup_win32.cpp
+        tests/update_directory_cleanup_test.cpp
+    )
+    configure_codex_monitor_target(CodexMonitorUpdateDirectoryCleanupTests)
+    if(WIN32)
+        target_compile_definitions(
+            CodexMonitorUpdateDirectoryCleanupTests PRIVATE
+            UNICODE
+            _UNICODE
+            NOMINMAX
+            WINVER=0x0A00
+            _WIN32_WINNT=0x0A00
+        )
+    endif()
+    add_test(NAME windows_update_directory_cleanup
+        COMMAND CodexMonitorUpdateDirectoryCleanupTests)
+
     add_executable(CodexMonitorUpdateInstallTests
         src/update/github_release_selector.cpp
         src/update/update_apply_transaction_win32.cpp
         src/update/update_asset_download_win32.cpp
+        src/update/update_directory_cleanup_win32.cpp
         src/update/update_helper_launcher_win32.cpp
         src/update/update_helper_win32.cpp
         src/update/update_install_win32.cpp
@@ -621,6 +640,7 @@ if(WIN32)
         src/update/update_check_win32.cpp
         src/update/update_asset_download_win32.cpp
         src/update/update_apply_transaction_win32.cpp
+        src/update/update_directory_cleanup_win32.cpp
         src/update/update_fetch_win32.cpp
         src/update/update_helper_win32.cpp
         src/update/update_helper_launcher_win32.cpp

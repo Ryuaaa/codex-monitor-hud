@@ -4,6 +4,7 @@
 
 #include "update/update_install_win32.h"
 
+#include "update/update_directory_cleanup_win32.h"
 #include "update/update_helper_win32.h"
 
 #include <array>
@@ -131,6 +132,10 @@ std::optional<std::filesystem::path> CreateFreshPrivateDirectory(
         createError) {
         return std::nullopt;
     }
+
+    // Maintenance is deliberately best-effort: it runs before a new random
+    // directory is created, but can never prevent the update attempt.
+    BestEffortCleanupWindowsUpdateDirectories(updatesRoot);
 
     constexpr char kHex[] = "0123456789abcdef";
     for (int attempt = 0; attempt < 8; ++attempt) {
