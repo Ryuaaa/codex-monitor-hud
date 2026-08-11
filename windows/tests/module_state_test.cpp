@@ -109,7 +109,7 @@ void TestOrderSanitizationAndMovement() {
            "the first module must not move beyond the registry boundary");
 }
 
-void TestVersionNineRoundTripAndIndependentQuotaSwitches() {
+void TestVersionTenRoundTripAndIndependentQuotaSwitches() {
     using codex_monitor::ModuleId;
     using codex_monitor::Page;
 
@@ -132,11 +132,15 @@ void TestVersionNineRoundTripAndIndependentQuotaSwitches() {
         codex_monitor::ModuleIndex(ModuleId::kCodexWeeklyQuota)] = true;
     settings.nativePageVisible[
         codex_monitor::ModuleIndex(ModuleId::kOpenAIServiceStatus)] = true;
+    settings.weeklyQuotaAlert.enabled = true;
+    settings.weeklyQuotaAlert.thresholdPercent = 25.0;
+    settings.weeklyQuotaAlert.mode =
+        codex_monitor::codex::WeeklyQuotaAlertMode::kNaturalDay;
     settings.windowPlacement = codex_monitor::WindowPlacement{-900, 120, 720, 640};
 
     const std::string serialized = codex_monitor::SerializeSettings(settings);
-    Expect(serialized.find("version=9\n") == 0,
-           "the settings whitelist must be serialized as version 9");
+    Expect(serialized.find("version=10\n") == 0,
+           "the settings whitelist must be serialized as version 10");
 
     const codex_monitor::SettingsState parsed = codex_monitor::ParseSettings(serialized);
     Expect(parsed.currentPage == Page::kCodex,
@@ -150,12 +154,17 @@ void TestVersionNineRoundTripAndIndependentQuotaSwitches() {
     Expect(parsed.theme == codex_monitor::HudTheme::kPurple,
            "the low-saturation theme must survive persistence");
     Expect(!parsed.legacyWindowSizeNeedsMigration,
-           "a version 9 uniform frame must not be treated as legacy shape data");
+           "a current uniform frame must not be treated as legacy shape data");
     Expect(parsed.homeOrder == settings.homeOrder,
            "the homepage module order must survive persistence");
     Expect(parsed.windowPlacement && parsed.windowPlacement->x == -900 &&
                parsed.windowPlacement->width == 720,
            "window position and size must survive persistence");
+    Expect(parsed.weeklyQuotaAlert.enabled &&
+               parsed.weeklyQuotaAlert.thresholdPercent == 25.0 &&
+               parsed.weeklyQuotaAlert.mode ==
+                   codex_monitor::codex::WeeklyQuotaAlertMode::kNaturalDay,
+           "weekly alert enablement, threshold, and mode must round-trip together");
 
     const std::vector<ModuleId> home = codex_monitor::VisibleHomeModules(parsed);
     const std::vector<ModuleId> nativeCodex =
@@ -233,6 +242,67 @@ void TestLegacyShapeMigrationKeepsOriginAndResetsUniformScale() {
            "unsupported opacity values must retain the safe opaque default");
     Expect(damaged.theme == codex_monitor::HudTheme::kBlue,
            "unknown themes must retain the low-saturation blue default");
+}
+
+void TestWeeklyQuotaAlertDefaultsAndMigrationAreOptIn() {
+    using codex_monitor::codex::WeeklyQuotaAlertMode;
+
+    const codex_monitor::SettingsState defaults =
+        codex_monitor::DefaultSettings();
+    Expect(!defaults.weeklyQuotaAlert.enabled &&
+               defaults.weeklyQuotaAlert.thresholdPercent == 15.0 &&
+               defaults.weeklyQuotaAlert.mode ==
+                   WeeklyQuotaAlertMode::kRolling24Hours,
+           "weekly alerts must default off at fifteen percent in rolling mode");
+
+    const auto oldVersion = codex_monitor::ParseSettings(
+        "version=8\n"
+        "weekly_quota_alert_enabled=1\n"
+        "weekly_quota_alert_threshold=20\n"
+        "weekly_quota_alert_mode=naturalDay\n");
+    Expect(!oldVersion.weeklyQuotaAlert.enabled,
+           "an older settings schema must never silently opt into background alerts");
+
+    const auto appearanceVersion = codex_monitor::ParseSettings(
+        "version=9\n"
+        "window=10,20,575,850\n"
+        "window_locked=1\n"
+        "window_scale=1.2500\n"
+        "opacity_percent=82\n"
+        "theme=green\n"
+        "weekly_quota_alert_enabled=1\n"
+        "weekly_quota_alert_threshold=20\n"
+        "weekly_quota_alert_mode=naturalDay\n");
+    Expect(!appearanceVersion.weeklyQuotaAlert.enabled,
+           "the version 9 appearance schema must not opt into a version 10 alert");
+    Expect(appearanceVersion.windowScale == 1.25 &&
+               appearanceVersion.windowLocked &&
+               appearanceVersion.opacityPercent == 82 &&
+               appearanceVersion.theme == codex_monitor::HudTheme::kGreen &&
+               !appearanceVersion.legacyWindowSizeNeedsMigration,
+           "version 9 appearance settings must migrate without loss");
+
+    const auto partialCurrent = codex_monitor::ParseSettings(
+        "version=10\nweekly_quota_alert_enabled=1\n"
+        "weekly_quota_alert_threshold=20\n");
+    Expect(!partialCurrent.weeklyQuotaAlert.enabled &&
+               partialCurrent.weeklyQuotaAlert.thresholdPercent == 15.0,
+           "a partial current alert triplet must fall back to safe defaults");
+
+    const auto invalidThreshold = codex_monitor::ParseSettings(
+        "version=10\nweekly_quota_alert_enabled=1\n"
+        "weekly_quota_alert_threshold=101\n"
+        "weekly_quota_alert_mode=naturalDay\n");
+    Expect(!invalidThreshold.weeklyQuotaAlert.enabled,
+           "an out-of-range alert threshold must keep the feature disabled");
+
+    const auto duplicateField = codex_monitor::ParseSettings(
+        "version=10\nweekly_quota_alert_enabled=1\n"
+        "weekly_quota_alert_enabled=0\n"
+        "weekly_quota_alert_threshold=20\n"
+        "weekly_quota_alert_mode=rolling24h\n");
+    Expect(!duplicateField.weeklyQuotaAlert.enabled,
+           "duplicate alert fields must keep the opt-in feature disabled");
 }
 
 void TestVersionThreeMigrationPreservesExplicitVisibility() {
@@ -361,8 +431,14 @@ void TestActivityNativeDefaultMigrationPolicy() {
     Expect(ActivityIsVisible(codex_monitor::DefaultSettings()),
            "a new install must show current task activity on the Codex page");
     Expect(ActivityIsVisible(codex_monitor::ParseSettings(
-               "version=8\npage=codex\n")),
+               "version=10\npage=codex\n")),
            "a current settings file missing native visibility may use the activity default");
+    Expect(ActivityIsVisible(codex_monitor::ParseSettings(
+               "version=9\npage=codex\n")),
+           "the appearance schema missing native visibility may retain the activity default");
+    Expect(ActivityIsVisible(codex_monitor::ParseSettings(
+               "version=8\npage=codex\n")),
+           "the previous schema missing native visibility may retain the activity default");
     Expect(ActivityIsVisible(codex_monitor::ParseSettings(
                "version=7\npage=codex\n")),
            "the previous schema missing native visibility may retain the activity default");
@@ -495,9 +571,10 @@ void TestWindowPlacementReturnsToAVisibleWorkArea() {
 int main() {
     TestNewInstallDefaultsUseRegistryPolicy();
     TestOrderSanitizationAndMovement();
-    TestVersionNineRoundTripAndIndependentQuotaSwitches();
+    TestVersionTenRoundTripAndIndependentQuotaSwitches();
     TestVersionSevenIoMigrationPreservesExplicitChoices();
     TestLegacyShapeMigrationKeepsOriginAndResetsUniformScale();
+    TestWeeklyQuotaAlertDefaultsAndMigrationAreOptIn();
     TestVersionThreeMigrationPreservesExplicitVisibility();
     TestVersionOneMigrationPreservesOldHomeChoices();
     TestForecastNativeDefaultMigrationPolicy();

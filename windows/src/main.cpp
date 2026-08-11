@@ -9,6 +9,7 @@
 #endif
 
 #include <windows.h>
+#include <commctrl.h>
 
 #include <winrt/base.h>
 
@@ -17,6 +18,8 @@
 #include "codex/codex_cost_hybrid.h"
 #include "codex/codex_usage_math.h"
 #include "codex/codex_worker.h"
+#include "codex/weekly_quota_alert_delivery.h"
+#include "codex/weekly_quota_notification_win32.h"
 #include "module_state.h"
 #include "performance_diagnosis.h"
 #include "performance_worker.h"
@@ -77,6 +80,10 @@ constexpr int kSettingsTopmostId = 3300;
 constexpr int kSettingsCloseId = 3301;
 constexpr int kSettingsCheckUpdatesId = 3302;
 constexpr int kSettingsInstallUpdateId = 3303;
+constexpr int kSettingsWeeklyAlertEnabledId = 3304;
+constexpr int kSettingsWeeklyAlertThresholdId = 3305;
+constexpr int kSettingsWeeklyAlertRollingId = 3306;
+constexpr int kSettingsWeeklyAlertNaturalId = 3307;
 constexpr int kSettingsNativeVisibleBaseId = 3400;
 constexpr int kSettingsWindowLockId = 3500;
 constexpr int kSettingsCornerBaseId = 3510;
@@ -149,6 +156,12 @@ struct AppState {
     std::array<HWND, 4> settingsOpacityButtons{};
     HWND settingsThemeLabel = nullptr;
     std::array<HWND, 4> settingsThemeButtons{};
+    HWND settingsWeeklyAlertEnabledCheck = nullptr;
+    HWND settingsWeeklyAlertThresholdLabel = nullptr;
+    HWND settingsWeeklyAlertThresholdSlider = nullptr;
+    HWND settingsWeeklyAlertRollingRadio = nullptr;
+    HWND settingsWeeklyAlertNaturalRadio = nullptr;
+    HWND settingsWeeklyAlertStatus = nullptr;
     HWND settingsUpdateStatus = nullptr;
     HWND settingsCheckUpdatesButton = nullptr;
     HWND settingsInstallUpdateButton = nullptr;
@@ -200,10 +213,16 @@ struct AppState {
     double appliedMainUiScale = 0.0;
     ULONGLONG nextSlowSampleTick = 0;
     std::filesystem::path settingsPath;
+    std::filesystem::path quotaHistoryPath;
+    std::filesystem::path weeklyQuotaAlertStatePath;
     codex_monitor::SettingsState settings = codex_monitor::DefaultSettings();
     codex_monitor::PerformanceWorker performanceWorker;
     codex_monitor::PerformanceSnapshot latestSnapshot;
     codex_monitor::codex::CodexWorker codexWorker;
+    codex_monitor::codex::WeeklyQuotaNotificationWin32
+        weeklyQuotaNotification;
+    std::optional<codex_monitor::codex::WeeklyQuotaAlertDeliveryResult>
+        latestWeeklyQuotaAlertDelivery;
     codex_monitor::codex::CodexDataState latestCodexData;
     codex_monitor::codex::AppServerRefreshReport latestCodexReport;
     std::optional<codex_monitor::codex::QuotaForecastRefresh>
@@ -239,6 +258,7 @@ void RefreshSettingsControls(AppState& state);
 void RefreshUpdateControls(AppState& state);
 void ApplyWindowOpacity(HWND window, AppState& state);
 void ApplyTheme(HWND window, AppState& state);
+void RefreshWeeklyQuotaAlertControls(AppState& state);
 
 std::filesystem::path DefaultCodexSessionsRoot() {
     SetLastError(ERROR_SUCCESS);
@@ -342,6 +362,11 @@ void RecreateSettingsFonts(HWND window, AppState& state) {
     ApplyFont(state.settingsCornerLabel, state.settingsSmallFont);
     ApplyFont(state.settingsOpacityLabel, state.settingsSmallFont);
     ApplyFont(state.settingsThemeLabel, state.settingsSmallFont);
+    ApplyFont(state.settingsWeeklyAlertEnabledCheck, state.settingsSmallFont);
+    ApplyFont(state.settingsWeeklyAlertThresholdLabel, state.settingsSmallFont);
+    ApplyFont(state.settingsWeeklyAlertRollingRadio, state.settingsSmallFont);
+    ApplyFont(state.settingsWeeklyAlertNaturalRadio, state.settingsSmallFont);
+    ApplyFont(state.settingsWeeklyAlertStatus, state.settingsSmallFont);
     ApplyFont(state.settingsUpdateStatus, state.settingsSmallFont);
     ApplyFont(state.settingsCheckUpdatesButton, state.settingsSmallFont);
     ApplyFont(state.settingsInstallUpdateButton, state.settingsSmallFont);
@@ -897,6 +922,77 @@ const codex_monitor::codex::RateLimitWindow* SelectQuotaWindow(
     // slot is treated as the short window and secondary as the weekly window.
     const codex_monitor::codex::RateLimitWindow* fallback = weekly ? secondary : primary;
     return fallback && !fallback->windowDurationMinutes ? fallback : nullptr;
+}
+
+std::optional<std::int64_t> LocalDayStartUnixSeconds(
+    std::int64_t nowUnixSeconds) noexcept {
+    if (nowUnixSeconds < 0 ||
+        nowUnixSeconds > static_cast<std::int64_t>(
+                             std::numeric_limits<std::time_t>::max())) {
+        return std::nullopt;
+    }
+    const std::time_t now = static_cast<std::time_t>(nowUnixSeconds);
+    std::tm local{};
+    if (localtime_s(&local, &now) != 0) return std::nullopt;
+    local.tm_hour = 0;
+    local.tm_min = 0;
+    local.tm_sec = 0;
+    local.tm_isdst = -1;
+    const std::time_t dayStart = std::mktime(&local);
+    if (dayStart < 0) return std::nullopt;
+    return static_cast<std::int64_t>(dayStart);
+}
+
+bool EnsureWeeklyQuotaNotificationAvailable(AppState& state) {
+    if (!state.settings.weeklyQuotaAlert.enabled) {
+        state.weeklyQuotaNotification.Stop();
+        return false;
+    }
+    if (state.weeklyQuotaNotification.available()) return true;
+    HICON icon = LoadIconW(GetModuleHandleW(nullptr),
+                           MAKEINTRESOURCEW(IDI_CODEX_MONITOR_HUD));
+    return state.weeklyQuotaNotification.Start(state.mainWindow, icon);
+}
+
+void EvaluateWeeklyQuotaAlertAfterRefresh(AppState& state) {
+    if (!state.settings.weeklyQuotaAlert.enabled ||
+        !state.latestCodexReport.rateLimitsResponseReceived ||
+        state.latestCodexData.rateLimits.lastFailure ||
+        !state.latestCodexData.rateLimits.lastValue) {
+        return;
+    }
+    const codex_monitor::codex::RateLimitWindow* weekly =
+        SelectQuotaWindow(*state.latestCodexData.rateLimits.lastValue, true);
+    if (!weekly || !weekly->resetsAtUnixSeconds) return;
+
+    const std::int64_t nowUnixSeconds =
+        std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::system_clock::now().time_since_epoch())
+            .count();
+    codex_monitor::codex::WeeklyQuotaAlertDeliveryRequest request;
+    request.policy = state.settings.weeklyQuotaAlert;
+    request.quotaHistoryPath = state.quotaHistoryPath;
+    request.alertStatePath = state.weeklyQuotaAlertStatePath;
+    request.currentWeeklyRemainingPercent = static_cast<double>(
+        100 - std::clamp(static_cast<int>(weekly->usedPercent), 0, 100));
+    request.currentWeeklyResetAtUnixSeconds =
+        *weekly->resetsAtUnixSeconds;
+    request.nowUnixSeconds = nowUnixSeconds;
+    if (request.policy.mode ==
+        codex_monitor::codex::WeeklyQuotaAlertMode::kNaturalDay) {
+        request.localDayStartUnixSeconds =
+            LocalDayStartUnixSeconds(nowUnixSeconds);
+    }
+    request.notificationFacilityAvailable =
+        EnsureWeeklyQuotaNotificationAvailable(state);
+
+    state.latestWeeklyQuotaAlertDelivery =
+        codex_monitor::codex::EvaluateAndDeliverWeeklyQuotaAlert(
+            request,
+            [&state](const auto& notification) {
+                return state.weeklyQuotaNotification.Show(notification);
+            });
+    RefreshWeeklyQuotaAlertControls(state);
 }
 
 template <typename T>
@@ -1579,6 +1675,8 @@ void UpdateStatusText(AppState& state) {
     output << L"Top: " << (state.settings.alwaysOnTop ? L"On" : L"Off");
     const bool needsPerformance = CurrentPageNeedsPerformance(state);
     const bool needsCodex = CurrentPageNeedsCodexData(state);
+    const bool weeklyAlertEnabled =
+        state.settings.weeklyQuotaAlert.enabled;
     const bool needsActivity = CurrentPageNeedsCodexActivity(state);
     const bool needsService = CurrentPageNeedsServiceStatus(state);
     if (needsPerformance) {
@@ -1598,9 +1696,10 @@ void UpdateStatusText(AppState& state) {
                    << L" metric gaps)";
         }
     }
-    if (needsCodex) {
+    if (needsCodex || weeklyAlertEnabled) {
         output << L"  |  Codex: ";
-        if (state.windowMinimized || state.codexPaused) {
+        if (state.codexPaused ||
+            (state.windowMinimized && !weeklyAlertEnabled)) {
             output << L"paused";
         } else if (!state.codexWorkerAvailable) {
             output << L"unavailable";
@@ -1616,6 +1715,7 @@ void UpdateStatusText(AppState& state) {
         } else {
             output << L"5 min";
         }
+        if (weeklyAlertEnabled && !needsCodex) output << L" alert";
     }
     if (needsActivity) {
         output << L"  |  Activity: ";
@@ -1652,7 +1752,8 @@ void UpdateStatusText(AppState& state) {
             output << L"15 min";
         }
     }
-    if (!needsPerformance && !needsCodex && !needsActivity && !needsService) {
+    if (!needsPerformance && !needsCodex && !weeklyAlertEnabled &&
+        !needsActivity && !needsService) {
         output << L"  |  No active data modules";
     }
     if (state.updateInstallWorker.IsBusy()) {
@@ -1754,6 +1855,7 @@ void ApplyCodexRefresh(
         state.latestCodexData.account.lastValue.has_value() ||
         state.latestCodexData.usage.lastValue.has_value() ||
         state.latestCodexData.threadList.lastValue.has_value();
+    EvaluateWeeklyQuotaAlertAfterRefresh(state);
     UpdateCodexCards(state);
     LayoutControls(state.mainWindow, state);
     UpdateStatusText(state);
@@ -1822,8 +1924,11 @@ void UpdateSamplingDemand(HWND window, AppState& state) {
 }
 
 void UpdateCodexDemand(HWND, AppState& state) {
-    const bool forecastEnabled = !state.windowMinimized && !state.windowHidden &&
-                                 CurrentPageShowsQuotaForecast(state);
+    const bool weeklyAlertEnabled =
+        state.settings.weeklyQuotaAlert.enabled;
+    const bool forecastEnabled = weeklyAlertEnabled ||
+        (!state.windowMinimized && !state.windowHidden &&
+         CurrentPageShowsQuotaForecast(state));
     bool costEnabled = false;
     bool costDemandChanged = false;
     if (state.codexWorkerAvailable) {
@@ -1834,8 +1939,9 @@ void UpdateCodexDemand(HWND, AppState& state) {
             state.codexWorker.SetCostHistoryEnabled(costEnabled);
     }
     const bool shouldRefresh =
-        !state.windowMinimized && !state.windowHidden &&
-        CurrentPageNeedsCodexData(state);
+        weeklyAlertEnabled ||
+        (!state.windowMinimized && !state.windowHidden &&
+         CurrentPageNeedsCodexData(state));
     if (!shouldRefresh) {
         if (!state.codexPaused && state.codexWorkerAvailable) {
             state.codexWorker.PauseAndInvalidate();
@@ -2596,6 +2702,64 @@ void RefreshUpdateControls(AppState& state) {
                                  : L"安装更新")));
 }
 
+void RefreshWeeklyQuotaAlertControls(AppState& state) {
+    if (!state.settingsWindow) return;
+    const bool enabled = state.settings.weeklyQuotaAlert.enabled;
+    if (state.settingsWeeklyAlertEnabledCheck) {
+        SendMessageW(state.settingsWeeklyAlertEnabledCheck, BM_SETCHECK,
+                     enabled ? BST_CHECKED : BST_UNCHECKED, 0);
+    }
+    const int threshold = std::clamp(
+        static_cast<int>(std::lround(
+            state.settings.weeklyQuotaAlert.thresholdPercent)),
+        5, 100);
+    if (state.settingsWeeklyAlertThresholdSlider) {
+        SendMessageW(state.settingsWeeklyAlertThresholdSlider, TBM_SETPOS,
+                     TRUE, threshold);
+        EnableWindow(state.settingsWeeklyAlertThresholdSlider, enabled);
+    }
+    if (state.settingsWeeklyAlertThresholdLabel) {
+        const std::wstring text =
+            L"提醒阈值：" + std::to_wstring(threshold) + L"%";
+        SetWindowTextW(state.settingsWeeklyAlertThresholdLabel, text.c_str());
+    }
+    const bool rolling = state.settings.weeklyQuotaAlert.mode ==
+        codex_monitor::codex::WeeklyQuotaAlertMode::kRolling24Hours;
+    if (state.settingsWeeklyAlertRollingRadio) {
+        SendMessageW(state.settingsWeeklyAlertRollingRadio, BM_SETCHECK,
+                     rolling ? BST_CHECKED : BST_UNCHECKED, 0);
+        EnableWindow(state.settingsWeeklyAlertRollingRadio, enabled);
+    }
+    if (state.settingsWeeklyAlertNaturalRadio) {
+        SendMessageW(state.settingsWeeklyAlertNaturalRadio, BM_SETCHECK,
+                     rolling ? BST_UNCHECKED : BST_CHECKED, 0);
+        EnableWindow(state.settingsWeeklyAlertNaturalRadio, enabled);
+    }
+    if (state.settingsWeeklyAlertStatus) {
+        std::wstring text;
+        if (!enabled) {
+            text = L"默认关闭；开启后每5分钟复用额度刷新，不增加额外轮询。";
+        } else if (!state.weeklyQuotaNotification.available()) {
+            text = L"已开启；系统通知暂不可用，不会误记为已提醒。";
+        } else {
+            text = L"已开启；数据不足时不提醒，同一周期只提醒一次。";
+        }
+        if (state.latestWeeklyQuotaAlertDelivery) {
+            using Status =
+                codex_monitor::codex::WeeklyQuotaAlertDeliveryStatus;
+            const Status status =
+                state.latestWeeklyQuotaAlertDelivery->status;
+            if (status == Status::kStateSaveFailed ||
+                status == Status::kStateUnavailable ||
+                status == Status::kHistoryUnavailable ||
+                status == Status::kNotificationFailedStateRestoreFailed) {
+                text += L" 当前记录不可用，本轮已安全抑制。";
+            }
+        }
+        SetWindowTextW(state.settingsWeeklyAlertStatus, text.c_str());
+    }
+}
+
 void RefreshSettingsControls(AppState& state) {
     if (!state.settingsWindow) return;
     state.settings.homeOrder = codex_monitor::SanitizeHomeOrder(state.settings.homeOrder);
@@ -2633,6 +2797,7 @@ void RefreshSettingsControls(AppState& state) {
                          : BST_UNCHECKED,
                      0);
     }
+    RefreshWeeklyQuotaAlertControls(state);
     RefreshUpdateControls(state);
     LayoutSettingsControls(state.settingsWindow, state);
 }
@@ -2658,7 +2823,7 @@ void LayoutSettingsControls(HWND window, AppState& state) {
     const int rowCount = static_cast<int>(state.settings.homeOrder.size());
     const int contentHeight = margin + headingAdvance +
         rowCount * (rowHeight + gap) + ScaleForDpi(window, 4) +
-        rowHeight * 7 + ScaleForDpi(window, 68) + margin;
+        rowHeight * 11 + gap * 4 + ScaleForDpi(window, 52) + margin;
     state.settingsScrollMaximum = std::max(0, contentHeight - height);
     state.settingsScrollOffset =
         std::clamp(state.settingsScrollOffset, 0, state.settingsScrollMaximum);
@@ -2695,7 +2860,7 @@ void LayoutSettingsControls(HWND window, AppState& state) {
     y += ScaleForDpi(window, 4);
     MoveWindow(state.settingsTopmostCheck, margin, y,
                width - margin * 2, rowHeight, TRUE);
-    y += rowHeight + ScaleForDpi(window, 8);
+    y += rowHeight + gap;
     MoveWindow(state.settingsWindowLockCheck, margin, y,
                width - margin * 2, rowHeight, TRUE);
     y += rowHeight + ScaleForDpi(window, 8);
@@ -2730,6 +2895,29 @@ void LayoutSettingsControls(HWND window, AppState& state) {
         MoveWindow(button, optionX, y, optionWidth, rowHeight, TRUE);
         optionX += optionWidth + optionGap;
     }
+    y += rowHeight + ScaleForDpi(window, 8);
+
+    MoveWindow(state.settingsWeeklyAlertEnabledCheck, margin, y,
+               width - margin * 2, rowHeight, TRUE);
+    y += rowHeight + gap;
+    const int thresholdLabelWidth = ScaleForDpi(window, 128);
+    MoveWindow(state.settingsWeeklyAlertThresholdLabel, margin, y,
+               thresholdLabelWidth, rowHeight, TRUE);
+    MoveWindow(state.settingsWeeklyAlertThresholdSlider,
+               margin + thresholdLabelWidth + gap, y,
+               std::max(ScaleForDpi(window, 120),
+                        width - margin * 2 - thresholdLabelWidth - gap),
+               rowHeight, TRUE);
+    y += rowHeight + gap;
+    const int modeWidth = ScaleForDpi(window, 132);
+    MoveWindow(state.settingsWeeklyAlertRollingRadio, margin, y,
+               modeWidth, rowHeight, TRUE);
+    MoveWindow(state.settingsWeeklyAlertNaturalRadio,
+               margin + modeWidth + gap, y,
+               modeWidth, rowHeight, TRUE);
+    y += rowHeight + gap;
+    MoveWindow(state.settingsWeeklyAlertStatus, margin, y,
+               width - margin * 2, rowHeight, TRUE);
     y += rowHeight + ScaleForDpi(window, 8);
 
     const int updateButtonWidth = ScaleForDpi(window, 104);
@@ -2834,6 +3022,46 @@ bool CreateSettingsControls(HWND window, AppState& state) {
             kSettingsThemeBaseId + static_cast<int>(index),
             BS_AUTORADIOBUTTON | (index == 0 ? WS_GROUP : 0));
     }
+    state.settingsWeeklyAlertEnabledCheck = CreateWindowExW(
+        0, L"BUTTON", L"周额度消耗提醒",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
+        0, 0, 0, 0, window,
+        reinterpret_cast<HMENU>(
+            static_cast<INT_PTR>(kSettingsWeeklyAlertEnabledId)),
+        GetModuleHandleW(nullptr), nullptr);
+    state.settingsWeeklyAlertThresholdLabel = CreateLabel(
+        window, L"提醒阈值：15%", SS_LEFT | SS_CENTERIMAGE);
+    state.settingsWeeklyAlertThresholdSlider = CreateWindowExW(
+        0, TRACKBAR_CLASSW, L"",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | TBS_HORZ | TBS_AUTOTICKS,
+        0, 0, 0, 0, window,
+        reinterpret_cast<HMENU>(
+            static_cast<INT_PTR>(kSettingsWeeklyAlertThresholdId)),
+        GetModuleHandleW(nullptr), nullptr);
+    if (state.settingsWeeklyAlertThresholdSlider) {
+        SendMessageW(state.settingsWeeklyAlertThresholdSlider, TBM_SETRANGE,
+                     TRUE, MAKELPARAM(5, 100));
+        SendMessageW(state.settingsWeeklyAlertThresholdSlider,
+                     TBM_SETTICFREQ, 5, 0);
+        SendMessageW(state.settingsWeeklyAlertThresholdSlider,
+                     TBM_SETPAGESIZE, 0, 5);
+    }
+    state.settingsWeeklyAlertRollingRadio = CreateWindowExW(
+        0, L"BUTTON", L"滚动24小时",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_GROUP | BS_AUTORADIOBUTTON,
+        0, 0, 0, 0, window,
+        reinterpret_cast<HMENU>(
+            static_cast<INT_PTR>(kSettingsWeeklyAlertRollingId)),
+        GetModuleHandleW(nullptr), nullptr);
+    state.settingsWeeklyAlertNaturalRadio = CreateWindowExW(
+        0, L"BUTTON", L"自然日（本地）",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTORADIOBUTTON,
+        0, 0, 0, 0, window,
+        reinterpret_cast<HMENU>(
+            static_cast<INT_PTR>(kSettingsWeeklyAlertNaturalId)),
+        GetModuleHandleW(nullptr), nullptr);
+    state.settingsWeeklyAlertStatus = CreateLabel(
+        window, L"默认关闭", SS_LEFT | SS_CENTERIMAGE);
     state.settingsUpdateStatus = CreateLabel(
         window, L"每天自动检查一次，也可以手动检查",
         SS_LEFT | SS_CENTERIMAGE);
@@ -2846,6 +3074,12 @@ bool CreateSettingsControls(HWND window, AppState& state) {
     if (!state.settingsHeading || !state.settingsTopmostCheck ||
         !state.settingsWindowLockCheck || !state.settingsCornerLabel ||
         !state.settingsOpacityLabel || !state.settingsThemeLabel ||
+        !state.settingsWeeklyAlertEnabledCheck ||
+        !state.settingsWeeklyAlertThresholdLabel ||
+        !state.settingsWeeklyAlertThresholdSlider ||
+        !state.settingsWeeklyAlertRollingRadio ||
+        !state.settingsWeeklyAlertNaturalRadio ||
+        !state.settingsWeeklyAlertStatus ||
         !state.settingsUpdateStatus || !state.settingsCheckUpdatesButton ||
         !state.settingsInstallUpdateButton || !state.settingsCloseButton) {
         return false;
@@ -3030,6 +3264,43 @@ LRESULT CALLBACK SettingsWindowProcedure(HWND window, UINT message,
                 PersistSettings(*state);
                 return 0;
             }
+            if (controlId == kSettingsWeeklyAlertEnabledId) {
+                const bool enabled =
+                    SendMessageW(state->settingsWeeklyAlertEnabledCheck,
+                                 BM_GETCHECK, 0, 0) == BST_CHECKED;
+                state->settings.weeklyQuotaAlert.enabled = enabled;
+                state->latestWeeklyQuotaAlertDelivery.reset();
+                if (enabled) {
+                    static_cast<void>(
+                        EnsureWeeklyQuotaNotificationAvailable(*state));
+                } else {
+                    state->weeklyQuotaNotification.Stop();
+                }
+                PersistSettings(*state);
+                UpdateCodexDemand(state->mainWindow, *state);
+                if (enabled && state->codexWorkerAvailable) {
+                    state->codexWorker.RequestRefresh();
+                }
+                RefreshWeeklyQuotaAlertControls(*state);
+                UpdateStatusText(*state);
+                return 0;
+            }
+            if (controlId == kSettingsWeeklyAlertRollingId ||
+                controlId == kSettingsWeeklyAlertNaturalId) {
+                state->settings.weeklyQuotaAlert.mode =
+                    controlId == kSettingsWeeklyAlertNaturalId
+                        ? codex_monitor::codex::WeeklyQuotaAlertMode::kNaturalDay
+                        : codex_monitor::codex::WeeklyQuotaAlertMode::
+                              kRolling24Hours;
+                state->latestWeeklyQuotaAlertDelivery.reset();
+                PersistSettings(*state);
+                if (state->settings.weeklyQuotaAlert.enabled &&
+                    state->codexWorkerAvailable) {
+                    state->codexWorker.RequestRefresh();
+                }
+                RefreshWeeklyQuotaAlertControls(*state);
+                return 0;
+            }
             if (controlId == kSettingsCheckUpdatesId) {
                 if (state->updateWorkerAvailable &&
                     !state->updateInstallWorker.IsBusy() &&
@@ -3071,6 +3342,35 @@ LRESULT CALLBACK SettingsWindowProcedure(HWND window, UINT message,
         case WM_SIZE:
             if (state && wParam != SIZE_MINIMIZED) LayoutSettingsControls(window, *state);
             return 0;
+
+        case WM_HSCROLL:
+            if (state &&
+                reinterpret_cast<HWND>(lParam) ==
+                    state->settingsWeeklyAlertThresholdSlider) {
+                const int threshold = std::clamp(
+                    static_cast<int>(SendMessageW(
+                        state->settingsWeeklyAlertThresholdSlider,
+                        TBM_GETPOS, 0, 0)),
+                    5, 100);
+                state->settings.weeklyQuotaAlert.thresholdPercent =
+                    static_cast<double>(threshold);
+                if (state->settingsWeeklyAlertThresholdLabel) {
+                    const std::wstring label =
+                        L"提醒阈值：" + std::to_wstring(threshold) + L"%";
+                    SetWindowTextW(state->settingsWeeklyAlertThresholdLabel,
+                                   label.c_str());
+                }
+                if (LOWORD(wParam) != TB_THUMBTRACK) {
+                    state->latestWeeklyQuotaAlertDelivery.reset();
+                    PersistSettings(*state);
+                    if (state->settings.weeklyQuotaAlert.enabled &&
+                        state->codexWorkerAvailable) {
+                        state->codexWorker.RequestRefresh();
+                    }
+                }
+                return 0;
+            }
+            break;
 
         case WM_VSCROLL:
             if (state) {
@@ -3183,6 +3483,12 @@ LRESULT CALLBACK SettingsWindowProcedure(HWND window, UINT message,
                 state->settingsOpacityButtons.fill(nullptr);
                 state->settingsThemeLabel = nullptr;
                 state->settingsThemeButtons.fill(nullptr);
+                state->settingsWeeklyAlertEnabledCheck = nullptr;
+                state->settingsWeeklyAlertThresholdLabel = nullptr;
+                state->settingsWeeklyAlertThresholdSlider = nullptr;
+                state->settingsWeeklyAlertRollingRadio = nullptr;
+                state->settingsWeeklyAlertNaturalRadio = nullptr;
+                state->settingsWeeklyAlertStatus = nullptr;
                 state->settingsUpdateStatus = nullptr;
                 state->settingsCheckUpdatesButton = nullptr;
                 state->settingsInstallUpdateButton = nullptr;
@@ -3215,10 +3521,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             state->codexWorkerAvailable =
                 state->codexWorker.Start(
                     window, kCodexReadyMessage, kApplicationVersion,
-                    state->settingsPath.empty()
-                        ? std::filesystem::path{}
-                        : state->settingsPath.parent_path() /
-                              L"quota-usage-history.txt",
+                    state->quotaHistoryPath,
                     state->settingsPath.empty()
                         ? std::filesystem::path{}
                         : state->settingsPath.parent_path() /
@@ -3239,6 +3542,10 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             state->updateInstallWorkerAvailable =
                 state->updateInstallWorker.Start(
                     window, kUpdateInstallReadyMessage);
+            if (state->settings.weeklyQuotaAlert.enabled) {
+                static_cast<void>(
+                    EnsureWeeklyQuotaNotificationAvailable(*state));
+            }
             UpdateSamplingDemand(window, *state);
             UpdateCodexDemand(window, *state);
             UpdateCodexActivityDemand(window, *state);
@@ -3637,6 +3944,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
                 StopSamplingTimer(window, *state);
                 state->performanceWorker.StopAndJoin();
                 state->codexWorker.StopAndJoin();
+                state->weeklyQuotaNotification.Stop();
                 state->codexActivityWorker.StopAndJoin();
                 state->serviceStatusWorker.StopAndJoin();
                 state->updateWorker.RequestStop();
@@ -3747,6 +4055,11 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand) {
 
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
 
+    INITCOMMONCONTROLSEX commonControls{};
+    commonControls.dwSize = sizeof(commonControls);
+    commonControls.dwICC = ICC_BAR_CLASSES;
+    if (!InitCommonControlsEx(&commonControls)) return 1;
+
     // Keep Windows Runtime initialized for the application lifetime while
     // background workers initialize and release their own MTA threads.
     try {
@@ -3770,6 +4083,13 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand) {
     AppState state;
     state.settingsPath = codex_monitor::DefaultSettingsPath();
     state.settings = codex_monitor::LoadSettingsFile(state.settingsPath);
+    if (!state.settingsPath.empty()) {
+        state.quotaHistoryPath =
+            state.settingsPath.parent_path() / L"quota-usage-history.txt";
+        state.weeklyQuotaAlertStatePath =
+            state.settingsPath.parent_path() /
+            L"weekly-quota-alert-state.txt";
+    }
     const UINT systemDpi = GetDpiForSystem();
     const codex_monitor::WindowPlacement placement = InitialWindowPlacement(state, systemDpi);
     state.settings.windowPlacement = placement;

@@ -173,6 +173,18 @@ WEEKLY_QUOTA_ALERT_TEST = (
 WEEKLY_QUOTA_ALERT_STATE_STORE_TEST = (
     WINDOWS_ROOT / "tests" / "weekly_quota_alert_state_store_test.cpp"
 ).read_text(encoding="utf-8")
+WEEKLY_QUOTA_ALERT_DELIVERY = (
+    WINDOWS_ROOT / "src" / "codex" / "weekly_quota_alert_delivery.cpp"
+).read_text(encoding="utf-8")
+WEEKLY_QUOTA_ALERT_DELIVERY_HEADER = (
+    WINDOWS_ROOT / "src" / "codex" / "weekly_quota_alert_delivery.h"
+).read_text(encoding="utf-8")
+WEEKLY_QUOTA_NOTIFICATION = (
+    WINDOWS_ROOT / "src" / "codex" / "weekly_quota_notification_win32.cpp"
+).read_text(encoding="utf-8")
+WEEKLY_QUOTA_ALERT_DELIVERY_TEST = (
+    WINDOWS_ROOT / "tests" / "weekly_quota_alert_delivery_test.cpp"
+).read_text(encoding="utf-8")
 SERVICE_STATUS_MODEL = (
     WINDOWS_ROOT / "src" / "service_status_model.cpp"
 ).read_text(encoding="utf-8")
@@ -675,6 +687,8 @@ def main() -> None:
         "MoveHomeModule": "settings reorder behavior is portable and testable",
         "SerializeSettings": "settings use an explicit whitelist serializer",
         "ParseSettings": "settings parsing has a portable boundary",
+        "version == 10":
+            "only the complete current schema may restore background quota alerts",
         "ClampWindowPlacement": "off-screen recovery is portable and testable",
     }
     for token, reason in state_contracts.items():
@@ -686,17 +700,22 @@ def main() -> None:
         "intentionally empty homepage": "all-hidden homepage intent is fixed",
         "unknown page must fall back to home": "damaged settings have a safe fallback",
         "off-screen saved window must return": "monitor removal recovery is fixed",
-        "TestVersionNineRoundTripAndIndependentQuotaSwitches":
-            "the independent quota switches and version 9 appearance schema have a round-trip test",
+        "TestVersionTenRoundTripAndIndependentQuotaSwitches":
+            "the independent quota, appearance, and alert settings have a version 10 round-trip test",
         "TestVersionSevenIoMigrationPreservesExplicitChoices":
             "the new I/O module migrates version 7 settings without coupling quotas",
         "TestLegacyShapeMigrationKeepsOriginAndResetsUniformScale":
             "old independently shaped windows migrate to a uniform frame",
+        "TestWeeklyQuotaAlertDefaultsAndMigrationAreOptIn":
+            "weekly alert settings remain opt-in across migration",
+        "version 9 appearance settings must migrate without loss":
+            "the previous appearance schema is retained without enabling alerts",
         "TestVersionThreeMigrationPreservesExplicitVisibility":
             "version 3 settings retain explicit visibility when the service module is added",
         "TestVersionOneMigrationPreservesOldHomeChoices":
             "version 1 settings migrate without enabling new Home work",
-        '"version=9\\n"': "the current persisted settings schema is version 9",
+        '"version=10\\n"': "the current persisted settings schema is version 10",
+        '"version=9\\n"': "the previous appearance schema has an explicit migration fixture",
         '"version=1\\n"': "the previous settings schema has an explicit migration fixture",
     }
     for token, reason in state_test_contracts.items():
@@ -1458,6 +1477,53 @@ def main() -> None:
     }.items():
         require(WEEKLY_QUOTA_ALERT_STATE_STORE_TEST, token, reason)
 
+    weekly_alert_delivery_sources = (
+        WEEKLY_QUOTA_ALERT_DELIVERY_HEADER + WEEKLY_QUOTA_ALERT_DELIVERY +
+        WEEKLY_QUOTA_NOTIFICATION + MAIN + MODULE_STATE
+    )
+    for token, reason in {
+        "notificationFacilityAvailable":
+            "an unavailable Windows notification facility short-circuits before persistence",
+        "stateStore.Save(evaluation.nextState)":
+            "the anti-duplication state is committed before notification delivery",
+        "sender(notification)":
+            "notification delivery has a narrow percentage-only callback",
+        "stateStore.Save(priorState)":
+            "a rejected notification restores the prior anti-duplication state",
+        "Shell_NotifyIconW(NIM_MODIFY":
+            "Windows receives a non-activating Shell notification",
+        "NIIF_RESPECT_QUIET_TIME":
+            "Windows quiet-time policy is respected",
+        "weeklyAlertEnabled ||":
+            "enabled alerts retain the existing Codex quota refresh while hidden",
+        "weekly_quota_alert_enabled=":
+            "alert enablement uses the versioned settings whitelist",
+        "weekly_quota_alert_threshold=":
+            "the user threshold is persisted independently",
+        "weekly_quota_alert_mode=":
+            "natural-day and rolling mode are persisted independently",
+    }.items():
+        require(weekly_alert_delivery_sources, token, reason)
+    reject(WEEKLY_QUOTA_ALERT_DELIVERY_HEADER, "windows.h",
+           "delivery sequencing remains portable and fixed-testable")
+    for token, reason in {
+        "an unavailable notification facility must not pop up or be recorded as reminded":
+            "unavailable notification handling is covered",
+        "the next anti-duplication state must be atomically saved before Windows is asked to notify":
+            "save-before-notify ordering is covered",
+        "the same rolling period must not deliver a duplicate notification":
+            "product-level single-period suppression is covered",
+        "an atomic state failure must suppress the notification":
+            "persistence failure cannot notify",
+        "a notification rejected by Windows must not remain recorded as delivered":
+            "notification rejection rollback is covered",
+        "insufficient history must never produce a notification":
+            "insufficient product history is covered",
+        "a changed weekly reset must start one fresh notification cycle":
+            "weekly reset rollover is covered at the delivery boundary",
+    }.items():
+        require(WEEKLY_QUOTA_ALERT_DELIVERY_TEST, token, reason)
+
     activity_sources = (
         CODEX_ACTIVITY_SCAN_HEADER + CODEX_ACTIVITY_SCAN +
         CODEX_ACTIVITY_WORKER_HEADER + CODEX_ACTIVITY_WORKER
@@ -1863,6 +1929,10 @@ def main() -> None:
             "portable weekly alert state-store tests are buildable",
         "add_test(NAME windows_weekly_quota_alert_state_store":
             "weekly alert persistence tests are registered with CTest",
+        "add_executable(CodexMonitorWeeklyQuotaAlertDeliveryTests":
+            "product-level weekly alert delivery tests are buildable",
+        "add_test(NAME windows_weekly_quota_alert_delivery":
+            "weekly alert delivery sequencing is registered with CTest",
         "add_test(NAME windows_github_release_selector":
             "strict release selection tests are registered with CTest",
         "add_test(NAME windows_update_state_store":
@@ -1928,7 +1998,7 @@ def main() -> None:
         "$<$<COMPILE_LANGUAGE:CXX>:/W4>":
             "C++ compiler flags are not forwarded to the resource compiler",
         "windowsapp": "Windows.Data.Json is linked for the official protocol parser",
-        "user32 gdi32 psapi shell32 ole32 winhttp windowsapp":
+        "user32 gdi32 comctl32 psapi shell32 ole32 winhttp windowsapp":
             "only documented Windows system libraries are linked",
     }
     for token, reason in cmake_contracts.items():

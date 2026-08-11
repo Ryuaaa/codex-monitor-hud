@@ -232,6 +232,18 @@ if(BUILD_TESTING)
     add_test(NAME windows_weekly_quota_alert_state_store
         COMMAND CodexMonitorWeeklyQuotaAlertStateStoreTests)
 
+    add_executable(CodexMonitorWeeklyQuotaAlertDeliveryTests
+        src/codex/quota_history_store.cpp
+        src/codex/weekly_quota_alert.cpp
+        src/codex/weekly_quota_alert_delivery.cpp
+        src/codex/weekly_quota_alert_state_store.cpp
+        tests/weekly_quota_alert_delivery_test.cpp
+    )
+    configure_codex_monitor_target(
+        CodexMonitorWeeklyQuotaAlertDeliveryTests)
+    add_test(NAME windows_weekly_quota_alert_delivery
+        COMMAND CodexMonitorWeeklyQuotaAlertDeliveryTests)
+
     add_executable(CodexMonitorGitHubReleaseSelectorTests
         src/update/github_release_selector.cpp
         tests/github_release_selector_test.cpp
@@ -715,6 +727,10 @@ if(WIN32)
         src/codex/codex_refresh_schedule.cpp
         src/codex/codex_usage_math.cpp
         src/codex/codex_worker.cpp
+        src/codex/weekly_quota_alert.cpp
+        src/codex/weekly_quota_alert_delivery.cpp
+        src/codex/weekly_quota_alert_state_store.cpp
+        src/codex/weekly_quota_notification_win32.cpp
         src/main.cpp
         src/module_state.cpp
         src/performance_diagnosis.cpp
@@ -762,7 +778,8 @@ if(WIN32)
             "CODEX_MONITOR_WINDOWS_PUBLISHER_SHA256=\"${CODEX_MONITOR_WINDOWS_PUBLISHER_SHA256}\"")
     endif()
     target_link_libraries(CodexMonitorHUD PRIVATE
-        user32 gdi32 psapi shell32 ole32 winhttp windowsapp bcrypt iphlpapi mincore pdh
+        user32 gdi32 comctl32 psapi shell32 ole32 winhttp windowsapp bcrypt
+        iphlpapi mincore pdh
         wintrust crypt32 msi advapi32 version)
 else()
     message(STATUS "Non-Windows host: configuring portable snapshot and state tests only.")

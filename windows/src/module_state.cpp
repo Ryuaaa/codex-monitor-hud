@@ -242,6 +242,24 @@ bool IsSupportedOpacity(int value) {
     return value == 70 || value == 82 || value == 90 || value == 100;
 }
 
+std::string_view WeeklyQuotaAlertModeKey(
+    codex::WeeklyQuotaAlertMode mode) noexcept {
+    return mode == codex::WeeklyQuotaAlertMode::kNaturalDay
+               ? "naturalDay"
+               : "rolling24h";
+}
+
+std::optional<codex::WeeklyQuotaAlertMode> WeeklyQuotaAlertModeFromKey(
+    std::string_view key) noexcept {
+    if (key == "rolling24h") {
+        return codex::WeeklyQuotaAlertMode::kRolling24Hours;
+    }
+    if (key == "naturalDay") {
+        return codex::WeeklyQuotaAlertMode::kNaturalDay;
+    }
+    return std::nullopt;
+}
+
 long long IntersectionArea(const WindowPlacement& left, const WindowPlacement& right) {
     const long long intersectionWidth = std::max(
         0LL,
@@ -376,7 +394,7 @@ bool MoveHomeModule(SettingsState& settings, ModuleId id, int direction) {
 std::string SerializeSettings(const SettingsState& settings) {
     const std::vector<ModuleId> order = SanitizeHomeOrder(settings.homeOrder);
     std::ostringstream output;
-    output << "version=9\n";
+    output << "version=10\n";
     output << "page=" << PageKey(settings.currentPage) << '\n';
     output << "always_on_top=" << (settings.alwaysOnTop ? 1 : 0) << '\n';
     output << "window_locked=" << (settings.windowLocked ? 1 : 0) << '\n';
@@ -410,6 +428,19 @@ std::string SerializeSettings(const SettingsState& settings) {
         wroteNativeVisible = true;
     }
     output << '\n';
+    output << "weekly_quota_alert_enabled="
+           << (settings.weeklyQuotaAlert.enabled ? 1 : 0) << '\n';
+    const double configuredAlertThreshold =
+        settings.weeklyQuotaAlert.thresholdPercent;
+    const int alertThreshold = std::clamp(
+        static_cast<int>(std::lround(
+            std::isfinite(configuredAlertThreshold)
+                ? configuredAlertThreshold
+                : 15.0)),
+        5, 100);
+    output << "weekly_quota_alert_threshold=" << alertThreshold << '\n';
+    output << "weekly_quota_alert_mode="
+           << WeeklyQuotaAlertModeKey(settings.weeklyQuotaAlert.mode) << '\n';
     if (settings.windowPlacement) {
         const WindowPlacement& placement = *settings.windowPlacement;
         output << "window=" << placement.x << ',' << placement.y << ','
@@ -426,6 +457,10 @@ SettingsState ParseSettings(std::string_view text) {
     bool windowKeyFound = false;
     bool windowScaleKeyFound = false;
     std::optional<int> version;
+    std::optional<bool> weeklyAlertEnabled;
+    std::optional<int> weeklyAlertThreshold;
+    std::optional<codex::WeeklyQuotaAlertMode> weeklyAlertMode;
+    bool weeklyAlertSettingsMalformed = false;
     std::vector<ModuleId> requestedOrder;
 
     for (std::string_view line : Split(text, '\n')) {
@@ -490,6 +525,27 @@ SettingsState ParseSettings(std::string_view text) {
                 nativeVisibleKeyFound = true;
                 settings.nativePageVisible = requestedVisibility;
             }
+        } else if (key == "weekly_quota_alert_enabled") {
+            if (weeklyAlertEnabled || (value != "0" && value != "1")) {
+                weeklyAlertSettingsMalformed = true;
+            } else {
+                weeklyAlertEnabled = value == "1";
+            }
+        } else if (key == "weekly_quota_alert_threshold") {
+            const std::optional<int> parsed = ParseInt(value);
+            if (weeklyAlertThreshold || !parsed || *parsed < 5 ||
+                *parsed > 100) {
+                weeklyAlertSettingsMalformed = true;
+            } else {
+                weeklyAlertThreshold = parsed;
+            }
+        } else if (key == "weekly_quota_alert_mode") {
+            const auto parsed = WeeklyQuotaAlertModeFromKey(value);
+            if (weeklyAlertMode || !parsed) {
+                weeklyAlertSettingsMalformed = true;
+            } else {
+                weeklyAlertMode = parsed;
+            }
         } else if (key == "window") {
             const std::vector<std::string_view> parts = Split(value, ',');
             if (parts.size() != 4) continue;
@@ -502,6 +558,18 @@ SettingsState ParseSettings(std::string_view text) {
                 windowKeyFound = true;
             }
         }
+    }
+
+    // The alert creates persistent background work and notifications, so only
+    // a complete current-schema triplet can opt in. Older, unknown, partial,
+    // and malformed settings remain safely disabled with the 15% rolling
+    // default.
+    if (version == 10 && !weeklyAlertSettingsMalformed &&
+        weeklyAlertEnabled && weeklyAlertThreshold && weeklyAlertMode) {
+        settings.weeklyQuotaAlert.enabled = *weeklyAlertEnabled;
+        settings.weeklyQuotaAlert.thresholdPercent =
+            static_cast<double>(*weeklyAlertThreshold);
+        settings.weeklyQuotaAlert.mode = *weeklyAlertMode;
     }
 
     settings.homeOrder = SanitizeHomeOrder(requestedOrder);
@@ -527,10 +595,10 @@ SettingsState ParseSettings(std::string_view text) {
         // not silently opt the user into newly introduced work.
         const bool useForecastDefault =
             (version == 5 || version == 6 || version == 7 || version == 8 ||
-             version == 9) &&
+             version == 9 || version == 10) &&
             !nativeVisibleKeySeen;
         const bool useActivityDefault =
-            (version == 7 || version == 8 || version == 9) &&
+            (version == 7 || version == 8 || version == 9 || version == 10) &&
             !nativeVisibleKeySeen;
         if (!useForecastDefault) {
             settings.nativePageVisible[ModuleIndex(ModuleId::kCodexQuotaForecast)] =

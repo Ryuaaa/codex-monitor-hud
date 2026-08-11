@@ -1,5 +1,7 @@
 #pragma once
 
+#include "codex/weekly_quota_alert.h"
+
 #include <array>
 #include <optional>
 #include <string>
@@ -67,6 +69,7 @@ struct SettingsState {
     std::vector<ModuleId> homeOrder;
     std::array<bool, kModuleCount> homeVisible{};
     std::array<bool, kModuleCount> nativePageVisible{};
+    codex::WeeklyQuotaAlertPolicy weeklyQuotaAlert;
     std::optional<WindowPlacement> windowPlacement;
     double windowScale = 1.0;
     bool windowLocked = false;
