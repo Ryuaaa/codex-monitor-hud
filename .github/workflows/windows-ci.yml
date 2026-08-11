@@ -368,15 +368,11 @@ jobs:
               $installers[0].Name
             Copy-Item -LiteralPath $signedInstaller `
               -Destination $tamperedInstaller
-            $tamperedBytes = [System.IO.File]::ReadAllBytes($tamperedInstaller)
-            if ($tamperedBytes.Length -lt 1024) {
-              throw "The signed MSI is unexpectedly small"
+            & $applyTransactionTest --tamper-msi-product-name `
+              $tamperedInstaller
+            if ($LASTEXITCODE -ne 0) {
+              throw "Could not mutate signed MSI content for the signature test"
             }
-            $tamperedIndex = [Math]::Min(4096, $tamperedBytes.Length - 1)
-            $tamperedBytes[$tamperedIndex] = `
-              $tamperedBytes[$tamperedIndex] -bxor 0x01
-            [System.IO.File]::WriteAllBytes(
-              $tamperedInstaller, $tamperedBytes)
             $tamperedInstallerSha256 = (Get-FileHash -LiteralPath `
               $tamperedInstaller -Algorithm SHA256).Hash.ToLowerInvariant()
             Write-Host "phase=apply-transaction-tampered start"

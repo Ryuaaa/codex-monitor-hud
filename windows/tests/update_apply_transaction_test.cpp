@@ -13,6 +13,7 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#include <msi.h>
 #endif
 
 namespace {
@@ -424,6 +425,53 @@ int RunSignedInstallCli(int argc, char* argv[]) {
     return 0;
 }
 
+int RunTamperSignedMsiCli(int argc, char* argv[]) {
+    if (argc != 3 ||
+        std::string_view(argv[1]) != "--tamper-msi-product-name") {
+        std::cerr << "usage: --tamper-msi-product-name <absolute-msi>\n";
+        return 2;
+    }
+
+    std::filesystem::path installer;
+    try {
+        installer = std::filesystem::u8path(argv[2]);
+    } catch (...) {
+        std::cerr << "tamper_msi=invalid-path\n";
+        return 2;
+    }
+    if (!installer.is_absolute()) {
+        std::cerr << "tamper_msi=path-not-absolute\n";
+        return 2;
+    }
+
+    MSIHANDLE database = 0;
+    MSIHANDLE view = 0;
+    UINT status = MsiOpenDatabaseW(
+        installer.c_str(), MSIDBOPEN_DIRECT, &database);
+    if (status == ERROR_SUCCESS) {
+        status = MsiDatabaseOpenViewW(
+            database,
+            L"UPDATE `Property` SET `Value`='Codex Monitor HUD Tampered' "
+            L"WHERE `Property`='ProductName'",
+            &view);
+    }
+    if (status == ERROR_SUCCESS) {
+        status = MsiViewExecute(view, 0);
+    }
+    if (status == ERROR_SUCCESS) {
+        status = MsiDatabaseCommit(database);
+    }
+    if (view != 0) MsiCloseHandle(view);
+    if (database != 0) MsiCloseHandle(database);
+
+    if (status != ERROR_SUCCESS) {
+        std::cerr << "tamper_msi=failed status=" << status << '\n';
+        return 1;
+    }
+    std::cout << "tamper_msi=pass\n";
+    return 0;
+}
+
 #endif
 
 }  // namespace
@@ -436,6 +484,9 @@ int main(int argc, char* argv[]) {
         }
         if (std::string_view(argv[1]) == "--install-signed-msi") {
             return RunSignedInstallCli(argc, argv);
+        }
+        if (std::string_view(argv[1]) == "--tamper-msi-product-name") {
+            return RunTamperSignedMsiCli(argc, argv);
         }
         std::cerr << "update_apply=unknown-command\n";
         return 2;

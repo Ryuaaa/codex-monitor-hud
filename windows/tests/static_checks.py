@@ -643,6 +643,12 @@ def main() -> None:
     require(WINDOWS_WORKFLOW,
             "signature-rejected",
             "Windows CI proves a tampered signed MSI invokes no callback")
+    require(UPDATE_APPLY_TRANSACTION_TEST,
+            "--tamper-msi-product-name",
+            "the signed fixture mutates a signed MSI database stream")
+    require(WINDOWS_WORKFLOW,
+            "--tamper-msi-product-name",
+            "Windows CI invalidates signed MSI content deterministically")
     for forbidden_store_write in (
         "Import-Certificate",
         "Cert:\\CurrentUser\\Root",
