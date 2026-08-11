@@ -261,11 +261,26 @@ std::optional<std::wstring> FinalDosPathFromHandle(HANDLE handle,
 }
 
 KernelHandle OpenDirectoryWithoutFollowingReparsePoints(
-    const std::wstring& path) noexcept {
+    const std::wstring& path,
+    bool volumeRoot = false) noexcept {
+    const DWORD flags =
+        FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT;
+    if (!volumeRoot) {
+        KernelHandle deleteProtected{CreateFileW(
+            path.c_str(), FILE_READ_ATTRIBUTES | DELETE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
+            flags, nullptr)};
+        if (deleteProtected) return deleteProtected;
+        if (GetLastError() != ERROR_ACCESS_DENIED) return {};
+        // A directory on which this token cannot acquire DELETE cannot be
+        // renamed by the same token. Keep an attribute handle to pin its file
+        // identity and reject every reparse point. User-writable descendants
+        // take the DELETE branch above and remain actively rename-locked.
+    }
     return KernelHandle{CreateFileW(
         path.c_str(), FILE_READ_ATTRIBUTES,
         FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
-        FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr)};
+        flags, nullptr)};
 }
 
 struct LockedInstallerPath {
@@ -303,9 +318,10 @@ LockInstallerResult LockCanonicalInstallerPath(
     }
     locked.ancestors.reserve(ancestorPaths.size());
 
-    for (const std::wstring& path : ancestorPaths) {
+    for (std::size_t index = 0; index < ancestorPaths.size(); ++index) {
+        const std::wstring& path = ancestorPaths[index];
         KernelHandle ancestor =
-            OpenDirectoryWithoutFollowingReparsePoints(path);
+            OpenDirectoryWithoutFollowingReparsePoints(path, index == 0U);
         if (!ancestor) {
             return {WindowsUpdateApplyStatus::kPathResolutionFailed,
                     std::nullopt};
@@ -330,7 +346,8 @@ LockInstallerResult LockCanonicalInstallerPath(
     }
 
     locked.reopenedParent =
-        OpenDirectoryWithoutFollowingReparsePoints(*finalParent);
+        OpenDirectoryWithoutFollowingReparsePoints(
+            *finalParent, parentPath.size() == 3U);
     FileIdentity reopenedParentIdentity{};
     if (!locked.reopenedParent ||
         !IsNonReparseDirectory(locked.reopenedParent.get()) ||

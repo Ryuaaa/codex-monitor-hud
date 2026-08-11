@@ -177,16 +177,31 @@ WindowsMsiIdentityVerificationStatus OpenAndHoldSafeAncestors(
     }
 
     const auto openAndHold = [heldAncestors](
-                                 const std::filesystem::path& current) {
+                                 const std::filesystem::path& current,
+                                 bool volumeRoot) {
         // Permit ordinary reads and writes inside the directory while
         // withholding FILE_SHARE_DELETE so this exact ancestor cannot be
         // renamed or replaced until verification finishes.
         FileHandle ancestor(CreateFileW(
-            current.c_str(), FILE_READ_ATTRIBUTES,
+            current.c_str(), FILE_READ_ATTRIBUTES |
+                (volumeRoot ? 0U : DELETE),
             FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
             OPEN_EXISTING,
             FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
             nullptr));
+        if (!ancestor && !volumeRoot &&
+            GetLastError() == ERROR_ACCESS_DENIED) {
+            // The same token cannot rename an ancestor on which DELETE is
+            // denied. Retain an identity handle for that protected ancestor;
+            // writable descendants use the actively delete-protected handle.
+            ancestor = FileHandle(CreateFileW(
+                current.c_str(), FILE_READ_ATTRIBUTES,
+                FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+                OPEN_EXISTING,
+                FILE_FLAG_BACKUP_SEMANTICS |
+                    FILE_FLAG_OPEN_REPARSE_POINT,
+                nullptr));
+        }
         if (!ancestor) {
             return WindowsMsiIdentityVerificationStatus::kPathResolutionFailed;
         }
@@ -206,7 +221,8 @@ WindowsMsiIdentityVerificationStatus OpenAndHoldSafeAncestors(
     };
 
     std::filesystem::path current = parent.root_path();
-    WindowsMsiIdentityVerificationStatus status = openAndHold(current);
+    WindowsMsiIdentityVerificationStatus status =
+        openAndHold(current, true);
     if (status != WindowsMsiIdentityVerificationStatus::kVerified) {
         return status;
     }
@@ -215,7 +231,7 @@ WindowsMsiIdentityVerificationStatus OpenAndHoldSafeAncestors(
             return WindowsMsiIdentityVerificationStatus::kPathResolutionFailed;
         }
         current /= component;
-        status = openAndHold(current);
+        status = openAndHold(current, false);
         if (status != WindowsMsiIdentityVerificationStatus::kVerified) {
             return status;
         }

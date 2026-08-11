@@ -259,6 +259,25 @@ bool IsNonReparseFile(HANDLE handle) noexcept {
            (information.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) == 0;
 }
 
+KernelHandle OpenRenameProtectedDirectory(
+    const std::wstring& path,
+    bool volumeRoot) noexcept {
+    const DWORD flags =
+        FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT;
+    if (!volumeRoot) {
+        KernelHandle deleteProtected(CreateFileW(
+            path.c_str(), FILE_READ_ATTRIBUTES | DELETE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
+            flags, nullptr));
+        if (deleteProtected) return deleteProtected;
+        if (GetLastError() != ERROR_ACCESS_DENIED) return {};
+    }
+    return KernelHandle(CreateFileW(
+        path.c_str(), FILE_READ_ATTRIBUTES,
+        FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
+        flags, nullptr));
+}
+
 std::optional<std::wstring> FinalDosPathFromHandle(HANDLE handle) {
     constexpr DWORD kFlags = FILE_NAME_NORMALIZED | VOLUME_NAME_DOS;
     const DWORD required = GetFinalPathNameByHandleW(handle, nullptr, 0,
@@ -306,12 +325,9 @@ LockInstalledExecutableResult LockInstalledExecutable(
     }
 
     locked.ancestors.reserve(ancestorPaths.size());
-    for (const std::wstring& path : ancestorPaths) {
-        KernelHandle directory(CreateFileW(
-            path.c_str(), FILE_READ_ATTRIBUTES,
-            FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
-            FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
-            nullptr));
+    for (std::size_t index = 0; index < ancestorPaths.size(); ++index) {
+        KernelHandle directory = OpenRenameProtectedDirectory(
+            ancestorPaths[index], index == 0U);
         if (!directory) {
             return {WindowsInstalledHudLaunchStatus::kPathIdentityMismatch,
                     std::nullopt};

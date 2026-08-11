@@ -567,6 +567,8 @@ def main() -> None:
     for token, reason in {
         "LockCanonicalInstallerPath":
             "the apply transaction locks the complete canonical MSI path",
+        "FILE_READ_ATTRIBUTES | DELETE":
+            "writable ancestors are opened with active rename protection",
         "FILE_SHARE_READ, nullptr":
             "the locked MSI denies write and delete replacement",
         "VerifyDownloadedWindowsInstallerChecksum":
@@ -653,6 +655,8 @@ def main() -> None:
             "the restarted executable carries the selected release identity",
         "CreateProcessW":
             "the verified installed HUD is restarted directly without a shell",
+        "FILE_READ_ATTRIBUTES | DELETE":
+            "the restarted executable's writable ancestors remain rename-locked",
     }.items():
         require(helper_sources, token, reason)
     reject(helper_sources, "DeleteFileW(",
