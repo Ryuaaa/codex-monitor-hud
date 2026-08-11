@@ -19,8 +19,6 @@ namespace codex_monitor::update {
 namespace {
 
 #ifdef _WIN32
-constexpr std::wstring_view kHelperMode =
-    L"--codex-monitor-update-helper-v1";
 constexpr std::string_view kInstallerNamePrefix =
     "CodexMonitorHUD-windows-x64-";
 constexpr std::string_view kInstallerNameSuffix = ".msi";
@@ -402,6 +400,24 @@ int ExitCodeForHelperResult(
 
 }  // namespace
 
+std::optional<PublisherCertificateSha256>
+ConfiguredWindowsUpdatePublisherFingerprint() noexcept {
+#ifdef _WIN32
+    return ConfiguredPublisherFingerprint();
+#else
+    return std::nullopt;
+#endif
+}
+
+std::optional<std::filesystem::path>
+InstalledWindowsHudExecutablePath() noexcept {
+#ifdef _WIN32
+    return InstalledHudExecutablePath();
+#else
+    return std::nullopt;
+#endif
+}
+
 WindowsUpdateHelperResult RunWindowsUpdateHelper(
     const WindowsUpdateHelperRequest& request) noexcept {
     if (!request.trustedPublisherFingerprint.has_value()) {
@@ -485,7 +501,7 @@ std::optional<int> TryRunWindowsUpdateHelperCommandLine() noexcept {
         arguments = nullptr;
     };
     if (argumentCount < 2 ||
-        std::wstring_view(arguments[1]) != kHelperMode) {
+        std::wstring_view(arguments[1]) != kWindowsUpdateHelperMode) {
         releaseArguments();
         return std::nullopt;
     }
@@ -510,9 +526,9 @@ std::optional<int> TryRunWindowsUpdateHelperCommandLine() noexcept {
     const std::optional<std::string> filename =
         PrintableAscii(installer.filename().native(), 240U);
     const std::optional<std::filesystem::path> installedExecutable =
-        InstalledHudExecutablePath();
+        InstalledWindowsHudExecutablePath();
     const std::optional<PublisherCertificateSha256> fingerprint =
-        ConfiguredPublisherFingerprint();
+        ConfiguredWindowsUpdatePublisherFingerprint();
 
     if (!inheritedHandle || *inheritedHandle == 0U || !processId ||
         *processId == 0U || !creationTime || *creationTime == 0U ||

@@ -164,6 +164,12 @@ UPDATE_HELPER = (
 UPDATE_HELPER_HEADER = (
     WINDOWS_ROOT / "src" / "update" / "update_helper_win32.h"
 ).read_text(encoding="utf-8")
+UPDATE_HELPER_LAUNCHER = (
+    WINDOWS_ROOT / "src" / "update" / "update_helper_launcher_win32.cpp"
+).read_text(encoding="utf-8")
+UPDATE_HELPER_LAUNCHER_HEADER = (
+    WINDOWS_ROOT / "src" / "update" / "update_helper_launcher_win32.h"
+).read_text(encoding="utf-8")
 UPDATE_INSTALLED_HUD = (
     WINDOWS_ROOT / "src" / "update" / "update_installed_hud_win32.cpp"
 ).read_text(encoding="utf-8")
@@ -493,7 +499,8 @@ def main() -> None:
                       UPDATE_INSTALLER_VERIFIER + UPDATE_MSI_IDENTITY_HEADER +
                       UPDATE_MSI_IDENTITY + UPDATE_APPLY_TRANSACTION_HEADER +
                       UPDATE_APPLY_TRANSACTION + UPDATE_HELPER_HEADER +
-                      UPDATE_HELPER + UPDATE_INSTALLED_HUD_HEADER +
+                      UPDATE_HELPER + UPDATE_HELPER_LAUNCHER_HEADER +
+                      UPDATE_HELPER_LAUNCHER + UPDATE_INSTALLED_HUD_HEADER +
                       UPDATE_INSTALLED_HUD + UPDATE_WORKER_HEADER +
                       UPDATE_WORKER + MAIN)
     for token, reason in update_contracts.items():
@@ -632,6 +639,7 @@ def main() -> None:
                "Windows CI must not mutate hosted-runner trust stores")
     helper_sources = (
         UPDATE_HELPER_HEADER + UPDATE_HELPER +
+        UPDATE_HELPER_LAUNCHER_HEADER + UPDATE_HELPER_LAUNCHER +
         UPDATE_INSTALLED_HUD_HEADER + UPDATE_INSTALLED_HUD
     )
     for token, reason in {
@@ -657,12 +665,29 @@ def main() -> None:
             "the verified installed HUD is restarted directly without a shell",
         "FILE_READ_ATTRIBUTES | DELETE":
             "the restarted executable's writable ancestors remain rename-locked",
+        "PROC_THREAD_ATTRIBUTE_HANDLE_LIST":
+            "the helper child inherits only the explicit old-process handle",
+        "HANDLE_FLAG_INHERIT":
+            "the helper launcher rejects a non-inheritable process handle",
     }.items():
         require(helper_sources, token, reason)
     reject(helper_sources, "DeleteFileW(",
            "the helper must never delete an installed application file")
     reject(helper_sources, "ShellExecute",
            "restart must not delegate an unverified path to the shell")
+    for token, reason in {
+        "CopyFileW":
+            "the running signed HUD is copied out of the MSI replacement path",
+        "DuplicateHandle":
+            "the launcher creates a real inheritable handle for the exact HUD process",
+        "PROCESS_QUERY_LIMITED_INFORMATION":
+            "the inherited process handle exposes only wait and identity access",
+        "VerifyAndLaunchWindowsUpdateHelperCopy":
+            "the copied helper is re-verified before its internal mode starts",
+        "InstalledWindowsHudExecutablePath":
+            "portable or unexpected launch locations cannot self-update",
+    }.items():
+        require(UPDATE_HELPER_LAUNCHER, token, reason)
     require_regex(
         MAIN,
         r"TryRunWindowsUpdateHelperCommandLine\(\).*?SetProcessDpiAwarenessContext",
@@ -1167,6 +1192,8 @@ def main() -> None:
             "the continuous-lock update apply transaction is compiled into the HUD",
         "src/update/update_helper_win32.cpp":
             "the controlled exit/install/restart helper mode is compiled into the HUD",
+        "src/update/update_helper_launcher_win32.cpp":
+            "the verified temporary helper launcher is compiled into the HUD",
         "src/update/update_installed_hud_win32.cpp":
             "post-install executable verification is compiled into the HUD",
         "src/update/update_worker.cpp":

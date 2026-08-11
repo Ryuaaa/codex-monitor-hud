@@ -576,6 +576,120 @@ WindowsInstalledHudLaunchStatus StartLockedExecutable(
     return WindowsInstalledHudLaunchStatus::kStarted;
 }
 
+bool IsLowercaseSha256(std::string_view value) noexcept {
+    if (value.size() != 64U) return false;
+    for (const char character : value) {
+        if (!((character >= '0' && character <= '9') ||
+              (character >= 'a' && character <= 'f'))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+std::wstring AsciiToWide(std::string_view value) {
+    std::wstring result;
+    result.reserve(value.size());
+    for (const unsigned char character : value) {
+        result.push_back(static_cast<wchar_t>(character));
+    }
+    return result;
+}
+
+WindowsInstalledHudLaunchStatus StartLockedUpdateHelper(
+    const LockedInstalledExecutable& locked,
+    const WindowsUpdateHelperChildRequest& request) noexcept {
+    if (request.inheritedOldProcessHandle == 0U ||
+        request.expectedOldProcessId == 0U ||
+        request.expectedOldProcessCreationTime == 0U ||
+        request.installerPath.empty() ||
+        !request.installerPath.is_absolute() ||
+        request.installerPath.native().find(L'"') != std::wstring::npos ||
+        !IsLowercaseSha256(request.installerSha256) ||
+        !ParseCanonicalVersion(request.targetVersion).has_value() ||
+        !ParseCanonicalVersion(request.previousVersion).has_value()) {
+        return WindowsInstalledHudLaunchStatus::kInvalidInput;
+    }
+
+    HANDLE inheritedHandle = reinterpret_cast<HANDLE>(
+        request.inheritedOldProcessHandle);
+    DWORD handleFlags = 0;
+    if (inheritedHandle == nullptr ||
+        inheritedHandle == INVALID_HANDLE_VALUE ||
+        !GetHandleInformation(inheritedHandle, &handleFlags) ||
+        (handleFlags & HANDLE_FLAG_INHERIT) == 0U) {
+        return WindowsInstalledHudLaunchStatus::kInvalidInput;
+    }
+
+    SIZE_T attributeBytes = 0;
+    static_cast<void>(InitializeProcThreadAttributeList(
+        nullptr, 1, 0, &attributeBytes));
+    if (attributeBytes == 0U) {
+        return WindowsInstalledHudLaunchStatus::kProcessStartFailed;
+    }
+    std::vector<std::uint8_t> attributeStorage(attributeBytes);
+    auto* attributes = reinterpret_cast<PPROC_THREAD_ATTRIBUTE_LIST>(
+        attributeStorage.data());
+    if (!InitializeProcThreadAttributeList(
+            attributes, 1, 0, &attributeBytes)) {
+        return WindowsInstalledHudLaunchStatus::kProcessStartFailed;
+    }
+    struct AttributeListCleanup {
+        PPROC_THREAD_ATTRIBUTE_LIST value = nullptr;
+        ~AttributeListCleanup() {
+            if (value != nullptr) DeleteProcThreadAttributeList(value);
+        }
+    } attributeCleanup{attributes};
+
+    HANDLE inheritedHandles[1] = {inheritedHandle};
+    if (!UpdateProcThreadAttribute(
+            attributes, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+            inheritedHandles, sizeof(inheritedHandles), nullptr, nullptr)) {
+        return WindowsInstalledHudLaunchStatus::kProcessStartFailed;
+    }
+
+    std::wstring commandLine = L"\"";
+    commandLine.append(locked.canonicalPath);
+    commandLine.append(L"\" ");
+    commandLine.append(kWindowsUpdateHelperMode);
+    commandLine.push_back(L' ');
+    commandLine.append(std::to_wstring(
+        request.inheritedOldProcessHandle));
+    commandLine.push_back(L' ');
+    commandLine.append(std::to_wstring(request.expectedOldProcessId));
+    commandLine.push_back(L' ');
+    commandLine.append(std::to_wstring(
+        request.expectedOldProcessCreationTime));
+    commandLine.append(L" \"");
+    commandLine.append(request.installerPath.native());
+    commandLine.append(L"\" ");
+    commandLine.append(AsciiToWide(request.installerSha256));
+    commandLine.push_back(L' ');
+    commandLine.append(AsciiToWide(request.targetVersion));
+    commandLine.push_back(L' ');
+    commandLine.append(AsciiToWide(request.previousVersion));
+
+    STARTUPINFOEXW startup{};
+    startup.StartupInfo.cb = sizeof(startup);
+    startup.StartupInfo.dwFlags = STARTF_USESHOWWINDOW;
+    startup.StartupInfo.wShowWindow = SW_HIDE;
+    startup.lpAttributeList = attributes;
+    PROCESS_INFORMATION process{};
+    const std::filesystem::path workingDirectory =
+        std::filesystem::path(locked.canonicalPath).parent_path();
+    if (!CreateProcessW(
+            locked.canonicalPath.c_str(), commandLine.data(), nullptr,
+            nullptr, TRUE,
+            EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT,
+            nullptr, workingDirectory.c_str(),
+            &startup.StartupInfo, &process)) {
+        return WindowsInstalledHudLaunchStatus::kProcessStartFailed;
+    }
+    CloseHandle(process.hThread);
+    CloseHandle(process.hProcess);
+    return WindowsInstalledHudLaunchStatus::kStarted;
+}
+
 #endif
 
 }  // namespace
@@ -667,6 +781,73 @@ WindowsInstalledHudLaunchResult VerifyAndLaunchInstalledWindowsHud(
         return LaunchFailure(StartLockedExecutable(locked));
 #else
         (void)installedExecutablePath;
+        return LaunchFailure(
+            WindowsInstalledHudLaunchStatus::kUnsupportedPlatform);
+#endif
+    } catch (...) {
+        return LaunchFailure(WindowsInstalledHudLaunchStatus::kUnexpected);
+    }
+}
+
+WindowsInstalledHudLaunchResult VerifyAndLaunchWindowsUpdateHelperCopy(
+    const std::filesystem::path& helperExecutablePath,
+    std::string_view currentVersion,
+    const std::optional<PublisherCertificateSha256>&
+        trustedPublisherFingerprint,
+    const WindowsUpdateHelperChildRequest& request) noexcept {
+    try {
+        if (!trustedPublisherFingerprint.has_value() ||
+            !ParseCanonicalVersion(currentVersion).has_value()) {
+            return LaunchFailure(
+                WindowsInstalledHudLaunchStatus::kInvalidInput);
+        }
+        if (helperExecutablePath.empty() ||
+            !helperExecutablePath.is_absolute()) {
+            return LaunchFailure(
+                WindowsInstalledHudLaunchStatus::kPathNotAbsolute);
+        }
+
+#ifdef _WIN32
+        const std::optional<std::wstring> canonical =
+            CanonicalInstalledExecutablePath(helperExecutablePath);
+        if (!canonical.has_value()) {
+            return LaunchFailure(
+                WindowsInstalledHudLaunchStatus::kPathNotCanonical);
+        }
+        LockInstalledExecutableResult lockResult =
+            LockInstalledExecutable(*canonical);
+        if (!lockResult.locked.has_value()) {
+            return LaunchFailure(lockResult.status);
+        }
+        LockedInstalledExecutable& locked = *lockResult.locked;
+
+        const WindowsInstalledHudLaunchStatus signatureStatus =
+            VerifySignatureAndPublisher(locked,
+                                        *trustedPublisherFingerprint);
+        if (signatureStatus != WindowsInstalledHudLaunchStatus::kStarted) {
+            return LaunchFailure(signatureStatus);
+        }
+        const std::optional<WindowsHudExecutableIdentity> identity =
+            ReadExecutableIdentity(locked);
+        if (!identity.has_value()) {
+            return LaunchFailure(
+                WindowsInstalledHudLaunchStatus::
+                    kVersionResourceUnavailable);
+        }
+        const WindowsHudExecutableIdentityStatus identityStatus =
+            ValidateWindowsHudExecutableIdentity(*identity,
+                                                 currentVersion);
+        if (identityStatus != WindowsHudExecutableIdentityStatus::kValid) {
+            WindowsInstalledHudLaunchResult result = LaunchFailure(
+                WindowsInstalledHudLaunchStatus::
+                    kExecutableIdentityRejected);
+            result.identityStatus = identityStatus;
+            return result;
+        }
+        return LaunchFailure(StartLockedUpdateHelper(locked, request));
+#else
+        (void)helperExecutablePath;
+        (void)request;
         return LaunchFailure(
             WindowsInstalledHudLaunchStatus::kUnsupportedPlatform);
 #endif

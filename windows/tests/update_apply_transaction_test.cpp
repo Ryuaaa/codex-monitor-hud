@@ -158,11 +158,22 @@ void TestPlatformVerificationBoundary() {
     const auto checksumRejected = ApplyVerifiedWindowsMsiUpdateForTesting(
         installer, kFileName, Manifest(wrongDigest), "1.2.3", fingerprint,
         callback);
-    Require(checksumRejected.status ==
-                WindowsUpdateApplyStatus::kChecksumRejected &&
-                checksumRejected.checksum.status ==
-                    WindowsInstallerVerificationStatus::kDigestMismatch &&
-                callbackCount == 0 && !checksumRejected.installAttempted,
+    const bool digestMismatchRejected =
+        checksumRejected.status ==
+            WindowsUpdateApplyStatus::kChecksumRejected &&
+        checksumRejected.checksum.status ==
+            WindowsInstallerVerificationStatus::kDigestMismatch &&
+        callbackCount == 0 && !checksumRejected.installAttempted;
+    if (!digestMismatchRejected) {
+        std::cerr << "digest_mismatch_status="
+                  << static_cast<int>(checksumRejected.status)
+                  << " checksum_status="
+                  << static_cast<int>(checksumRejected.checksum.status)
+                  << " callback_count=" << callbackCount
+                  << " install_attempted="
+                  << checksumRejected.installAttempted << '\n';
+    }
+    Require(digestMismatchRejected,
             "a digest mismatch must never reach the installer callback");
 
     const auto unsignedResult = ApplyVerifiedWindowsMsiUpdateForTesting(

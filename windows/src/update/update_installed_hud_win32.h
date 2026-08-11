@@ -3,6 +3,7 @@
 #include "update/update_msi_identity_win32.h"
 
 #include <filesystem>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -13,6 +14,8 @@ inline constexpr std::wstring_view kWindowsHudExecutableName =
     L"CodexMonitorHUD.exe";
 inline constexpr std::wstring_view kWindowsHudProductName =
     L"Codex Monitor HUD";
+inline constexpr std::wstring_view kWindowsUpdateHelperMode =
+    L"--codex-monitor-update-helper-v1";
 
 struct WindowsHudExecutableIdentity {
     std::wstring productName;
@@ -71,6 +74,16 @@ struct WindowsInstalledHudLaunchResult {
     }
 };
 
+struct WindowsUpdateHelperChildRequest {
+    std::uintptr_t inheritedOldProcessHandle = 0;
+    std::uint32_t expectedOldProcessId = 0;
+    std::uint64_t expectedOldProcessCreationTime = 0;
+    std::filesystem::path installerPath;
+    std::string installerSha256;
+    std::string targetVersion;
+    std::string previousVersion;
+};
+
 // Verifies the exact installed HUD executable and launches it without a
 // verification-to-execution path replacement gap. The absolute DOS path must
 // name CodexMonitorHUD.exe on a local fixed drive. All ancestors and the final
@@ -83,5 +96,17 @@ VerifyAndLaunchInstalledWindowsHud(
     std::string_view expectedVersion,
     const std::optional<PublisherCertificateSha256>&
         trustedPublisherFingerprint) noexcept;
+
+// Verifies a temporary byte-for-byte HUD copy as the current signed version,
+// then starts only its internal update-helper mode. Exactly one already
+// inheritable old-process handle is exposed to the child via an explicit
+// PROC_THREAD_ATTRIBUTE_HANDLE_LIST; no other parent handles are inherited.
+[[nodiscard]] WindowsInstalledHudLaunchResult
+VerifyAndLaunchWindowsUpdateHelperCopy(
+    const std::filesystem::path& helperExecutablePath,
+    std::string_view currentVersion,
+    const std::optional<PublisherCertificateSha256>&
+        trustedPublisherFingerprint,
+    const WindowsUpdateHelperChildRequest& request) noexcept;
 
 }  // namespace codex_monitor::update

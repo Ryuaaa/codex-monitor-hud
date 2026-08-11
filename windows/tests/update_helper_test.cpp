@@ -1,4 +1,5 @@
 #include "update/update_helper_win32.h"
+#include "update/update_helper_launcher_win32.h"
 
 #include <chrono>
 #include <cstdlib>
@@ -19,9 +20,11 @@
 namespace {
 
 using codex_monitor::update::PublisherCertificateSha256;
+using codex_monitor::update::LaunchPreparedWindowsUpdateHelper;
 using codex_monitor::update::RunWindowsUpdateHelper;
 using codex_monitor::update::RunWindowsUpdateHelperSequenceForTesting;
 using codex_monitor::update::ValidateWindowsHudExecutableIdentity;
+using codex_monitor::update::VerifyAndLaunchWindowsUpdateHelperCopy;
 using codex_monitor::update::WindowsHudExecutableIdentity;
 using codex_monitor::update::WindowsHudExecutableIdentityStatus;
 using codex_monitor::update::WindowsInstalledHudLaunchResult;
@@ -29,6 +32,9 @@ using codex_monitor::update::WindowsInstalledHudLaunchStatus;
 using codex_monitor::update::WindowsUpdateApplyResult;
 using codex_monitor::update::WindowsUpdateApplyStatus;
 using codex_monitor::update::WindowsUpdateHelperRequest;
+using codex_monitor::update::WindowsUpdateHelperChildRequest;
+using codex_monitor::update::WindowsUpdateHelperLauncherRequest;
+using codex_monitor::update::WindowsUpdateHelperLauncherStatus;
 using codex_monitor::update::WindowsUpdateHelperStatus;
 using codex_monitor::update::WindowsUpdateHelperWaitStatus;
 
@@ -388,6 +394,42 @@ void TestProductionBoundaryIsUnsupportedOffWindows() {
     const auto result = RunWindowsUpdateHelper(request);
     Require(result.status == WindowsUpdateHelperStatus::kUnsupportedPlatform,
             "the production helper cannot install on a non-Windows host");
+
+    WindowsUpdateHelperChildRequest child;
+    child.inheritedOldProcessHandle = 1U;
+    child.expectedOldProcessId = 1U;
+    child.expectedOldProcessCreationTime = 1U;
+    child.installerPath = request.installerPath;
+    child.installerSha256 = std::string(64U, '0');
+    child.targetVersion = "1.2.3";
+    child.previousVersion = "1.2.2";
+    const auto launch = VerifyAndLaunchWindowsUpdateHelperCopy(
+        "/tmp/CodexMonitorHUD.exe", "1.2.2",
+        PublisherCertificateSha256{}, child);
+    Require(launch.status ==
+                WindowsInstalledHudLaunchStatus::kUnsupportedPlatform,
+            "the verified helper launcher cannot start off Windows");
+
+    WindowsUpdateHelperLauncherRequest prepared;
+    prepared.privateUpdateDirectory = "/tmp/update";
+    prepared.installerPath =
+        "/tmp/update/CodexMonitorHUD-windows-x64-1.2.3.msi";
+    prepared.installerSha256 = std::string(64U, '0');
+    prepared.currentVersion = "1.2.2";
+    prepared.targetVersion = "1.2.3";
+    const auto preparedLaunch =
+        LaunchPreparedWindowsUpdateHelper(prepared);
+    Require(preparedLaunch.status ==
+                WindowsUpdateHelperLauncherStatus::kUnsupportedPlatform,
+            "a prepared update cannot launch a helper off Windows");
+
+    prepared.installerPath =
+        "/tmp/other/CodexMonitorHUD-windows-x64-1.2.3.msi";
+    const auto mismatchedDirectory =
+        LaunchPreparedWindowsUpdateHelper(prepared);
+    Require(mismatchedDirectory.status ==
+                WindowsUpdateHelperLauncherStatus::kInvalidInput,
+            "the MSI must remain inside the prepared private directory");
 #endif
 }
 

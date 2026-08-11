@@ -286,7 +286,6 @@ KernelHandle OpenDirectoryWithoutFollowingReparsePoints(
 struct LockedInstallerPath {
     std::vector<KernelHandle> ancestors;
     KernelHandle file;
-    KernelHandle reopenedParent;
     KernelHandle reopenedFile;
     std::filesystem::path canonicalPath;
 };
@@ -345,18 +344,11 @@ LockInstallerResult LockCanonicalInstallerPath(
                 std::nullopt};
     }
 
-    locked.reopenedParent =
-        OpenDirectoryWithoutFollowingReparsePoints(
-            *finalParent, parentPath.size() == 3U);
-    FileIdentity reopenedParentIdentity{};
-    if (!locked.reopenedParent ||
-        !IsNonReparseDirectory(locked.reopenedParent.get()) ||
-        !ReadFileIdentity(locked.reopenedParent.get(),
-                          &reopenedParentIdentity) ||
-        !SameFileIdentity(parentIdentity, reopenedParentIdentity)) {
-        return {WindowsUpdateApplyStatus::kFileIdentityMismatch,
-                std::nullopt};
-    }
+    // Every non-root ancestor is already held with DELETE access and without
+    // FILE_SHARE_DELETE. Reopening the parent would conflict with that active
+    // rename lock. The handle-derived final path plus the identity read above
+    // prove the exact parent while the retained ancestor handles prevent it
+    // from being replaced for the remainder of the transaction.
 
     const std::wstring extendedFilePath = ExtendedDosPath(canonicalPath);
     locked.file = KernelHandle{CreateFileW(

@@ -288,6 +288,7 @@ if(BUILD_TESTING)
     add_executable(CodexMonitorUpdateHelperTests
         src/update/update_apply_transaction_win32.cpp
         src/update/update_helper_win32.cpp
+        src/update/update_helper_launcher_win32.cpp
         src/update/update_installed_hud_win32.cpp
         src/update/update_installer_verifier_win32.cpp
         src/update/update_msi_identity_win32.cpp
@@ -576,6 +577,7 @@ if(WIN32)
         src/update/update_apply_transaction_win32.cpp
         src/update/update_fetch_win32.cpp
         src/update/update_helper_win32.cpp
+        src/update/update_helper_launcher_win32.cpp
         src/update/update_installed_hud_win32.cpp
         src/update/update_installer_verifier_win32.cpp
         src/update/update_msi_identity_win32.cpp

@@ -82,6 +82,15 @@ struct WindowsUpdateHelperResult {
 [[nodiscard]] WindowsUpdateHelperResult RunWindowsUpdateHelper(
     const WindowsUpdateHelperRequest& request) noexcept;
 
+// Returns the release publisher pin compiled into a formal Windows build.
+// Development builds intentionally return std::nullopt and cannot install.
+[[nodiscard]] std::optional<PublisherCertificateSha256>
+ConfiguredWindowsUpdatePublisherFingerprint() noexcept;
+
+// Reads the per-user MSI installation folder recorded by the current product.
+[[nodiscard]] std::optional<std::filesystem::path>
+InstalledWindowsHudExecutablePath() noexcept;
+
 // Recognizes only the internal --codex-monitor-update-helper-v1 mode. Normal
 // launches return std::nullopt and continue into the HUD. A recognized helper
 // invocation always returns a process exit code and never opens the UI.
