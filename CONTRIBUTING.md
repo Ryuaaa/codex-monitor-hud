@@ -30,6 +30,8 @@ NOTARY_KEYCHAIN_PROFILE=codex-monitor-hud-notary ./release-macos.sh
 
 脚本会依次完成双架构构建、强化运行时签名、公证、票据装订、macOS安全评估、重新打包和SHA-256生成。GitHub标签工作流使用同一脚本；仓库需配置 `MACOS_CERTIFICATE_P12_BASE64`、`MACOS_CERTIFICATE_PASSWORD`、`APPLE_ID`、`APPLE_TEAM_ID` 和 `APPLE_APP_PASSWORD` 五个加密Secrets。任何一步失败都不会发布Release。
 
+Windows正式包必须来自精确Git标签的GitHub托管运行器，并通过SignPath.io与SignPath Foundation代码签名；签名政策和角色见[`CODE_SIGNING_POLICY.md`](CODE_SIGNING_POLICY.md)。未通过签名、发布者固定、MSI身份、安装和卸载验证时，工作流不会创建正式Windows Release。
+
 ## 修改原则
 
 - 不读取对话、提示词、Cookie、密钥或命令内容。

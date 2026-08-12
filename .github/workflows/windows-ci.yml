@@ -3,12 +3,14 @@ name: Windows CI
 on:
   push:
     branches:
+      - main
       - codex/windows-development
     paths:
       - "windows/**"
       - ".github/workflows/windows-ci.yml"
   pull_request:
     branches:
+      - main
       - codex/windows-development
     paths:
       - "windows/**"
@@ -525,6 +527,18 @@ jobs:
               throw "Authenticode CI test cleanup was incomplete"
             }
             Write-Host "phase=cleanup done"
+          }
+
+      - name: Smoke-test the native Windows HUD window
+        shell: pwsh
+        run: |
+          $hud = (Resolve-Path `
+            "windows/out/build/Release/CodexMonitorHUD.exe").Path
+          $smoke = (Resolve-Path `
+            "windows/out/build/Release/CodexMonitorWindowRuntimeSmokeTests.exe").Path
+          & $smoke $hud
+          if ($LASTEXITCODE -ne 0) {
+            throw "The native Windows HUD runtime smoke test failed"
           }
 
       - name: Upload Windows executable

@@ -1303,6 +1303,17 @@ def main() -> None:
     for token, reason in package_workflow_contracts.items():
         require(WINDOWS_WORKFLOW, token, reason)
 
+    ci_branch_contracts = {
+        "      - main":
+            "Windows changes merged to the public default branch remain gated",
+        "Smoke-test the native Windows HUD window":
+            "the release executable must open a real native window in CI",
+        "CodexMonitorWindowRuntimeSmokeTests.exe":
+            "the dedicated native window smoke binary is executed explicitly",
+    }
+    for token, reason in ci_branch_contracts.items():
+        require(WINDOWS_WORKFLOW, token, reason)
+
     runtime_smoke_contracts = {
         "CodexMonitorHUDWindowsWindow":
             "the runtime test finds the actual native HUD window",
@@ -1352,26 +1363,30 @@ def main() -> None:
             "signed publication is an explicit release action",
         "environment: windows-release":
             "GitHub can apply a protected release environment",
-        "WINDOWS_CERTIFICATE_PFX_BASE64":
-            "the release certificate is sourced only from an encrypted secret",
-        "WINDOWS_CERTIFICATE_PASSWORD":
-            "the PFX password is sourced only from an encrypted secret",
+        "actions: read":
+            "SignPath can verify the exact GitHub-hosted build origin",
+        "signpath/github-action-submit-signing-request@v2":
+            "release signing uses the official SignPath GitHub integration",
+        "SIGNPATH_API_TOKEN":
+            "the SignPath submitter credential is sourced from an encrypted secret",
+        "github-artifact-id":
+            "SignPath signs an artifact produced by the current GitHub workflow",
+        "release-signing":
+            "the production release signing policy is explicit",
         "CODEX_MONITOR_WINDOWS_PUBLISHER_SHA256":
             "the update verifier is compiled with the exact release publisher pin",
-        "Sign and verify executable":
-            "the executable is signed before packaging",
-        "Build installer from signed executable":
-            "the MSI embeds the already signed executable",
-        "Sign installer and regenerate checksums":
-            "the MSI checksum is generated only after final signing",
-        "gh release upload $tag @assets --clobber":
-            "Windows assets can join an existing macOS GitHub Release",
-        "Remove release certificate":
-            "the PFX is removed from the hosted runner even after failure",
+        "Get-AuthenticodeSignature":
+            "every returned file is independently verified before publication",
+        "Final artifact publisher does not match the compiled pin":
+            "the second signing pass must use the publisher compiled into the updater",
+        "Test signed MSI lifecycle and real upgrade":
+            "the exact signed MSI is installed and removed before publication",
+        "gh release create $tag @assets --verify-tag":
+            "only the verified signed asset set becomes the stable release",
     }
     for token, reason in signed_release_contracts.items():
         require(SIGNED_RELEASE_WORKFLOW, token, reason)
-    reject(SIGNED_RELEASE_WORKFLOW, "echo $env:WINDOWS_CERTIFICATE",
+    reject(SIGNED_RELEASE_WORKFLOW, "echo ${{ secrets.SIGNPATH_API_TOKEN }}",
            "release secrets must never be printed")
 
     installer_contracts = {
