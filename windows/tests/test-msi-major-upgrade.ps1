@@ -4,7 +4,10 @@ param(
     [string]$CurrentBinaryPath,
 
     [Parameter(Mandatory = $true)]
-    [string]$CurrentInstallerPath
+    [string]$CurrentInstallerPath,
+
+    [ValidatePattern('^[0-9A-Fa-f]{64}$')]
+    [string]$ExpectedPublisherSha256 = ""
 )
 
 Set-StrictMode -Version Latest
@@ -244,10 +247,26 @@ function Get-NormalizedPath {
     return ([IO.Path]::GetFullPath($Path)).TrimEnd($trailingSeparators)
 }
 
+function Get-TrustedPublisherSha256 {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path
+    )
+
+    $signature = Get-AuthenticodeSignature -LiteralPath $Path
+    if ($signature.Status -ne "Valid" -or
+        $null -eq $signature.SignerCertificate) {
+        throw "File does not have a valid trusted Authenticode signature: $Path"
+    }
+    return ($signature.SignerCertificate.GetCertHashString(
+        [Security.Cryptography.HashAlgorithmName]::SHA256)).ToLowerInvariant()
+}
+
 $repositoryRoot = (Resolve-Path -LiteralPath (
     Join-Path $PSScriptRoot "../..")).Path
 $resolvedCurrentBinary = (Resolve-Path -LiteralPath $CurrentBinaryPath).Path
 $resolvedCurrentInstaller = (Resolve-Path -LiteralPath $CurrentInstallerPath).Path
+$expectedPublisher = $ExpectedPublisherSha256.ToLowerInvariant()
 if ([IO.Path]::GetExtension($resolvedCurrentBinary) -ne ".exe") {
     throw "Current binary must be an EXE: $resolvedCurrentBinary"
 }
@@ -310,6 +329,16 @@ try {
     if ($currentVersionInfo.FileVersion -ne $currentVersion -or
         $currentVersionInfo.ProductVersion -ne $currentVersion) {
         throw "Current EXE and MSI versions do not match: MSI=$currentVersion file=$($currentVersionInfo.FileVersion) product=$($currentVersionInfo.ProductVersion)"
+    }
+    if (-not [string]::IsNullOrWhiteSpace($expectedPublisher)) {
+        $binaryPublisher = Get-TrustedPublisherSha256 `
+            -Path $resolvedCurrentBinary
+        $installerPublisher = Get-TrustedPublisherSha256 `
+            -Path $resolvedCurrentInstaller
+        if ($binaryPublisher -ne $expectedPublisher -or
+            $installerPublisher -ne $expectedPublisher) {
+            throw "Current EXE or MSI publisher does not match the expected certificate"
+        }
     }
     $preexistingProducts = @(Get-RelatedProductCodes `
         -UpgradeCode $expectedUpgradeCode)
@@ -487,11 +516,19 @@ try {
     }
     $currentInstalledHash = (Get-FileHash -LiteralPath $installedBinary `
         -Algorithm SHA256).Hash
-    $expectedCurrentHash = (Get-FileHash -LiteralPath $resolvedCurrentBinary `
+    $sourceCurrentHash = (Get-FileHash -LiteralPath $resolvedCurrentBinary `
         -Algorithm SHA256).Hash
-    if ($currentInstalledHash -ne $expectedCurrentHash) {
-        throw "Upgraded executable does not match the current tested build"
+    if ([string]::IsNullOrWhiteSpace($expectedPublisher)) {
+        if ($currentInstalledHash -ne $sourceCurrentHash) {
+            throw "Upgraded executable does not match the current tested build"
+        }
+    } else {
+        $installedPublisher = Get-TrustedPublisherSha256 -Path $installedBinary
+        if ($installedPublisher -ne $expectedPublisher) {
+            throw "The upgraded executable is not signed by the expected publisher"
+        }
     }
+    $expectedInstalledHash = $currentInstalledHash
     if ($currentInstalledHash -eq $oldInstalledHash) {
         throw "Upgrade did not replace the previous executable"
     }
@@ -535,7 +572,7 @@ try {
     }
     $hashAfterDowngrade = (Get-FileHash -LiteralPath $installedBinary `
         -Algorithm SHA256).Hash
-    if ($hashAfterDowngrade -ne $expectedCurrentHash) {
+    if ($hashAfterDowngrade -ne $expectedInstalledHash) {
         throw "Rejected downgrade changed the current executable"
     }
     $registeredAfterDowngrade = @(Get-RelatedProductCodes `
