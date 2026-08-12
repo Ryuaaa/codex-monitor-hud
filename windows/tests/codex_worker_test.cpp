@@ -304,6 +304,17 @@ std::string CurrentUtcTimestamp() {
     return std::string(buffer);
 }
 
+std::string UtcTimestampAfter(std::chrono::seconds delay) {
+    const std::time_t value = std::time(nullptr) + delay.count();
+    std::tm utc{};
+    if (gmtime_s(&utc, &value) != 0) return {};
+    char buffer[32]{};
+    if (std::strftime(buffer, sizeof(buffer), "%Y-%m-%dT%H:%M:%SZ", &utc) == 0) {
+        return {};
+    }
+    return std::string(buffer);
+}
+
 void TestSuccessfulBackgroundRefresh(HWND window) {
     Stage("success_begin");
     ScopedEnvironmentVariable scenario(L"CODEX_FAKE_SCENARIO", L"app-success");
@@ -602,8 +613,9 @@ void TestCostHistoryDemandGating(HWND window,
         cachePath, error);
     Expect(!error, "the restart cache write time must be readable");
 
+    const std::string postInstallTimestamp = UtcTimestampAfter(2s);
     const std::string postInstallEvent =
-        "{\"timestamp\":\"" + timestamp +
+        "{\"timestamp\":\"" + postInstallTimestamp +
         "\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\","
         "\"info\":{\"model\":\"gpt-5.6-luna\",\"last_token_usage\":{"
         "\"input_tokens\":1000,\"cached_input_tokens\":200,"
@@ -659,7 +671,7 @@ void TestCostHistoryDemandGating(HWND window,
            "the restart fixture must have an already-consumed prefix");
     if (!resumedFixture.empty()) resumedFixture.front() = '!';
     resumedFixture +=
-        "{\"timestamp\":\"" + timestamp +
+        "{\"timestamp\":\"" + postInstallTimestamp +
         "\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\","
         "\"info\":{\"last_token_usage\":{\"input_tokens\":500,"
         "\"cached_input_tokens\":100,\"output_tokens\":50}}}}\n";
