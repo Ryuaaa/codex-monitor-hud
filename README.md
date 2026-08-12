@@ -1,8 +1,8 @@
 # Codex 电脑轻量监测器
 
-> 当前正式版本：1.0.0。已完成Developer ID签名、公证发布准备、本机Token历史、费用估算和额度预测。
+> macOS 正式版：1.0.0，已完成Developer ID签名和Apple公证。Windows x64公开预览版：0.3.0，已经通过GitHub Windows虚拟机的构建、窗口、安装、升级和安全测试，暂未配置可信商业代码签名。
 
-这是一个常驻在 macOS 屏幕角落的原生三页面悬浮窗：主页可自由组合Codex和电脑模块，Codex页显示账户额度、订阅与Token用量，电脑性能页用来快速判断电脑是否吃紧、是否主要由 Codex 引起、瓶颈在 CPU、内存还是系统热压力。
+这是一个常驻在电脑屏幕角落的原生三页面悬浮窗：主页可自由组合Codex和电脑模块，Codex页显示账户额度、订阅与Token用量，电脑性能页用来快速判断电脑是否吃紧、是否主要由 Codex 引起、瓶颈在 CPU 还是内存。macOS版使用AppKit，Windows版使用Win32 + C++17；两者都不嵌入网页浏览器引擎。
 
 界面使用原生 AppKit 深色半透明材质、静态高光和卡片层级实现，不嵌入网页浏览器引擎；视觉接近HTML原型，同时避免额外的浏览器进程和持续动画负担。
 
@@ -78,14 +78,19 @@ Token增量缓存和额度预测样本位于：
 
 ## 系统要求
 
-- macOS 15 或更高版本。
-- 支持Apple芯片和Intel处理器。
-- 从源码构建需要 Xcode Command Line Tools。
+- macOS正式版：macOS 15或更高版本，支持Apple芯片和Intel处理器；从源码构建需要Xcode Command Line Tools。
+- Windows公开预览版：Windows 10/11 x64；暂不支持ARM64。
 - 电脑性能监控可独立工作；Codex额度、订阅和用量需要本机安装并登录ChatGPT桌面版、Codex桌面版或Codex命令行工具。
 
 ## 安装或更新
 
-不想自行构建时，可从[GitHub发布页下载1.0.0应用压缩包](https://github.com/Ryuaaa/codex-monitor-hud/releases/tag/v1.0.0)。
+不想自行构建时，可从[GitHub发布页](https://github.com/Ryuaaa/codex-monitor-hud/releases/tag/v1.0.0)下载：
+
+- macOS：`Codex-Monitor-HUD.app.zip`。解压后把应用移到“应用程序”文件夹并打开；文件已经Developer ID签名并通过Apple公证。
+- Windows安装版：`CodexMonitorHUD-windows-x64-0.3.0-unsigned.msi`。
+- Windows便携版：`CodexMonitorHUD-windows-x64-0.3.0-preview-unsigned.zip`，解压后运行其中的 `CodexMonitorHUD.exe`。
+
+Windows当前是公开预览版，EXE和MSI暂未配置可信商业代码签名，Windows可能显示“未知发布者”或SmartScreen提示。安装包来自已全绿的公开GitHub Windows流水线；签名前，一键安装更新按设计保持关闭。完整Windows说明见[`windows/README.md`](windows/README.md)。
 
 ```zsh
 ./install-overlay.sh

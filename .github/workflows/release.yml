@@ -1,9 +1,12 @@
 name: release
 
 on:
-  push:
-    tags:
-      - "v*"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing stable SemVer tag, for example v1.0.0
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -12,11 +15,16 @@ jobs:
   macos-release:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.release_tag }}
+          fetch-depth: 0
       - name: Verify tag matches app version
         run: |
+          release_tag="${{ inputs.release_tag }}"
+          test -n "$(git tag --list "$release_tag")"
           app_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' overlay/Info.plist)"
-          test "v$app_version" = "$GITHUB_REF_NAME"
+          test "v$app_version" = "$release_tag"
       - name: Build and test
         run: |
           ./build-overlay.sh
@@ -53,9 +61,17 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" \
-            Codex-Monitor-HUD.app.zip \
-            Codex-Monitor-HUD.app.zip.sha256 \
-            --verify-tag \
-            --notes-file RELEASE_NOTES.md \
-            --title "Codex Monitor HUD $GITHUB_REF_NAME"
+          release_tag="${{ inputs.release_tag }}"
+          if gh release view "$release_tag" >/dev/null 2>&1; then
+            gh release upload "$release_tag" \
+              Codex-Monitor-HUD.app.zip \
+              Codex-Monitor-HUD.app.zip.sha256 \
+              --clobber
+          else
+            gh release create "$release_tag" \
+              Codex-Monitor-HUD.app.zip \
+              Codex-Monitor-HUD.app.zip.sha256 \
+              --verify-tag \
+              --notes-file RELEASE_NOTES.md \
+              --title "Codex Monitor HUD $release_tag"
+          fi
