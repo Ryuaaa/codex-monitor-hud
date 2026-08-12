@@ -1135,18 +1135,8 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
         self.hudView.homeUsageCard.subtitleLabel.stringValue = self.hudView.usageCard.subtitleLabel.stringValue;
     }
     if (s.localCostAvailable) {
-        long long displayTodayTokens = s.todayUsageAvailable ? s.todayTokens : s.localTodayTokens;
-        long long displaySevenDayTokens = s.usageAvailable && s.sevenDayTokens > 0 ? s.sevenDayTokens : s.localSevenDayTokens;
-        long long displayThirtyDayTokens = s.usageAvailable && s.thirtyDayTokens > 0 ? s.thirtyDayTokens : s.localThirtyDayTokens;
-        double displayThirtyDayCost = s.localThirtyDayCostUSD;
-        double displayMonthForecastCost = s.localMonthForecastCostUSD;
-        if (s.localThirtyDayTokens > 0 && s.localThirtyDayCostUSD > 0 && s.usageAvailable && s.thirtyDayTokens > 0) {
-            double sampledCostPerToken = s.localThirtyDayCostUSD / (double)s.localThirtyDayTokens;
-            displayThirtyDayCost = sampledCostPerToken * (double)s.thirtyDayTokens;
-            if (s.monthForecastTokens > 0) displayMonthForecastCost = sampledCostPerToken * (double)s.monthForecastTokens;
-        }
-        NSString *costValue = [NSString stringWithFormat:@"30天 %@ · %@", FormatTokens(displayThirtyDayTokens), FormatUSD(displayThirtyDayCost)];
-        NSMutableString *costSubtitle = [[NSString stringWithFormat:@"今日 %@ · 7天 %@ · 本月预计 %@（估算）", FormatTokens(displayTodayTokens), FormatTokens(displaySevenDayTokens), FormatUSD(displayMonthForecastCost)] mutableCopy];
+        NSString *costValue = [NSString stringWithFormat:@"安装后近30天 %@ · %@", FormatTokens(s.localThirtyDayTokens), FormatUSD(s.localThirtyDayCostUSD)];
+        NSMutableString *costSubtitle = [[NSString stringWithFormat:@"今日 %@ · 近7天 %@ · 本月趋势 %@（估算）", FormatTokens(s.localTodayTokens), FormatTokens(s.localSevenDayTokens), FormatUSD(s.localMonthForecastCostUSD)] mutableCopy];
         if (s.localPricedTokenPercent < 99.5) [costSubtitle appendFormat:@" · 计价覆盖%.0f%%", s.localPricedTokenPercent];
         if (s.localCostScanIncomplete) [costSubtitle appendString:@" · 模型样本更新中"];
         self.hudView.localCostCard.valueLabel.stringValue = costValue;
@@ -1155,7 +1145,7 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
         self.hudView.homeLocalCostCard.subtitleLabel.stringValue = costSubtitle;
     } else {
         NSString *costState = s.localCostErrorText.length > 0 ? @"当前不可用" : @"正在读取";
-        NSString *costDetail = s.localCostErrorText ?: @"低优先级后台增量读取";
+        NSString *costDetail = s.localCostErrorText ?: @"只统计安装软件后的新增记录";
         self.hudView.localCostCard.valueLabel.stringValue = costState;
         self.hudView.localCostCard.subtitleLabel.stringValue = costDetail;
         self.hudView.homeLocalCostCard.valueLabel.stringValue = costState;
@@ -2021,22 +2011,30 @@ static int RunUpdateDiagnostic(void) {
     };
     NSError *parseError = nil;
     HUDReleaseInfo *release = HUDReleaseInfoFromDictionary(releaseJSON, &parseError);
+    NSDictionary *windowsJSON = @{
+        @"tag_name": @"windows-v9.9.9", @"html_url": @"https://github.com/Ryuaaa/codex-monitor-hud/releases/tag/windows-v9.9.9",
+        @"assets": @[@{ @"name": @"CodexMonitorHUD-windows-x64-9.9.9.msi", @"browser_download_url": @"https://github.com/Ryuaaa/codex-monitor-hud/releases/download/windows-v9.9.9/CodexMonitorHUD-windows-x64-9.9.9.msi", @"digest": [@"sha256:" stringByAppendingString:digest] }]
+    };
+    NSError *channelError = nil;
+    HUDReleaseInfo *selectedMac = HUDLatestMacReleaseInfoFromArray(@[windowsJSON, releaseJSON], &channelError);
     NSURL *file = [NSURL fileURLWithPath:[NSTemporaryDirectory() stringByAppendingPathComponent:[NSString stringWithFormat:@"hud-update-test-%@", NSUUID.UUID.UUIDString]]];
     [@"abc" writeToURL:file atomically:YES encoding:NSUTF8StringEncoding error:nil];
     NSString *actualDigest = HUDSHA256ForFile(file);
     [NSFileManager.defaultManager removeItemAtURL:file error:nil];
     BOOL versionPass = HUDCompareVersions(@"1.10.0", @"1.9.9") == NSOrderedDescending && HUDCompareVersions(@"v1.2.3", @"1.2.3") == NSOrderedSame;
     BOOL metadataPass = release && !parseError && [release.version isEqualToString:@"1.2.3"] && [release.assetDigest isEqualToString:digest];
+    BOOL channelPass = selectedMac && !channelError && [selectedMac.version isEqualToString:@"1.2.3"];
     BOOL checksumPass = [actualDigest isEqualToString:digest];
     BOOL frequencyPass = fabs(HUDAutomaticUpdateCheckInterval - 86400.0) < 0.1;
     NSString *helperScript = HUDInstallHelperScript();
-    BOOL launchAgentHandoffPass = [helperScript containsString:@"launchctl kickstart"] && [helperScript containsString:@"launchctl bootstrap"] && [helperScript containsString:@"/usr/bin/open"];
+    BOOL launchAgentHandoffPass = [helperScript containsString:@"launchctl kickstart"] && [helperScript containsString:@"launchctl bootstrap"] && [helperScript containsString:@"/usr/bin/open"] && [helperScript containsString:@"TeamIdentifier=L8K9749GM7"] && [helperScript containsString:@"spctl --assess"];
     printf("update_version_test=%s\n", versionPass ? "pass" : "fail");
     printf("update_metadata_test=%s\n", metadataPass ? "pass" : "fail");
+    printf("update_channel_test=%s\n", channelPass ? "pass" : "fail");
     printf("update_checksum_test=%s\n", checksumPass ? "pass" : "fail");
     printf("update_daily_frequency_test=%s\n", frequencyPass ? "pass" : "fail");
     printf("update_launch_agent_handoff_test=%s\n", launchAgentHandoffPass ? "pass" : "fail");
-    return versionPass && metadataPass && checksumPass && frequencyPass && launchAgentHandoffPass ? 0 : 6;
+    return versionPass && metadataPass && channelPass && checksumPass && frequencyPass && launchAgentHandoffPass ? 0 : 6;
 }
 
 static int RunUpdateHandoffDiagnostic(void) {
@@ -2171,30 +2169,32 @@ static int RunLogicDiagnostic(void) {
     NSURL *scanDay = [scanRoot URLByAppendingPathComponent:@"sessions/2026/02/02" isDirectory:YES];
     NSURL *scanFile = [scanDay URLByAppendingPathComponent:@"rollout-01900000-0000-7000-8000-000000000002.jsonl"];
     NSURL *scanCache = [scanRoot URLByAppendingPathComponent:@"cache/history.json"];
+    NSURL *scanStart = [scanRoot URLByAppendingPathComponent:@"cache/tracking-start.json"];
     [NSFileManager.defaultManager createDirectoryAtURL:scanDay withIntermediateDirectories:YES attributes:nil error:nil];
     NSString *largeContext = [@"x" stringByPaddingToLength:600000 withString:@"x" startingAtIndex:0];
     NSString *largeModelLine = [NSString stringWithFormat:@"{\"timestamp\":\"2026-02-02T02:00:00Z\",\"type\":\"turn_context\",\"payload\":{\"model\":\"gpt-5.6-terra\",\"context\":\"%@\"}}", largeContext];
     NSString *initialScanText = [@[largeModelLine, tokenLine, @""] componentsJoinedByString:@"\n"];
     [initialScanText writeToURL:scanFile atomically:YES encoding:NSUTF8StringEncoding error:nil];
-    NSDictionary *firstScan = CodexScanCostHistoryAtHome(scanRoot, scanCache, costNow);
-    NSString *secondTokenLine = @"{\"timestamp\":\"2026-02-02T02:02:00Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"last_token_usage\":{\"input_tokens\":200000,\"cached_input_tokens\":20000,\"output_tokens\":10000}}}}";
+    NSDictionary *baselineScan = CodexScanCostHistoryAtHome(scanRoot, scanCache, scanStart, costNow);
+    NSDictionary *firstScan = CodexScanCostHistoryAtHome(scanRoot, scanCache, scanStart, costNow);
+    NSString *secondTokenLine = @"{\"timestamp\":\"2026-02-02T02:41:00Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"model\":\"gpt-5.6-terra\",\"last_token_usage\":{\"input_tokens\":200000,\"cached_input_tokens\":20000,\"output_tokens\":10000}}}}";
     NSFileHandle *scanHandle = [NSFileHandle fileHandleForWritingToURL:scanFile error:nil];
     [scanHandle seekToEndOfFile];
     [scanHandle writeData:[[secondTokenLine stringByAppendingString:@"\n"] dataUsingEncoding:NSUTF8StringEncoding]];
     [scanHandle closeFile];
-    NSDictionary *secondScan = CodexScanCostHistoryAtHome(scanRoot, scanCache, costNow);
+    NSDictionary *secondScan = CodexScanCostHistoryAtHome(scanRoot, scanCache, scanStart, costNow);
     scanHandle = [NSFileHandle fileHandleForWritingToURL:scanFile error:nil];
     [scanHandle seekToEndOfFile];
-    [scanHandle writeData:[@"{\"timestamp\":\"2026-02-02T02:03:00Z\"" dataUsingEncoding:NSUTF8StringEncoding]];
+    [scanHandle writeData:[@"{\"timestamp\":\"2026-02-02T02:42:00Z\"" dataUsingEncoding:NSUTF8StringEncoding]];
     [scanHandle closeFile];
-    NSDictionary *partialLineScan = CodexScanCostHistoryAtHome(scanRoot, scanCache, costNow);
+    NSDictionary *partialLineScan = CodexScanCostHistoryAtHome(scanRoot, scanCache, scanStart, costNow);
     NSData *compactedCacheData = [NSData dataWithContentsOfURL:scanCache];
     NSDictionary *compactedCache = compactedCacheData ? [NSJSONSerialization JSONObjectWithData:compactedCacheData options:0 error:nil] : nil;
     NSDictionary *compactedEntry = [[compactedCache[@"files"] allValues] firstObject];
     NSString *compactedFileKey = [[compactedCache[@"files"] allKeys] firstObject];
     NSDictionary *compactedEvent = [compactedEntry[@"events"] firstObject];
-    BOOL cacheCompactionPass = [compactedCache[@"version"] integerValue] == 3 && compactedFileKey.length == 64 && [compactedEntry[@"events"] count] == 1 && compactedEntry[@"state"][@"occurrences"] == nil && fabs([compactedEvent[@"x"] doubleValue] - 0.768) < 0.000001;
-    BOOL incrementalScanPass = [firstScan[@"thirtyDayTokens"] longLongValue] == 110000 && [firstScan[@"topModel"] isEqualToString:@"gpt-5.6-terra"] && [secondScan[@"thirtyDayTokens"] longLongValue] == 320000 && fabs([secondScan[@"thirtyDayCost"] doubleValue] - 0.768) < 0.000001 && [secondScan[@"eventCount"] integerValue] == 1 && ![partialLineScan[@"scanIncomplete"] boolValue] && [partialLineScan[@"thirtyDayTokens"] longLongValue] == 320000;
+    BOOL cacheCompactionPass = [compactedCache[@"version"] integerValue] == 4 && compactedFileKey.length == 64 && [compactedEntry[@"events"] count] == 1 && compactedEntry[@"state"][@"occurrences"] == nil && fabs([compactedEvent[@"x"] doubleValue] - 0.484) < 0.000001;
+    BOOL incrementalScanPass = ![baselineScan[@"available"] boolValue] && [firstScan[@"thirtyDayTokens"] longLongValue] == 0 && [secondScan[@"thirtyDayTokens"] longLongValue] == 210000 && fabs([secondScan[@"thirtyDayCost"] doubleValue] - 0.484) < 0.000001 && [secondScan[@"eventCount"] integerValue] == 1 && ![partialLineScan[@"scanIncomplete"] boolValue] && [partialLineScan[@"thirtyDayTokens"] longLongValue] == 210000;
     [NSFileManager.defaultManager removeItemAtURL:scanRoot error:nil];
     BOOL calendarPass = currentPass && delayedPass && emptyPass;
     BOOL pass = calendarPass && cpuTimebasePass && memoryFormulaPass && activityPass && persistedCwdPass && migrationFallbackPass && costParserPass && costPricingPass && costDedupPass && costWatermarkPass && quotaForecastPass && serviceStatusPass && incrementalScanPass && cacheCompactionPass;

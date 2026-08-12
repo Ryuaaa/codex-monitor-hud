@@ -262,6 +262,8 @@ bool CostHistoryStateChanged(
 CodexCostRefresh RefreshCostHistory(
     const std::optional<std::filesystem::path>& codexHome,
     CodexCostHistoryState& historyState,
+    std::int64_t trackingStartedAtUnixSeconds,
+    bool baselineExistingFiles,
     const std::function<bool()>& shouldCancel) {
     CodexCostRefresh output;
     CodexCostFileScanResult scan;
@@ -275,6 +277,8 @@ CodexCostRefresh RefreshCostHistory(
                 .count();
         previousFiles = historyState.Cursors();
         request.previousFiles = previousFiles;
+        request.trackingStartedAtUnixSeconds = trackingStartedAtUnixSeconds;
+        request.baselineExistingFiles = baselineExistingFiles;
         request.shouldCancel = shouldCancel;
         scan = ScanCodexCostRolloutFiles(request);
         output.status = scan.ok() ? CodexCostRefreshStatus::kNoTokenEvents
@@ -291,12 +295,19 @@ CodexCostRefresh RefreshCostHistory(
     }
 
     CodexCostHistoryApplyResult applied = historyState.Apply(
-        scan, LocalDateFromUnixMilliseconds);
+        scan, LocalDateFromUnixMilliseconds,
+        trackingStartedAtUnixSeconds > 0
+            ? trackingStartedAtUnixSeconds * 1000
+            : 0);
     output.malformedLineCount = applied.malformedLineCount;
     const std::optional<std::string> currentDate = CurrentLocalDateString();
     if (currentDate) {
+        const std::optional<std::string> trackingStartDate =
+            LocalDateFromUnixMilliseconds(trackingStartedAtUnixSeconds * 1000);
         output.localSummary =
-            CalculateCodexCostSummary(applied.events, *currentDate);
+            CalculateCodexCostSummary(
+                applied.events, *currentDate,
+                trackingStartDate ? *trackingStartDate : std::string_view{});
         if (output.localSummary) {
             output.localSummary->saturated =
                 output.localSummary->saturated || applied.saturated;
@@ -495,6 +506,8 @@ void CodexWorker::Run() {
     bool costHistoryCacheDirty = false;
     bool costHistoryCacheWriteBlocked = false;
     bool costHistoryCacheSaveFailed = false;
+    std::int64_t costTrackingStartedAtUnixSeconds = 0;
+    bool costBaselineEstablished = false;
     std::size_t consecutiveFailureCount = 0;
     for (;;) {
         std::optional<::codex_monitor::CodexRefreshWorkItem> item;
@@ -623,20 +636,33 @@ void CodexWorker::Run() {
                         costEpoch) {
                     costHistoryCacheLoadAttempted = true;
                     if (loaded.status == CodexCostHistoryLoadStatus::kOk) {
-                        static_cast<void>(
-                            costHistoryState.ImportSnapshot(loaded.snapshot));
-                    } else if (loaded.status ==
-                               CodexCostHistoryLoadStatus::kUnsupportedVersion) {
-                        // Never downgrade a cache written by a newer build.
-                        // This is terminal for this process, so it also avoids
-                        // retrying a guaranteed refusal every five minutes.
-                        costHistoryCacheWriteBlocked = true;
+                        if (costHistoryState.ImportSnapshot(loaded.snapshot)) {
+                            costTrackingStartedAtUnixSeconds =
+                                loaded.snapshot.trackingStartedAtUnixSeconds;
+                            costBaselineEstablished = true;
+                        }
                     }
                 }
+            }
+            const bool establishCostBaseline =
+                !costBaselineEstablished;
+            if (establishCostBaseline) {
+                if (costTrackingStartedAtUnixSeconds <= 0) {
+                    costTrackingStartedAtUnixSeconds =
+                        std::chrono::duration_cast<std::chrono::seconds>(
+                            std::chrono::system_clock::now().time_since_epoch())
+                            .count();
+                }
+                costHistoryState.Clear();
+                costHistoryCacheDirty = true;
+                // Version 1 was the pre-install-history format. A new release
+                // intentionally replaces it with a fresh installation baseline.
+                costHistoryCacheWriteBlocked = false;
             }
             costHistoryUpdate =
                 RefreshCostHistory(
                     refreshedCodexHome, costHistoryState,
+                    costTrackingStartedAtUnixSeconds, establishCostBaseline,
                     [this, refreshEpoch, costEpoch] {
                         return cancellationEpoch_.load(
                                    std::memory_order_acquire) != refreshEpoch ||
@@ -649,6 +675,9 @@ void CodexWorker::Run() {
                 (costHistoryUpdate->status == CodexCostRefreshStatus::kAvailable ||
                  costHistoryUpdate->status ==
                      CodexCostRefreshStatus::kNoTokenEvents);
+            if (refreshedState && establishCostBaseline) {
+                costBaselineEstablished = true;
+            }
             if (costHistoryUpdate) {
                 costHistoryCacheDirty =
                     costHistoryCacheDirty ||
@@ -665,7 +694,8 @@ void CodexWorker::Run() {
                         std::chrono::system_clock::now().time_since_epoch())
                         .count();
                 const std::optional<CodexCostHistorySnapshot> snapshot =
-                    costHistoryState.ExportSnapshot(nowUnixSeconds);
+                    costHistoryState.ExportSnapshot(
+                        nowUnixSeconds, costTrackingStartedAtUnixSeconds);
                 if (!snapshot.has_value()) {
                     costHistoryCacheSaveFailed = true;
                 } else {

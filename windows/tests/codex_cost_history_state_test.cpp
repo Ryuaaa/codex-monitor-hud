@@ -116,6 +116,23 @@ void TestFailureRetainsLastGoodAggregate() {
            "a failed scan retains the last good unknown-model aggregate");
 }
 
+void TestInstallTimestampRejectsOlderDeliveredLines() {
+    CodexCostHistoryState state;
+    CodexCostFileScanResult scan;
+    scan.status = CodexCostFileScanStatus::kOk;
+    scan.files = {Cursor("copied-after-install", 300)};
+    scan.lines = {
+        Line("copied-after-install", 0,
+             R"({"timestamp":"2026-02-02T02:00:00Z","type":"event_msg","payload":{"type":"token_count","info":{"model":"gpt-5.6-luna","last_token_usage":{"input_tokens":100,"output_tokens":10}}}})"),
+        Line("copied-after-install", 150,
+             R"({"timestamp":"2026-02-02T03:00:00Z","type":"event_msg","payload":{"type":"token_count","info":{"model":"gpt-5.6-luna","last_token_usage":{"input_tokens":200,"output_tokens":20}}}})"),
+    };
+    const auto applied = state.Apply(scan, FixedDate, 1'770'000'600'000LL);
+    Expect(applied.events.size() == 1 &&
+               applied.events.front().usage.inputTokens == 200,
+           "a file discovered later must still exclude events older than installation");
+}
+
 void TestPartialDiscoveryDoesNotEvictLastGoodFile() {
     CodexCostHistoryState state;
     CodexCostFileScanResult first;
@@ -167,6 +184,7 @@ int main() {
     TestIncrementalCompactionAndFileNamespace();
     TestTruncationAndRemovedFiles();
     TestFailureRetainsLastGoodAggregate();
+    TestInstallTimestampRejectsOlderDeliveredLines();
     TestPartialDiscoveryDoesNotEvictLastGoodFile();
     TestContentGapDoesNotPreventDeletedFileEviction();
     std::cout << "codex_cost_history_state_test: pass\n";

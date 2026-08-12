@@ -107,11 +107,11 @@ void TestSemVerPrecedence() {
 
 void TestSelectsHighestStableUpdate() {
     std::vector<GitHubReleaseCandidate> releases;
-    releases.push_back(Release("v1.2.0", Pair("1.2.0", "v1.2.0")));
-    releases.push_back(Release("1.10.0", Pair("1.10.0")));
-    releases.push_back(Release("2.0.0", Pair("2.0.0"), true, false));
-    releases.push_back(Release("2.1.0", Pair("2.1.0"), false, true));
-    releases.push_back(Release("3.0.0-rc.1", Pair("3.0.0-rc.1")));
+    releases.push_back(Release("windows-v1.2.0", Pair("1.2.0", "windows-v1.2.0")));
+    releases.push_back(Release("windows-v1.10.0", Pair("1.10.0", "windows-v1.10.0")));
+    releases.push_back(Release("windows-v2.0.0", Pair("2.0.0", "windows-v2.0.0"), true, false));
+    releases.push_back(Release("windows-v2.1.0", Pair("2.1.0", "windows-v2.1.0"), false, true));
+    releases.push_back(Release("windows-v3.0.0-rc.1", Pair("3.0.0-rc.1", "windows-v3.0.0-rc.1")));
 
     const auto selected = SelectLatestWindowsRelease("v1.0.0", releases);
     Expect(selected.has_value() && selected->version.canonical == "1.10.0",
@@ -126,30 +126,30 @@ void TestSelectsHighestStableUpdate() {
 
 void TestRejectsUnsafeAssetSets() {
     const std::vector<GitHubReleaseCandidate> releases = {
-        Release("1.8.0", {Asset(
-            "CodexMonitorHUD-windows-x64-1.8.0.msi", "1.8.0")}),
-        Release("1.7.0", {
-            Asset("CodexMonitorHUD-windows-x64-1.7.0.msi", "1.7.0"),
-            Asset("CodexMonitorHUD-windows-x64-1.7.1.msi.sha256", "1.7.0"),
+        Release("windows-v1.8.0", {Asset(
+            "CodexMonitorHUD-windows-x64-1.8.0.msi", "windows-v1.8.0")}),
+        Release("windows-v1.7.0", {
+            Asset("CodexMonitorHUD-windows-x64-1.7.0.msi", "windows-v1.7.0"),
+            Asset("CodexMonitorHUD-windows-x64-1.7.1.msi.sha256", "windows-v1.7.0"),
         }),
-        Release("1.6.0", {
-            Asset("CodexMonitorHUD-windows-x64-1.6.0.msi", "1.6.0"),
-            Asset("CodexMonitorHUD-windows-x64-1.6.0.msi", "1.6.0"),
-            Asset("CodexMonitorHUD-windows-x64-1.6.0.msi.sha256", "1.6.0"),
+        Release("windows-v1.6.0", {
+            Asset("CodexMonitorHUD-windows-x64-1.6.0.msi", "windows-v1.6.0"),
+            Asset("CodexMonitorHUD-windows-x64-1.6.0.msi", "windows-v1.6.0"),
+            Asset("CodexMonitorHUD-windows-x64-1.6.0.msi.sha256", "windows-v1.6.0"),
         }),
-        Release("1.5.0", {
-            Asset("CodexMonitorHUD-windows-x64-1.5.0.msi", "1.5.0"),
-            Asset("CodexMonitorHUD-windows-x64-1.5.0.msi.sha256", "1.5.0"),
-            Asset("CodexMonitorHUD-windows-x64-9.9.9.msi", "1.5.0"),
+        Release("windows-v1.5.0", {
+            Asset("CodexMonitorHUD-windows-x64-1.5.0.msi", "windows-v1.5.0"),
+            Asset("CodexMonitorHUD-windows-x64-1.5.0.msi.sha256", "windows-v1.5.0"),
+            Asset("CodexMonitorHUD-windows-x64-9.9.9.msi", "windows-v1.5.0"),
         }),
-        Release("1.4.0", {
+        Release("windows-v1.4.0", {
             {"CodexMonitorHUD-windows-x64-1.4.0.msi", ""},
-            Asset("CodexMonitorHUD-windows-x64-1.4.0.msi.sha256", "1.4.0"),
+            Asset("CodexMonitorHUD-windows-x64-1.4.0.msi.sha256", "windows-v1.4.0"),
         }),
-        Release("1.3.0", {
+        Release("windows-v1.3.0", {
             {"CodexMonitorHUD-windows-x64-1.3.0.msi",
              "https://example.invalid/CodexMonitorHUD-windows-x64-1.3.0.msi"},
-            Asset("CodexMonitorHUD-windows-x64-1.3.0.msi.sha256", "1.3.0"),
+            Asset("CodexMonitorHUD-windows-x64-1.3.0.msi.sha256", "windows-v1.3.0"),
         }),
     };
 
@@ -159,8 +159,8 @@ void TestRejectsUnsafeAssetSets() {
 
 void TestRequiresANewerVersionAndValidCurrentVersion() {
     const std::vector<GitHubReleaseCandidate> releases = {
-        Release("v1.0.0", Pair("1.0.0", "v1.0.0")),
-        Release("0.9.9", Pair("0.9.9")),
+        Release("windows-v1.0.0", Pair("1.0.0", "windows-v1.0.0")),
+        Release("windows-v0.9.9", Pair("0.9.9", "windows-v0.9.9")),
     };
     Expect(!SelectLatestWindowsRelease("1.0.0", releases).has_value(),
            "equal and older releases must not be selected");
@@ -169,12 +169,12 @@ void TestRequiresANewerVersionAndValidCurrentVersion() {
 }
 
 void TestIgnoresUnrelatedAssetsAndInputOrder() {
-    std::vector<GitHubReleaseAsset> lowerAssets = Pair("2.0.0");
+    std::vector<GitHubReleaseAsset> lowerAssets = Pair("2.0.0", "windows-v2.0.0");
     lowerAssets.push_back(Asset("source.tar.gz"));
     const std::vector<GitHubReleaseCandidate> releases = {
-        Release("2.0.1", Pair("2.0.1")),
-        Release("2.0.0", std::move(lowerAssets)),
-        Release("2.1.0+build.1", Pair("2.1.0+build.1")),
+        Release("windows-v2.0.1", Pair("2.0.1", "windows-v2.0.1")),
+        Release("windows-v2.0.0", std::move(lowerAssets)),
+        Release("windows-v2.1.0+build.1", Pair("2.1.0+build.1", "windows-v2.1.0+build.1")),
     };
     const auto selected = SelectLatestWindowsRelease("1.9.0", releases);
     Expect(selected.has_value() &&

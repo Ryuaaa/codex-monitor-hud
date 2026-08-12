@@ -879,12 +879,12 @@ def main() -> None:
         "resetAfterTruncation": "rewritten rollout files invalidate retained parser state",
         "kCodexCostHistoryCacheMaximumBytes":
             "restart cache size is bounded independently from source scanning",
-        'kVersionLine = "version=1"':
+        'kVersionLine = "version=2"':
             "restart cache has an explicit format version",
         "CodexCostHistoryAtomicReplace":
             "restart cache commits through an atomic replacement boundary",
         "CalculateCodexCostSummary": "cost periods and coverage are aggregated independently",
-        "CalculateCodexCostHybridSummary": "official Token totals remain the primary display source",
+        "baselineExistingFiles": "installation establishes offsets without reading old session content",
     }
     cost_sources = (CODEX_COST_MODEL + CODEX_COST_EVENT_PARSER +
                     CODEX_COST_FILE_SCAN + CODEX_COST_HISTORY_STATE +

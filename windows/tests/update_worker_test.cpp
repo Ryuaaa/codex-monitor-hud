@@ -76,13 +76,13 @@ WindowsUpdateCheckResult AvailableResult() {
     Require(version.has_value(), "the update worker fixture version must parse");
     result.release = SelectedWindowsRelease{
         *version,
-        "v1.2.0",
+        "windows-v1.2.0",
         GitHubReleaseAsset{
             "CodexMonitorHUD-windows-x64-1.2.0.msi",
-            "https://github.com/Ryuaaa/codex-monitor-hud/releases/download/v1.2.0/CodexMonitorHUD-windows-x64-1.2.0.msi"},
+            "https://github.com/Ryuaaa/codex-monitor-hud/releases/download/windows-v1.2.0/CodexMonitorHUD-windows-x64-1.2.0.msi"},
         GitHubReleaseAsset{
             "CodexMonitorHUD-windows-x64-1.2.0.msi.sha256",
-            "https://github.com/Ryuaaa/codex-monitor-hud/releases/download/v1.2.0/CodexMonitorHUD-windows-x64-1.2.0.msi.sha256"},
+            "https://github.com/Ryuaaa/codex-monitor-hud/releases/download/windows-v1.2.0/CodexMonitorHUD-windows-x64-1.2.0.msi.sha256"},
     };
     return result;
 }

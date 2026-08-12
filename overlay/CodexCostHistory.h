@@ -13,6 +13,7 @@ FOUNDATION_EXPORT NSDictionary<NSString *, id> *CodexAggregateCostEvents(NSArray
                                                                           BOOL scanIncomplete);
 FOUNDATION_EXPORT NSDictionary<NSString *, id> *CodexScanCostHistoryAtHome(NSURL *codexHome,
                                                                             NSURL *cacheURL,
+                                                                            NSURL *trackingStartURL,
                                                                             NSDate *now);
 FOUNDATION_EXPORT NSDictionary<NSString *, id> *CodexQuotaForecastFromSamples(NSArray<NSDictionary<NSString *, id> *> *samples,
                                                                                NSString *remainingKey,

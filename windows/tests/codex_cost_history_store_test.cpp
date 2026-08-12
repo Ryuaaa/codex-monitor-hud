@@ -107,6 +107,7 @@ CodexCostHistoryFileSnapshot File(std::string id) {
 
 CodexCostHistorySnapshot Snapshot() {
     CodexCostHistorySnapshot snapshot;
+    snapshot.trackingStartedAtUnixSeconds = 1'774'999'000;
     snapshot.updatedAtUnixSeconds = 1'775'000'000;
     snapshot.files.push_back(File(WindowsFileId(2)));
     CodexCostHistoryFileSnapshot partial = File("posix-a-b");
@@ -156,7 +157,9 @@ const CodexCostHistoryRowSnapshot* FindRow(
 
 bool SameSnapshot(const CodexCostHistorySnapshot& left,
                   const CodexCostHistorySnapshot& right) {
-    if (left.updatedAtUnixSeconds != right.updatedAtUnixSeconds ||
+    if (left.trackingStartedAtUnixSeconds !=
+            right.trackingStartedAtUnixSeconds ||
+        left.updatedAtUnixSeconds != right.updatedAtUnixSeconds ||
         left.files.size() != right.files.size()) {
         return false;
     }
@@ -175,6 +178,8 @@ bool SameSnapshot(const CodexCostHistorySnapshot& left,
             leftFile.complete != rightFile->complete ||
             leftFile.parser.currentModel !=
                 rightFile->parser.currentModel ||
+            leftFile.parser.baselinePending !=
+                rightFile->parser.baselinePending ||
             leftFile.parser.hasRawTotalsWatermark !=
                 rightFile->parser.hasRawTotalsWatermark ||
             leftFile.rows.size() != rightFile->rows.size()) {
@@ -225,7 +230,7 @@ void TestRoundTripAndPrivacyWhitelist() {
     const std::string contents = ReadFile(path);
     Require(contents.size() <= kCodexCostHistoryCacheMaximumBytes,
             "serialized cache must respect the eight MiB cap");
-    Require(contents.rfind("version=1\nmeta\t", 0) == 0,
+    Require(contents.rfind("version=2\nmeta\tstarted_at=", 0) == 0,
             "cache must start with the exact version and metadata records");
     Require(contents.find("path=") == std::string::npos &&
                 contents.find("account") == std::string::npos &&
@@ -262,7 +267,7 @@ void TestRoundTripAndPrivacyWhitelist() {
 void TestUnknownVersionIsNeverOverwritten() {
     TemporaryDirectory temporary;
     const auto path = temporary.path() / "codex-cost-cache.txt";
-    const std::string future = "version=2\nprivate-future-format\n";
+    const std::string future = "version=99\nprivate-future-format\n";
     WriteFile(path, future);
 
     const auto loaded = CodexCostHistoryStore(path).Load();
@@ -282,6 +287,19 @@ void TestUnknownVersionIsNeverOverwritten() {
                 CodexCostHistorySaveStatus::kUnsupportedVersion &&
                 !replacementCalled && ReadFile(path) == future,
             "an older writer must preserve a newer cache byte-for-byte");
+}
+
+void TestLegacyVersionCanBeReplacedByInstallBaseline() {
+    TemporaryDirectory temporary;
+    const auto path = temporary.path() / "codex-cost-cache.txt";
+    WriteFile(path, "version=1\nlegacy-history-must-not-load\n");
+    Require(CodexCostHistoryStore(path).Load().status ==
+                CodexCostHistoryLoadStatus::kUnsupportedVersion,
+            "the pre-install-history cache must not be imported");
+    Require(CodexCostHistoryStore(path).Save(Snapshot()).written(),
+            "a validated installation baseline may replace version one");
+    Require(ReadFile(path).rfind("version=2\nmeta\tstarted_at=", 0) == 0,
+            "legacy replacement must write the installation start marker");
 }
 
 void TestAtomicFailureAndCancellationPreserveOldFile() {
@@ -361,14 +379,14 @@ void TestAnyCurrentVersionDamageRejectsTheWholeCache() {
                 loaded.snapshot.files.empty(),
             "one damaged row must reject every cursor and aggregate");
 
-    contents = "version=1\nmeta\tupdated_at=1775000000\tfiles=0\nextra\n";
+    contents = "version=2\nmeta\tstarted_at=1774999000\tupdated_at=1775000000\tfiles=0\nextra\n";
     WriteFile(path, contents);
     const auto extra = CodexCostHistoryStore(path).Load();
     Require(extra.status == CodexCostHistoryLoadStatus::kCorrupt &&
                 extra.snapshot.files.empty(),
             "unknown records must not bypass the whitelist");
 
-    WriteFile(path, "version=1\nmeta\tupdated_at=1775000000\tfiles=0");
+    WriteFile(path, "version=2\nmeta\tstarted_at=1774999000\tupdated_at=1775000000\tfiles=0");
     const auto truncated = CodexCostHistoryStore(path).Load();
     Require(truncated.status == CodexCostHistoryLoadStatus::kCorrupt &&
                 truncated.snapshot.files.empty(),
@@ -384,7 +402,7 @@ void TestLoadByteAndLineLimits() {
                 CodexCostHistoryLoadStatus::kTooLarge,
             "a cache over eight MiB must be rejected before parsing");
 
-    std::string longLine = "version=1\n";
+    std::string longLine = "version=2\n";
     longLine.append(kCodexCostHistoryCacheMaximumLineBytes + 1, 'x');
     longLine.push_back('\n');
     WriteFile(path, longLine);
@@ -393,17 +411,17 @@ void TestLoadByteAndLineLimits() {
             "a logical line over four KiB must be rejected");
 
     WriteFile(path,
-              "version=1\nmeta\tupdated_at=1775000000\tfiles=4097\n");
+              "version=2\nmeta\tstarted_at=1774999000\tupdated_at=1775000000\tfiles=4097\n");
     Require(CodexCostHistoryStore(path).Load().status ==
                 CodexCostHistoryLoadStatus::kTooLarge,
             "a declared file count over 4096 must be rejected as too large");
 
     std::ostringstream excessiveRows;
     excessiveRows
-        << "version=1\nmeta\tupdated_at=1775000000\tfiles=1\n"
+        << "version=2\nmeta\tstarted_at=1774999000\tupdated_at=1775000000\tfiles=1\n"
         << "file\tid=" << WindowsFileId(1)
         << "\tsize=0\tmtime_ns=0\toffset=0\tdiscard=0\tskipped=0"
-           "\tcomplete=1\tcurrent_model=756e6b6e6f776e\thas_watermark=0"
+           "\tcomplete=1\tcurrent_model=756e6b6e6f776e\tbaseline_pending=0\thas_watermark=0"
            "\twi=0\twc=0\tww=0\two=0\trows=32769\n";
     WriteFile(path, excessiveRows.str());
     Require(CodexCostHistoryStore(path).Load().status ==
@@ -416,6 +434,7 @@ void TestSaveCountAndSerializedByteLimits() {
     const auto path = temporary.path() / "codex-cost-cache.txt";
 
     CodexCostHistorySnapshot tooManyFiles;
+    tooManyFiles.trackingStartedAtUnixSeconds = 1'774'999'000;
     tooManyFiles.updatedAtUnixSeconds = 1'775'000'000;
     tooManyFiles.files.reserve(kCodexCostHistoryCacheMaximumFiles + 1);
     for (std::size_t index = 0;
@@ -432,6 +451,7 @@ void TestSaveCountAndSerializedByteLimits() {
             "more than 4096 file states must never be written");
 
     CodexCostHistorySnapshot tooManyRows;
+    tooManyRows.trackingStartedAtUnixSeconds = 1'774'999'000;
     tooManyRows.updatedAtUnixSeconds = 1'775'000'000;
     CodexCostHistoryFileSnapshot file;
     file.fileId = WindowsFileId(1);
@@ -445,6 +465,7 @@ void TestSaveCountAndSerializedByteLimits() {
             "more than 32768 aggregate rows must never be written");
 
     CodexCostHistorySnapshot tooManyBytes;
+    tooManyBytes.trackingStartedAtUnixSeconds = 1'774'999'000;
     tooManyBytes.updatedAtUnixSeconds = 1'775'000'000;
     CodexCostHistoryFileSnapshot largeFile;
     largeFile.fileId = WindowsFileId(2);
@@ -679,6 +700,7 @@ void TestInvalidSnapshotImportIsTransactional() {
             "a failed export must not mutate live state");
 
     CodexCostHistorySnapshot empty;
+    empty.trackingStartedAtUnixSeconds = seed.trackingStartedAtUnixSeconds;
     empty.updatedAtUnixSeconds = seed.updatedAtUnixSeconds;
     Require(state.ImportSnapshot(empty) && state.Cursors().empty(),
             "a valid empty cache must atomically clear restored state");
@@ -734,6 +756,7 @@ void TestMissingCacheIsAnEmptySuccess() {
 int main() {
     TestRoundTripAndPrivacyWhitelist();
     TestUnknownVersionIsNeverOverwritten();
+    TestLegacyVersionCanBeReplacedByInstallBaseline();
     TestAtomicFailureAndCancellationPreserveOldFile();
     TestAnyCurrentVersionDamageRejectsTheWholeCache();
     TestLoadByteAndLineLimits();

@@ -151,6 +151,32 @@ void TestRecentDatePolicy() {
             "date policy must not exceed the thirty-day product limit");
 }
 
+void TestFirstRunBaselineSkipsExistingContent() {
+    TemporaryDirectory temporary;
+    const std::int64_t now = NowUnixSeconds();
+    const auto session = CurrentSessionDirectory(temporary.path(), now);
+    const auto rollout = session / "rollout-before-install.jsonl";
+    WriteFile(rollout, "old-one\nold-two\n");
+
+    auto request = Request(temporary.path(), now);
+    request.trackingStartedAtUnixSeconds = now;
+    request.baselineExistingFiles = true;
+    const auto baseline = ScanCodexCostRolloutFiles(request);
+    Require(baseline.ok() && baseline.lines.empty() &&
+                baseline.files.size() == 1 &&
+                baseline.files.front().establishBaseline &&
+                baseline.files.front().parsedOffsetBytes == 16,
+            "the install baseline must remember EOF without reading old lines");
+
+    AppendFile(rollout, "new-after-install\n");
+    request.previousFiles = baseline.files;
+    request.baselineExistingFiles = false;
+    const auto incremental = ScanCodexCostRolloutFiles(request);
+    Require(incremental.ok() && incremental.lines.size() == 1 &&
+                incremental.lines.front().text == "new-after-install",
+            "the next scan must return only content appended after install");
+}
+
 void TestCandidateDiscoveryRetentionAndPrivacy() {
     TemporaryDirectory temporary;
     const std::int64_t now = NowUnixSeconds();
@@ -373,6 +399,7 @@ void TestCancellationStopsAVisibleScan() {
 int main() {
     TestWindowsRootSyntaxPolicy();
     TestRecentDatePolicy();
+    TestFirstRunBaselineSkipsExistingContent();
     TestCandidateDiscoveryRetentionAndPrivacy();
     TestIncrementalAppendPartialLineAndTruncation();
     TestBudgetBoundaryAndResume();

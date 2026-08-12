@@ -111,7 +111,9 @@ std::int64_t SaturatingCountedTokens(const CodexTokenUsage& usage) noexcept {
 }
 
 bool SnapshotIsConsistent(const CodexCostHistorySnapshot& snapshot) {
-    if (snapshot.updatedAtUnixSeconds < 0 ||
+    if (snapshot.trackingStartedAtUnixSeconds <= 0 ||
+        snapshot.trackingStartedAtUnixSeconds > snapshot.updatedAtUnixSeconds ||
+        snapshot.updatedAtUnixSeconds < 0 ||
         snapshot.updatedAtUnixSeconds > kMaximumUnixSeconds ||
         snapshot.files.size() > kCodexCostHistoryCacheMaximumFiles) {
         return false;
@@ -216,9 +218,15 @@ std::vector<CodexCostFileCursor> CodexCostHistoryState::Cursors() const {
 
 std::optional<CodexCostHistorySnapshot>
 CodexCostHistoryState::ExportSnapshot(
-    std::int64_t updatedAtUnixSeconds) const noexcept {
+    std::int64_t updatedAtUnixSeconds,
+    std::int64_t trackingStartedAtUnixSeconds) const noexcept {
     try {
         CodexCostHistorySnapshot snapshot;
+        snapshot.trackingStartedAtUnixSeconds = trackingStartedAtUnixSeconds > 0
+            ? trackingStartedAtUnixSeconds
+            : (trackingStartedAtUnixSeconds_ > 0
+                   ? trackingStartedAtUnixSeconds_
+                   : updatedAtUnixSeconds);
         snapshot.updatedAtUnixSeconds = updatedAtUnixSeconds;
         snapshot.files.reserve(files_.size());
         for (const FileState& file : files_) {
@@ -234,6 +242,7 @@ CodexCostHistoryState::ExportSnapshot(
                 file.cursor.hasSkippedOversizedLine;
             exported.complete = file.cursor.complete;
             exported.parser.currentModel = file.parser.currentModel;
+            exported.parser.baselinePending = file.parser.baselinePending;
             exported.parser.hasRawTotalsWatermark =
                 file.parser.hasRawTotalsWatermark;
             exported.parser.rawTotalsWatermark =
@@ -289,6 +298,7 @@ bool CodexCostHistoryState::ImportSnapshot(
             // resetAfterTruncation is a one-scan command, never durable state.
             file.cursor.resetAfterTruncation = false;
             file.parser.currentModel = imported.parser.currentModel;
+            file.parser.baselinePending = imported.parser.baselinePending;
             file.parser.hasRawTotalsWatermark =
                 imported.parser.hasRawTotalsWatermark;
             file.parser.rawTotalsWatermark =
@@ -315,6 +325,8 @@ bool CodexCostHistoryState::ImportSnapshot(
         }
 
         files_.swap(restored);
+        trackingStartedAtUnixSeconds_ =
+            snapshot.trackingStartedAtUnixSeconds;
         return true;
     } catch (...) {
         return false;
@@ -323,7 +335,8 @@ bool CodexCostHistoryState::ImportSnapshot(
 
 CodexCostHistoryApplyResult CodexCostHistoryState::Apply(
     const CodexCostFileScanResult& scan,
-    const CodexCostLocalDateResolver& localDateResolver) {
+    const CodexCostLocalDateResolver& localDateResolver,
+    std::int64_t earliestEventUnixMilliseconds) {
     CodexCostHistoryApplyResult output;
     if (!scan.ok() || !localDateResolver) {
         for (const FileState& file : files_) {
@@ -346,11 +359,17 @@ CodexCostHistoryApplyResult CodexCostHistoryState::Apply(
             existing = std::prev(files_.end());
             existing->cursor.fileId = cursor.fileId;
         }
+        if (cursor.establishBaseline) {
+            existing->parser = CodexCostEventParserState{};
+            existing->parser.baselinePending = true;
+            existing->rows.clear();
+        }
         if (cursor.resetAfterTruncation) {
             existing->parser = CodexCostEventParserState{};
             existing->rows.clear();
         }
         existing->cursor = cursor;
+        existing->cursor.establishBaseline = false;
     }
     // A partial discovery cannot distinguish deletion from a temporary
     // permission or enumeration failure. Preserve the last good rows until a
@@ -378,6 +397,11 @@ CodexCostHistoryApplyResult CodexCostHistoryState::Apply(
             continue;
         }
         if (!parsed.event) continue;
+        if (earliestEventUnixMilliseconds > 0 &&
+            parsed.event->timestampUnixMilliseconds <
+                earliestEventUnixMilliseconds) {
+            continue;
+        }
         const std::optional<std::string> localDate =
             localDateResolver(parsed.event->timestampUnixMilliseconds);
         if (!localDate) {
@@ -427,6 +451,7 @@ CodexCostHistoryApplyResult CodexCostHistoryState::Apply(
 
 void CodexCostHistoryState::Clear() noexcept {
     files_.clear();
+    trackingStartedAtUnixSeconds_ = 0;
 }
 
 }  // namespace codex_monitor::codex

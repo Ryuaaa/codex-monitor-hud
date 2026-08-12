@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: Existing stable SemVer tag, for example v1.0.0
+        description: Existing Windows tag, for example windows-v1.0.0
         required: true
         type: string
 
@@ -30,8 +30,8 @@ jobs:
         shell: pwsh
         run: |
           $tag = "${{ inputs.release_tag }}"
-          if ($tag -notmatch '^v?([0-9]+\.[0-9]+\.[0-9]+)$') {
-            throw "Windows release tag must be a stable three-part SemVer"
+          if ($tag -notmatch '^windows-v([0-9]+\.[0-9]+\.[0-9]+)$') {
+            throw "Windows release tag must use windows-vMAJOR.MINOR.PATCH"
           }
           $tagVersion = $Matches[1]
           $cmake = Get-Content -LiteralPath "windows/CMakeLists.txt" -Raw

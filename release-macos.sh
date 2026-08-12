@@ -7,6 +7,7 @@ app_dir="/private/tmp/codex-monitor-hud-build/Codex Monitor HUD.app"
 archive="$source_dir/Codex-Monitor-HUD.app.zip"
 checksum="$archive.sha256"
 submission_archive="/private/tmp/Codex-Monitor-HUD-notarization.zip"
+expected_team_id="L8K9749GM7"
 version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$source_dir/overlay/Info.plist")"
 build_number="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$source_dir/overlay/Info.plist")"
 
@@ -33,6 +34,11 @@ export CODE_SIGN_IDENTITY="$sign_identity"
 "$source_dir/build-overlay.sh"
 
 /usr/bin/codesign --verify --deep --strict --verbose=2 "$app_dir"
+signing_details="$(/usr/bin/codesign -dv --verbose=4 "$app_dir" 2>&1)"
+if [[ "$signing_details" != *"TeamIdentifier=$expected_team_id"* ]]; then
+  /usr/bin/printf '签名团队不正确；期望 %s。\n' "$expected_team_id" >&2
+  exit 1
+fi
 /usr/bin/lipo "$app_dir/Contents/MacOS/CodexMonitorHUD" -verify_arch arm64 x86_64
 
 /bin/rm -f "$submission_archive" "$archive" "$checksum"

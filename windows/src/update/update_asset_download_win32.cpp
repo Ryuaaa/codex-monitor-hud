@@ -306,9 +306,9 @@ std::optional<AllowedUpdateAssetUrl> ParseInitialUpdateAssetUrlWide(
     const std::wstring_view tag = remainder.substr(0, separator);
     const std::wstring_view filename = remainder.substr(separator + 1);
     const bool tagMatchesVersion =
-        tag == *assetVersion ||
-        (tag.size() == assetVersion->size() + 1 && tag.front() == L'v' &&
-         tag.substr(1) == *assetVersion);
+        (tag.size() == assetVersion->size() + 9 &&
+         tag.substr(0, 9) == L"windows-v" &&
+         tag.substr(9) == *assetVersion);
     if (!IsSafeReleaseTag(tag) || !tagMatchesVersion ||
         filename != expectedFilename) {
         return std::nullopt;
@@ -330,7 +330,7 @@ ParseGitHubReleaseAssetRedirectUrlWide(std::wstring_view url) {
 #ifdef _WIN32
 
 #ifndef CODEX_MONITOR_WINDOWS_VERSION
-#define CODEX_MONITOR_WINDOWS_VERSION "0.3.0"
+#define CODEX_MONITOR_WINDOWS_VERSION "0.3.1"
 #endif
 #define CODEX_MONITOR_ASSET_WIDEN_IMPL(value) L##value
 #define CODEX_MONITOR_ASSET_WIDEN(value) \

@@ -147,43 +147,43 @@ int main() {
         "CodexMonitorHUD-windows-x64-1.2.3.msi";
     constexpr std::string_view kInitial =
         "https://github.com/Ryuaaa/codex-monitor-hud/releases/download/"
-        "v1.2.3/CodexMonitorHUD-windows-x64-1.2.3.msi";
+        "windows-v1.2.3/CodexMonitorHUD-windows-x64-1.2.3.msi";
 
     ExpectInitialAccepted(kInitial, kInstaller,
                           "canonical installer URL is accepted");
     ExpectInitialAccepted(
         "HTTPS://GITHUB.COM/Ryuaaa/codex-monitor-hud/releases/download/"
-        "1.2.3/CodexMonitorHUD-windows-x64-1.2.3.msi",
+        "windows-v1.2.3/CodexMonitorHUD-windows-x64-1.2.3.msi",
         kInstaller, "scheme and host are case-insensitive");
     ExpectInitialAccepted(
         "https://github.com/Ryuaaa/codex-monitor-hud/releases/download/"
-        "v1.2.3/CodexMonitorHUD-windows-x64-1.2.3.msi.sha256",
+        "windows-v1.2.3/CodexMonitorHUD-windows-x64-1.2.3.msi.sha256",
         "CodexMonitorHUD-windows-x64-1.2.3.msi.sha256",
         "checksum URL is accepted");
 
     ExpectInitialRejected(
         "http://github.com/Ryuaaa/codex-monitor-hud/releases/download/"
-        "v1.2.3/CodexMonitorHUD-windows-x64-1.2.3.msi",
+        "windows-v1.2.3/CodexMonitorHUD-windows-x64-1.2.3.msi",
         kInstaller, "HTTP is rejected");
     ExpectInitialRejected(
         "https://github.com.evil.test/Ryuaaa/codex-monitor-hud/releases/"
-        "download/v1.2.3/CodexMonitorHUD-windows-x64-1.2.3.msi",
+        "download/windows-v1.2.3/CodexMonitorHUD-windows-x64-1.2.3.msi",
         kInstaller, "host suffix attack is rejected");
     ExpectInitialRejected(
         "https://user@github.com/Ryuaaa/codex-monitor-hud/releases/download/"
-        "v1.2.3/CodexMonitorHUD-windows-x64-1.2.3.msi",
+        "windows-v1.2.3/CodexMonitorHUD-windows-x64-1.2.3.msi",
         kInstaller, "credentials are rejected");
     ExpectInitialRejected(
         "https://github.com:443/Ryuaaa/codex-monitor-hud/releases/download/"
-        "v1.2.3/CodexMonitorHUD-windows-x64-1.2.3.msi",
+        "windows-v1.2.3/CodexMonitorHUD-windows-x64-1.2.3.msi",
         kInstaller, "explicit ports are rejected");
     ExpectInitialRejected(
-        "https://github.com/Ryuaaa/other/releases/download/v1.2.3/"
+        "https://github.com/Ryuaaa/other/releases/download/windows-v1.2.3/"
         "CodexMonitorHUD-windows-x64-1.2.3.msi",
         kInstaller, "another repository is rejected");
     ExpectInitialRejected(
         "https://github.com/Ryuaaa/codex-monitor-hud/releases/download/"
-        "v1.2.3/Other.msi",
+        "windows-v1.2.3/Other.msi",
         kInstaller, "a mismatched filename is rejected");
     ExpectInitialRejected(
         "https://github.com/Ryuaaa/codex-monitor-hud/releases/download/"
@@ -191,19 +191,19 @@ int main() {
         kInstaller, "a tag and filename version mismatch is rejected");
     ExpectInitialRejected(
         "https://github.com/Ryuaaa/codex-monitor-hud/releases/download/"
-        "v1.2.3/Other.msi",
+        "windows-v1.2.3/Other.msi",
         "Other.msi", "an arbitrary expected release asset is rejected");
     ExpectInitialRejected(
         "https://github.com/Ryuaaa/codex-monitor-hud/releases/download/"
-        "v1.2.3/CodexMonitorHUD-windows-x64-1.2.3.msi?raw=1",
+        "windows-v1.2.3/CodexMonitorHUD-windows-x64-1.2.3.msi?raw=1",
         kInstaller, "initial URL queries are rejected");
     ExpectInitialRejected(
         "https://github.com/Ryuaaa/codex-monitor-hud/releases/download/"
-        "v1.2.3/CodexMonitorHUD-windows-x64-1.2.3.msi#fragment",
+        "windows-v1.2.3/CodexMonitorHUD-windows-x64-1.2.3.msi#fragment",
         kInstaller, "initial URL fragments are rejected");
     ExpectInitialRejected(
         "https://github.com/Ryuaaa/codex-monitor-hud/releases/download/"
-        "v1%2F2/CodexMonitorHUD-windows-x64-1.2.3.msi",
+        "windows-v1%2F2/CodexMonitorHUD-windows-x64-1.2.3.msi",
         kInstaller, "escaped tag separators are rejected");
     ExpectInitialRejected(kInitial, "../installer.msi",
                           "path-like expected filenames are rejected");
@@ -211,7 +211,7 @@ int main() {
                           "alternate data stream filenames are rejected");
     ExpectInitialRejected(
         "https://github.com/Ryuaaa/codex-monitor-hud/releases/download/"
-        "v1.2.3\\CodexMonitorHUD-windows-x64-1.2.3.msi",
+        "windows-v1.2.3\\CodexMonitorHUD-windows-x64-1.2.3.msi",
         kInstaller, "backslashes are rejected");
 
     ExpectRedirectAccepted(

@@ -626,9 +626,10 @@ NSDictionary<NSString *, id> *CodexCalendarUsage(NSArray *buckets, NSDate *now) 
     self.costRefreshPending = NO;
     NSURL *homeURL = [self codexHomeURL];
     NSURL *cacheURL = [self applicationDataURL:@"codex-cost-cache.json"];
+    NSURL *trackingStartURL = [self applicationDataURL:@"codex-cost-tracking-start.json"];
     __weak typeof(self) weakSelf = self;
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
-        NSDictionary<NSString *, id> *summary = CodexScanCostHistoryAtHome(homeURL, cacheURL, NSDate.date);
+        NSDictionary<NSString *, id> *summary = CodexScanCostHistoryAtHome(homeURL, cacheURL, trackingStartURL, NSDate.date);
         dispatch_async(dispatch_get_main_queue(), ^{
             if (!weakSelf) return;
             weakSelf.costRefreshInProgress = NO;
@@ -636,6 +637,7 @@ NSDictionary<NSString *, id> *CodexCalendarUsage(NSArray *buckets, NSDate *now) 
             weakSelf.snapshot.localCostUpdatedAt = [summary[@"updatedAt"] doubleValue] ?: NSDate.date.timeIntervalSince1970;
             weakSelf.snapshot.localCostErrorText = [summary[@"error"] length] > 0 ? summary[@"error"] : nil;
             weakSelf.snapshot.localCostScanIncomplete = [summary[@"scanIncomplete"] boolValue];
+            weakSelf.snapshot.localCostTrackingStartedAt = [summary[@"trackingStartedAt"] doubleValue];
             weakSelf.snapshot.localTodayTokens = [summary[@"todayTokens"] longLongValue];
             weakSelf.snapshot.localSevenDayTokens = [summary[@"sevenDayTokens"] longLongValue];
             weakSelf.snapshot.localThirtyDayTokens = [summary[@"thirtyDayTokens"] longLongValue];

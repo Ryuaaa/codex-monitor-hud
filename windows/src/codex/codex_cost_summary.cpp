@@ -148,7 +148,8 @@ void AddToPeriod(std::int64_t tokens,
 
 std::optional<CodexCostSummary> CalculateCodexCostSummary(
     const std::vector<CodexCostEvent>& events,
-    std::string_view referenceLocalDate) {
+    std::string_view referenceLocalDate,
+    std::string_view trackingStartLocalDate) {
     CalendarDate reference;
     if (!ParseCanonicalDate(referenceLocalDate, reference)) {
         return std::nullopt;
@@ -257,10 +258,20 @@ std::optional<CodexCostSummary> CalculateCodexCostSummary(
     }
 
     output.available = output.eventCount > 0;
+    int elapsedDays = reference.day;
+    int observedHorizonDays = DaysInMonth(reference.year, reference.month);
+    CalendarDate trackingStart;
+    if (!trackingStartLocalDate.empty() &&
+        ParseCanonicalDate(trackingStartLocalDate, trackingStart) &&
+        trackingStart.year == reference.year &&
+        trackingStart.month == reference.month &&
+        trackingStart.day <= reference.day) {
+        elapsedDays = reference.day - trackingStart.day + 1;
+        observedHorizonDays =
+            DaysInMonth(reference.year, reference.month) - trackingStart.day + 1;
+    }
     output.monthForecastEstimatedUsd = LinearForecast(
-        output.monthToDate.estimatedUsd,
-        reference.day,
-        DaysInMonth(reference.year, reference.month),
+        output.monthToDate.estimatedUsd, elapsedDays, observedHorizonDays,
         output.saturated);
 
     if (coverageTokens > 0.0L && std::isfinite(coverageTokens) &&

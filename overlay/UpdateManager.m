@@ -4,8 +4,10 @@
 #import <sys/stat.h>
 
 static NSString *const HUDRepository = @"Ryuaaa/codex-monitor-hud";
+static NSString *const HUDMacReleaseTagPrefix = @"v";
 static NSString *const HUDReleaseAssetName = @"Codex-Monitor-HUD.app.zip";
 static NSString *const HUDBundleIdentifier = @"com.codexmonitorhud.app";
+static NSString *const HUDExpectedTeamIdentifier = @"L8K9749GM7";
 
 @implementation HUDReleaseInfo
 @end
@@ -61,6 +63,13 @@ NSString *HUDInstallHelperScript(void) {
             "/bin/rm -rf \"$backup_app\"\n"
             "/bin/mv \"$target_app\" \"$backup_app\"\n"
             "if /usr/bin/ditto \"$source_app\" \"$target_app\" && /usr/bin/codesign --verify --deep --strict \"$target_app\"; then\n"
+            "  identity=\"$(/usr/bin/codesign -dv --verbose=4 \"$target_app\" 2>&1)\"\n"
+            "  if [[ \"$identity\" != *\"TeamIdentifier=L8K9749GM7\"* ]] || ! /usr/sbin/spctl --assess --type execute \"$target_app\"; then\n"
+            "    /bin/rm -rf \"$target_app\"\n"
+            "    /bin/mv \"$backup_app\" \"$target_app\"\n"
+            "    restart_app\n"
+            "    exit 1\n"
+            "  fi\n"
             "  /bin/rm -rf \"$backup_app\"\n"
             "  restart_app\n"
             "  /bin/rm -rf \"$work_dir\"\n"
@@ -74,6 +83,11 @@ NSString *HUDInstallHelperScript(void) {
 
 HUDReleaseInfo *HUDReleaseInfoFromDictionary(NSDictionary *dictionary, NSError **error) {
     NSString *tag = [dictionary[@"tag_name"] isKindOfClass:NSString.class] ? dictionary[@"tag_name"] : @"";
+    if (![tag hasPrefix:HUDMacReleaseTagPrefix]) {
+        if (error) *error = [NSError errorWithDomain:@"HUDUpdater" code:1 userInfo:@{NSLocalizedDescriptionKey: @"不是macOS更新通道"}];
+        return nil;
+    }
+    NSString *version = HUDNormalizedVersion(tag);
     NSString *page = [dictionary[@"html_url"] isKindOfClass:NSString.class] ? dictionary[@"html_url"] : @"";
     NSArray *assets = [dictionary[@"assets"] isKindOfClass:NSArray.class] ? dictionary[@"assets"] : @[];
     NSDictionary *selected = nil;
@@ -83,7 +97,6 @@ HUDReleaseInfo *HUDReleaseInfoFromDictionary(NSDictionary *dictionary, NSError *
     NSString *assetURL = [selected[@"browser_download_url"] isKindOfClass:NSString.class] ? selected[@"browser_download_url"] : @"";
     NSString *digest = [selected[@"digest"] isKindOfClass:NSString.class] ? selected[@"digest"] : @"";
     if ([digest.lowercaseString hasPrefix:@"sha256:"]) digest = [digest substringFromIndex:7];
-    NSString *version = HUDNormalizedVersion(tag);
     NSCharacterSet *invalidDigestCharacters = [[NSCharacterSet characterSetWithCharactersInString:@"0123456789abcdefABCDEF"] invertedSet];
     NSCharacterSet *invalidVersionCharacters = [[NSCharacterSet characterSetWithCharactersInString:@"0123456789."] invertedSet];
     NSURL *pageURL = [NSURL URLWithString:page];
@@ -103,6 +116,21 @@ HUDReleaseInfo *HUDReleaseInfoFromDictionary(NSDictionary *dictionary, NSError *
     release.assetDigest = digest.lowercaseString;
     release.releasePageURL = pageURL;
     return release;
+}
+
+HUDReleaseInfo *HUDLatestMacReleaseInfoFromArray(NSArray *releases, NSError **error) {
+    if (![releases isKindOfClass:NSArray.class]) {
+        if (error) *error = [NSError errorWithDomain:@"HUDUpdater" code:1 userInfo:@{NSLocalizedDescriptionKey: @"更新列表格式错误"}];
+        return nil;
+    }
+    HUDReleaseInfo *best = nil;
+    for (id item in releases) {
+        if (![item isKindOfClass:NSDictionary.class] || [item[@"draft"] boolValue] || [item[@"prerelease"] boolValue]) continue;
+        HUDReleaseInfo *candidate = HUDReleaseInfoFromDictionary(item, nil);
+        if (candidate && (!best || HUDCompareVersions(candidate.version, best.version) == NSOrderedDescending)) best = candidate;
+    }
+    if (!best && error) *error = [NSError errorWithDomain:@"HUDUpdater" code:1 userInfo:@{NSLocalizedDescriptionKey: @"暂未找到macOS更新版本"}];
+    return best;
 }
 
 static BOOL HUDRunTask(NSString *path, NSArray<NSString *> *arguments, NSString **errorText) {
@@ -148,7 +176,7 @@ static BOOL HUDRunTask(NSString *path, NSArray<NSString *> *arguments, NSString 
 }
 
 - (void)checkForUpdates:(void (^)(HUDUpdateCheckResult result, HUDReleaseInfo *release, NSString *message))completion {
-    NSURL *url = [NSURL URLWithString:[NSString stringWithFormat:@"https://api.github.com/repos/%@/releases/latest", HUDRepository]];
+    NSURL *url = [NSURL URLWithString:[NSString stringWithFormat:@"https://api.github.com/repos/%@/releases?per_page=100", HUDRepository]];
     NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
     [request setValue:@"application/vnd.github+json" forHTTPHeaderField:@"Accept"];
     [request setValue:@"Codex-Monitor-HUD-Updater" forHTTPHeaderField:@"User-Agent"];
@@ -163,12 +191,12 @@ static BOOL HUDRunTask(NSString *path, NSArray<NSString *> *arguments, NSString 
         }
         NSError *jsonError = nil;
         id object = [NSJSONSerialization JSONObjectWithData:data options:0 error:&jsonError];
-        if (![object isKindOfClass:NSDictionary.class]) {
+        if (![object isKindOfClass:NSArray.class]) {
             [weakSelf finishOnMain:completion result:HUDUpdateCheckResultFailed release:nil message:jsonError.localizedDescription ?: @"更新信息格式错误"];
             return;
         }
         NSError *parseError = nil;
-        HUDReleaseInfo *release = HUDReleaseInfoFromDictionary(object, &parseError);
+        HUDReleaseInfo *release = HUDLatestMacReleaseInfoFromArray(object, &parseError);
         if (!release) {
             [weakSelf finishOnMain:completion result:HUDUpdateCheckResultFailed release:nil message:parseError.localizedDescription];
             return;
@@ -232,6 +260,23 @@ static BOOL HUDRunTask(NSString *path, NSArray<NSString *> *arguments, NSString 
         if (!HUDRunTask(@"/usr/bin/codesign", @[@"--verify", @"--deep", @"--strict", newBundle.path], &taskError)) {
             [NSFileManager.defaultManager removeItemAtURL:workURL error:nil];
             [weakSelf finishInstall:completion success:NO message:[NSString stringWithFormat:@"更新包签名校验失败：%@", taskError ?: @"未知错误"]];
+            return;
+        }
+        NSTask *identityTask = [NSTask new];
+        identityTask.executableURL = [NSURL fileURLWithPath:@"/usr/bin/codesign"];
+        identityTask.arguments = @[@"-dv", @"--verbose=4", newBundle.path];
+        NSPipe *identityPipe = [NSPipe pipe];
+        identityTask.standardOutput = identityPipe;
+        identityTask.standardError = identityPipe;
+        NSError *identityError = nil;
+        BOOL identityStarted = [identityTask launchAndReturnError:&identityError];
+        if (identityStarted) [identityTask waitUntilExit];
+        NSData *identityData = identityStarted ? [identityPipe.fileHandleForReading readDataToEndOfFile] : nil;
+        NSString *identityText = identityData ? [[NSString alloc] initWithData:identityData encoding:NSUTF8StringEncoding] : @"";
+        NSString *teamNeedle = [NSString stringWithFormat:@"TeamIdentifier=%@", HUDExpectedTeamIdentifier];
+        if (!identityStarted || identityTask.terminationStatus != 0 || ![identityText containsString:teamNeedle]) {
+            [NSFileManager.defaultManager removeItemAtURL:workURL error:nil];
+            [weakSelf finishInstall:completion success:NO message:@"更新包不是本项目的官方签名，已停止更新"];
             return;
         }
         if (!HUDRunTask(@"/usr/sbin/spctl", @[@"--assess", @"--type", @"execute", newBundle.path], &taskError)) {

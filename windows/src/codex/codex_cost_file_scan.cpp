@@ -711,6 +711,7 @@ void ReadCandidate(
     std::unordered_set<std::string>& processed,
     std::uint64_t& remainingBudget,
     std::size_t maximumLineBytes,
+    bool baselineExistingFiles,
     CodexCostFileScanResult& result,
     const std::function<bool()>& shouldCancel,
     bool& cancelled) {
@@ -733,6 +734,14 @@ void ReadCandidate(
     cursor.fileId = metadata.fileId;
     cursor.observedSizeBytes = metadata.sizeBytes;
     cursor.modifiedUnixNanoseconds = metadata.modifiedUnixNanoseconds;
+
+    if (!old && baselineExistingFiles) {
+        cursor.parsedOffsetBytes = metadata.sizeBytes;
+        cursor.complete = true;
+        cursor.establishBaseline = true;
+        result.files.push_back(std::move(cursor));
+        return;
+    }
 
     bool resetForChange = false;
     if (old) {
@@ -1024,10 +1033,15 @@ CodexCostFileScanResult ScanCodexCostRolloutFiles(
             return result;
         }
 
-        const std::int64_t cutoffSeconds =
+        std::int64_t cutoffSeconds =
             request.nowUnixSeconds >= kArchivedRetentionSeconds
                 ? request.nowUnixSeconds - kArchivedRetentionSeconds
                 : 0;
+        if (!request.baselineExistingFiles &&
+            request.trackingStartedAtUnixSeconds > cutoffSeconds &&
+            request.trackingStartedAtUnixSeconds <= request.nowUnixSeconds) {
+            cutoffSeconds = request.trackingStartedAtUnixSeconds;
+        }
         const std::int64_t cutoffNanoseconds =
             SaturatingUnixNanoseconds(cutoffSeconds, 0);
         std::vector<CandidateFile> candidates;
@@ -1049,7 +1063,8 @@ CodexCostFileScanResult ScanCodexCostRolloutFiles(
         std::unordered_set<std::string> processed;
         for (const auto& candidate : candidates) {
             ReadCandidate(candidate, previous, processed, remainingBudget,
-                          maximumLineBytes, result, request.shouldCancel,
+                          maximumLineBytes, request.baselineExistingFiles,
+                          result, request.shouldCancel,
                           cancelled);
             if (cancelled) return FinishCancelled();
         }

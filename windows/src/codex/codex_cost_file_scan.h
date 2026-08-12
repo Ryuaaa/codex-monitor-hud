@@ -37,6 +37,8 @@ struct CodexCostFileCursor {
     bool hasSkippedOversizedLine = false;
     bool complete = false;
     bool resetAfterTruncation = false;
+    // One-scan instruction for the parser state; never serialized as a cursor.
+    bool establishBaseline = false;
 };
 
 struct CodexCostFileLine {
@@ -50,6 +52,10 @@ struct CodexCostFileScanRequest {
     std::filesystem::path codexHome;
     std::int64_t nowUnixSeconds = 0;
     std::vector<CodexCostFileCursor> previousFiles;
+    // First-run baseline: discover existing files and remember their current
+    // ends without reading historical session content.
+    bool baselineExistingFiles = false;
+    std::int64_t trackingStartedAtUnixSeconds = 0;
 
     // Values above the product limits are clamped. Smaller values exist so
     // callers can deliberately reduce work and tests can exercise boundaries.

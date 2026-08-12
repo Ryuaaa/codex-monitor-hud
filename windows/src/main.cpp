@@ -62,7 +62,7 @@ constexpr wchar_t kWindowTitle[] = L"Codex Monitor HUD";
 constexpr wchar_t kSingletonName[] = L"Local\\CodexMonitorHUDWindowsFoundation";
 
 #ifndef CODEX_MONITOR_WINDOWS_VERSION
-#define CODEX_MONITOR_WINDOWS_VERSION "0.3.0"
+#define CODEX_MONITOR_WINDOWS_VERSION "0.3.1"
 #endif
 constexpr char kApplicationVersion[] = CODEX_MONITOR_WINDOWS_VERSION;
 
@@ -1333,45 +1333,34 @@ std::wstring FormatEstimatedUsd(double value) {
     return output.str();
 }
 
-void AppendHybridCostPeriod(
+void AppendLocalCostPeriod(
     std::wostringstream& output,
     std::wstring_view label,
-    const codex_monitor::codex::CodexHybridPeriodSummary& period) {
+    const codex_monitor::codex::CodexCostPeriodSummary& period) {
     output << label << L'：';
-    if (!period.tokensAvailable) {
-        output << L"--";
-        return;
-    }
     output << FormatTokenCount(period.tokens) << L" · ";
-    if (period.estimatedUsd) {
-        output << FormatEstimatedUsd(*period.estimatedUsd);
-    } else {
+    if (period.pricedTokens > 0) {
+        output << FormatEstimatedUsd(period.estimatedUsd);
+    } else if (period.tokens > 0) {
         output << L"费用样本不足";
+    } else {
+        output << FormatEstimatedUsd(0.0);
     }
 }
 
 std::wstring BuildTokenCostCardText(const AppState& state) {
-    codex_monitor::codex::UsageCalendarTotals official;
-    if (state.latestCodexData.usage.lastValue) {
-        const auto calculated = codex_monitor::codex::CalculateUsageCalendarTotals(
-            *state.latestCodexData.usage.lastValue, CurrentLocalDate());
-        if (calculated) official = *calculated;
-    }
-
     codex_monitor::codex::CodexCostSummary local;
     if (state.latestCostHistory && state.latestCostHistory->localSummary) {
         local = *state.latestCostHistory->localSummary;
     }
-    const codex_monitor::codex::CodexCostHybridSummary summary =
-        codex_monitor::codex::CalculateCodexCostHybridSummary(official, local);
 
     std::wostringstream output;
     output << CodexModuleHeading(
         codex_monitor::ModuleId::kCodexTokenCostEstimate);
-    if (!summary.available) {
+    if (!local.available) {
         output << L"\r\n";
         if (!state.latestCostHistory) {
-            output << L"正在读取本机 Codex Token 历史";
+            output << L"正在建立安装后的统计起点";
         } else {
             switch (state.latestCostHistory->status) {
                 case codex_monitor::codex::CodexCostRefreshStatus::kCodexHomeUnavailable:
@@ -1381,7 +1370,7 @@ std::wstring BuildTokenCostCardText(const AppState& state) {
                     output << L"本机 Token 历史读取失败";
                     break;
                 case codex_monitor::codex::CodexCostRefreshStatus::kNoTokenEvents:
-                    output << L"本机记录暂时没有 Token 数据";
+                    output << L"安装后暂时没有新增 Token 数据";
                     break;
                 case codex_monitor::codex::CodexCostRefreshStatus::kAvailable:
                     output << L"当前没有可显示的 Token 数据";
@@ -1393,26 +1382,26 @@ std::wstring BuildTokenCostCardText(const AppState& state) {
     }
 
     output << L"\r\n";
-    AppendHybridCostPeriod(output, L"近30日", summary.last30Days);
+    AppendLocalCostPeriod(output, L"安装后近30日", local.last30Days);
     output << L"\r\n";
-    AppendHybridCostPeriod(output, L"今日", summary.today);
+    AppendLocalCostPeriod(output, L"今日", local.today);
     output << L"  |  ";
-    AppendHybridCostPeriod(output, L"近7日", summary.last7Days);
+    AppendLocalCostPeriod(output, L"近7日", local.last7Days);
     output << L"\r\n";
-    AppendHybridCostPeriod(output, L"本月", summary.monthToDate);
+    AppendLocalCostPeriod(output, L"本月", local.monthToDate);
     output << L"  |  月末约：";
-    if (summary.monthForecastEstimatedUsd) {
-        output << FormatEstimatedUsd(*summary.monthForecastEstimatedUsd);
+    if (local.monthForecastEstimatedUsd > 0.0) {
+        output << FormatEstimatedUsd(local.monthForecastEstimatedUsd);
     } else {
         output << L"数据不足";
     }
 
     if (local.available) {
         output << L"\r\n本机计价样本覆盖：" << std::fixed << std::setprecision(0)
-               << summary.pricedTokenPercent << L'%';
-        if (!summary.topModel.empty()) {
+               << local.pricedTokenPercent << L'%';
+        if (!local.topModel.empty()) {
             output << L"  |  主模型："
-                   << std::wstring(summary.topModel.begin(), summary.topModel.end());
+                   << std::wstring(local.topModel.begin(), local.topModel.end());
         }
     }
     if (state.latestCostHistory) {
@@ -1429,28 +1418,8 @@ std::wstring BuildTokenCostCardText(const AppState& state) {
             output << L"\r\n历史缓存保存失败；下次启动将重新扫描";
         }
     }
-    if (summary.saturated) output << L"\r\n数值达到显示上限";
-    const auto UsesOfficial = [](const auto& period) {
-        return period.tokensAvailable && period.usedOfficialTokens;
-    };
-    const auto UsesLocal = [](const auto& period) {
-        return period.tokensAvailable && !period.usedOfficialTokens;
-    };
-    const bool anyOfficial =
-        UsesOfficial(summary.today) || UsesOfficial(summary.last7Days) ||
-        UsesOfficial(summary.last30Days) ||
-        UsesOfficial(summary.monthToDate);
-    const bool anyLocal =
-        UsesLocal(summary.today) || UsesLocal(summary.last7Days) ||
-        UsesLocal(summary.last30Days) || UsesLocal(summary.monthToDate);
-    if (anyOfficial && anyLocal) {
-        output << L"\r\nToken：官方优先，缺失周期用本机样本"
-                  L" · 费用：本机样本API等价估算";
-    } else if (anyOfficial) {
-        output << L"\r\nToken：官方汇总 · 费用：本机样本API等价估算";
-    } else {
-        output << L"\r\nToken与费用：本机样本API等价估算";
-    }
+    if (local.saturated) output << L"\r\n数值达到显示上限";
+    output << L"\r\n只统计安装后的本机Token；费用按API价格估算";
     return output.str();
 }
 
