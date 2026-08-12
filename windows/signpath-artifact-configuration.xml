@@ -13,6 +13,14 @@
       <authenticode-sign />
     </pe-file>
     <msi-file path="installer/CodexMonitorHUD-windows-x64-${version}.msi">
+      <pe-file
+          path="CodexMonitorHUD.exe"
+          product-name="Codex Monitor HUD"
+          product-version="${version}"
+          file-version="${version}"
+          original-filename="CodexMonitorHUD.exe">
+        <authenticode-sign />
+      </pe-file>
       <authenticode-sign />
     </msi-file>
   </zip-file>
