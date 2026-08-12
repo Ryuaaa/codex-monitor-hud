@@ -1415,6 +1415,8 @@ def main() -> None:
             "the portable executable is signed",
         'path="installer/CodexMonitorHUD-windows-x64-${version}.msi"':
             "the exact versioned installer is signed",
+        '<pe-file\n          path="CodexMonitorHUD.exe"':
+            "the executable embedded inside the MSI is deep-signed",
         "<authenticode-sign />":
             "the configuration uses Authenticode signing",
     }

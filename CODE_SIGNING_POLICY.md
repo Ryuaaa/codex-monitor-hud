@@ -43,7 +43,7 @@ or API keys.
 - The signing service verifies the build origin before signing.
 - The versioned `windows-release-v1` artifact configuration is checked into
   this repository at `windows/signpath-artifact-configuration.xml`; it signs
-  the standalone EXE and the MSI package built from that signed EXE.
+  the standalone EXE and deep-signs both the MSI package and its embedded EXE.
 - The release pipeline verifies version metadata, tests, signatures, installer
   identity, and SHA-256 checksums before publishing.
 - Security issues should be reported through the repository's private security

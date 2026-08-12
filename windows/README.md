@@ -181,7 +181,7 @@ Windows CI 还包含以下原生集成测试：
 
 这些测试证明编译、算法、进程边界和 Windows 虚拟机上的基础窗口行为，不替代真实用户电脑上的视觉手感、账号数据和任务管理器对照验收。
 
-仓库已经提供手动触发的 `Windows signed release` 工作流。它把GitHub托管运行器产生的EXE和MSI提交给SignPath.io，先取得真实发布者证书SHA-256，再把它固定进更新器并重新构建、重新签名。MSI由已经签名的EXE构建，SignPath项目必须使用仓库中的[`signpath-artifact-configuration.xml`](signpath-artifact-configuration.xml)，配置名称固定为`windows-release-v1`；它签署便携EXE和包含该EXE的MSI外壳。最后独立核验EXE与MSI的Authenticode签名、发布者指纹、真实旧版升级、安装后EXE签名、卸载和校验值后才创建GitHub Release。缺少SignPath凭据、审批或可信签名时会直接失败，不会发布未签名正式包。
+仓库已经提供手动触发的 `Windows signed release` 工作流。它把GitHub托管运行器产生的EXE和MSI提交给SignPath.io，先取得真实发布者证书SHA-256，再把它固定进更新器并重新构建、重新签名。SignPath项目必须使用仓库中的[`signpath-artifact-configuration.xml`](signpath-artifact-configuration.xml)，配置名称固定为`windows-release-v1`；它签署便携EXE，并对MSI执行深层签名，即同时签署MSI外壳和MSI内部安装的EXE。最后独立核验EXE与MSI的Authenticode签名、发布者指纹、真实旧版升级、安装后EXE签名、卸载和校验值后才创建GitHub Release。缺少SignPath凭据、审批或可信签名时会直接失败，不会发布未签名正式包。
 
 ## Windows 机器上的最小验收
 
