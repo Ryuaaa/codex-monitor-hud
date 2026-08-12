@@ -212,7 +212,11 @@ CodexCostHistoryState::~CodexCostHistoryState() = default;
 std::vector<CodexCostFileCursor> CodexCostHistoryState::Cursors() const {
     std::vector<CodexCostFileCursor> result;
     result.reserve(files_.size());
-    for (const FileState& file : files_) result.push_back(file.cursor);
+    for (const FileState& file : files_) {
+        CodexCostFileCursor cursor = file.cursor;
+        cursor.needsModelSeed = file.parser.currentModel == "unknown";
+        result.push_back(std::move(cursor));
+    }
     return result;
 }
 
@@ -361,8 +365,52 @@ CodexCostHistoryApplyResult CodexCostHistoryState::Apply(
         }
         if (cursor.establishBaseline) {
             existing->parser = CodexCostEventParserState{};
+            if (!cursor.baselineModel.empty()) {
+                existing->parser.currentModel =
+                    NormalizeCodexCostModel(cursor.baselineModel);
+                if (existing->parser.currentModel.empty()) {
+                    existing->parser.currentModel = "unknown";
+                }
+            }
             existing->parser.baselinePending = true;
             existing->rows.clear();
+        }
+        if (!cursor.baselineModel.empty() &&
+            existing->parser.currentModel == "unknown") {
+            const std::string seededModel =
+                NormalizeCodexCostModel(cursor.baselineModel);
+            if (!seededModel.empty() && seededModel != "unknown") {
+                existing->parser.currentModel = seededModel;
+                std::vector<CodexCostEvent> reattributed;
+                for (auto iterator = existing->rows.begin();
+                     iterator != existing->rows.end();) {
+                    if (iterator->first.second != "unknown") {
+                        ++iterator;
+                        continue;
+                    }
+                    CodexCostEvent event = std::move(iterator->second);
+                    iterator = existing->rows.erase(iterator);
+                    event.model = seededModel;
+                    event.fingerprint = existing->cursor.fileId + "|" +
+                        event.localDate + "|" + seededModel;
+                    const CodexCostEstimate estimate =
+                        EstimateCodexApiEquivalentCost(seededModel,
+                                                       event.usage);
+                    event.cachedEstimatedUsd =
+                        estimate.available ? estimate.estimatedUsd : 0.0;
+                    bool saturated = false;
+                    event.cachedPricedTokens = estimate.available
+                        ? CountPricedTokens(event.usage, saturated)
+                        : 0;
+                    output.saturated = output.saturated || saturated;
+                    reattributed.push_back(std::move(event));
+                }
+                for (CodexCostEvent& event : reattributed) {
+                    const std::pair<std::string, std::string> key{
+                        event.localDate, event.model};
+                    existing->rows.emplace(key, std::move(event));
+                }
+            }
         }
         if (cursor.resetAfterTruncation) {
             existing->parser = CodexCostEventParserState{};
@@ -370,6 +418,8 @@ CodexCostHistoryApplyResult CodexCostHistoryState::Apply(
         }
         existing->cursor = cursor;
         existing->cursor.establishBaseline = false;
+        existing->cursor.needsModelSeed = false;
+        existing->cursor.baselineModel.clear();
     }
     // A partial discovery cannot distinguish deletion from a temporary
     // permission or enumeration failure. Preserve the last good rows until a

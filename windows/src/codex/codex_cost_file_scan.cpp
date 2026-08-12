@@ -38,6 +38,8 @@ namespace codex_monitor::codex {
 namespace {
 
 constexpr std::size_t kReadChunkBytes = 64 * 1024;
+constexpr std::uint64_t kBaselineModelPrefixBytes = 256ULL * 1024ULL;
+constexpr std::uint64_t kBaselineModelTailBytes = 1024ULL * 1024ULL;
 constexpr std::int64_t kNanosecondsPerSecond = 1'000'000'000LL;
 constexpr std::int64_t kArchivedRetentionSeconds =
     static_cast<std::int64_t>(kCodexCostHistoryDays) * 24LL * 60LL * 60LL;
@@ -705,6 +707,92 @@ const CodexCostFileCursor* FindPreviousCursor(
     return found == previous.end() ? nullptr : found->second;
 }
 
+std::string JsonStringValue(std::string_view line,
+                            std::string_view key) {
+    const std::string quotedKey = "\"" + std::string(key) + "\"";
+    std::size_t position = line.find(quotedKey);
+    if (position == std::string_view::npos) return {};
+    position += quotedKey.size();
+    while (position < line.size() &&
+           std::isspace(static_cast<unsigned char>(line[position]))) {
+        ++position;
+    }
+    if (position >= line.size() || line[position++] != ':') return {};
+    while (position < line.size() &&
+           std::isspace(static_cast<unsigned char>(line[position]))) {
+        ++position;
+    }
+    if (position >= line.size() || line[position++] != '"') return {};
+    std::string value;
+    value.reserve(64);
+    while (position < line.size() && value.size() <= 255) {
+        const char byte = line[position++];
+        if (byte == '"') return value;
+        if (byte == '\\' || static_cast<unsigned char>(byte) < 0x20) return {};
+        value.push_back(byte);
+    }
+    return {};
+}
+
+std::string ReadRegion(NativeFile& file,
+                       std::uint64_t offset,
+                       std::uint64_t length) {
+    std::error_code error;
+    if (!file.Seek(offset, error)) return {};
+    std::string content(static_cast<std::size_t>(length), '\0');
+    std::size_t totalRead = 0;
+    while (totalRead < content.size()) {
+        std::size_t bytesRead = 0;
+        if (!file.Read(content.data() + totalRead,
+                       content.size() - totalRead, bytesRead, error) ||
+            bytesRead == 0) {
+            break;
+        }
+        totalRead += bytesRead;
+    }
+    content.resize(totalRead);
+    return content;
+}
+
+std::string LatestTurnContextModel(std::string_view content) {
+    std::string latest;
+    std::size_t search = 0;
+    while (search < content.size()) {
+        const std::size_t context =
+            content.find("\"type\":\"turn_context\"", search);
+        if (context == std::string_view::npos) break;
+        const std::size_t end = std::min(
+            content.size(), context + static_cast<std::size_t>(256 * 1024));
+        const std::string_view window = content.substr(context, end - context);
+        const std::size_t nextLine = window.find('\n');
+        const std::string_view line =
+            nextLine == std::string_view::npos
+                ? window
+                : window.substr(0, nextLine);
+        const std::string model = JsonStringValue(line, "model");
+            if (!model.empty()) latest = model;
+        search = context + 1;
+    }
+    return latest;
+}
+
+std::string ReadModelBeforeOffset(NativeFile& file,
+                                  std::uint64_t endOffsetBytes) {
+    if (endOffsetBytes == 0) return {};
+    const std::uint64_t prefixBytes =
+        std::min(endOffsetBytes, kBaselineModelPrefixBytes);
+    std::string latest =
+        LatestTurnContextModel(ReadRegion(file, 0, prefixBytes));
+    if (endOffsetBytes > prefixBytes) {
+        const std::uint64_t tailBytes =
+            std::min(endOffsetBytes, kBaselineModelTailBytes);
+        const std::string tailModel = LatestTurnContextModel(
+            ReadRegion(file, endOffsetBytes - tailBytes, tailBytes));
+        if (!tailModel.empty()) latest = tailModel;
+    }
+    return latest;
+}
+
 void ReadCandidate(
     const CandidateFile& candidate,
     const std::unordered_map<std::string, const CodexCostFileCursor*>& previous,
@@ -757,6 +845,10 @@ void ReadCandidate(
         cursor.resetAfterTruncation = resetForChange;
         if (!resetForChange) {
             cursor.parsedOffsetBytes = old->parsedOffsetBytes;
+            if (old->needsModelSeed && old->parsedOffsetBytes < metadata.sizeBytes) {
+                cursor.baselineModel =
+                    ReadModelBeforeOffset(file, old->parsedOffsetBytes);
+            }
             cursor.discardingOversizedLine =
                 old->discardingOversizedLine;
             cursor.hasSkippedOversizedLine = old->hasSkippedOversizedLine;

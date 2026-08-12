@@ -133,6 +133,31 @@ void TestInstallTimestampRejectsOlderDeliveredLines() {
            "a file discovered later must still exclude events older than installation");
 }
 
+void TestInstallBaselineSeedsModelWithoutOldEvents() {
+    CodexCostHistoryState state;
+    CodexCostFileScanResult baseline;
+    baseline.status = CodexCostFileScanStatus::kOk;
+    CodexCostFileCursor cursor = Cursor("active-at-install", 200);
+    cursor.establishBaseline = true;
+    cursor.baselineModel = "openai/gpt-5.6-terra";
+    baseline.files = {cursor};
+    const auto installed = state.Apply(baseline, FixedDate);
+    Expect(installed.events.empty(),
+           "the install baseline must not create historical Token events");
+
+    CodexCostFileScanResult appended;
+    appended.status = CodexCostFileScanStatus::kOk;
+    appended.files = {Cursor("active-at-install", 300)};
+    appended.lines = {Line(
+        "active-at-install", 200,
+        R"({"timestamp":"2026-02-03T02:01:00Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":10,"output_tokens":2}}}})")};
+    const auto applied = state.Apply(appended, FixedDate, 1770000000000LL);
+    Expect(applied.events.size() == 1 &&
+               applied.events.front().model == "gpt-5.6-terra" &&
+               applied.events.front().usage.inputTokens == 10,
+           "post-install Token events must inherit the bounded baseline model");
+}
+
 void TestPartialDiscoveryDoesNotEvictLastGoodFile() {
     CodexCostHistoryState state;
     CodexCostFileScanResult first;
@@ -185,6 +210,7 @@ int main() {
     TestTruncationAndRemovedFiles();
     TestFailureRetainsLastGoodAggregate();
     TestInstallTimestampRejectsOlderDeliveredLines();
+    TestInstallBaselineSeedsModelWithoutOldEvents();
     TestPartialDiscoveryDoesNotEvictLastGoodFile();
     TestContentGapDoesNotPreventDeletedFileEviction();
     std::cout << "codex_cost_history_state_test: pass\n";

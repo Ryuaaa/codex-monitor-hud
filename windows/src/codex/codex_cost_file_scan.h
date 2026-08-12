@@ -39,6 +39,10 @@ struct CodexCostFileCursor {
     bool resetAfterTruncation = false;
     // One-scan instruction for the parser state; never serialized as a cursor.
     bool establishBaseline = false;
+    bool needsModelSeed = false;
+    // Optional model seed found in a bounded first-run tail scan. The scanner
+    // never returns historical Token lines or persists a source path.
+    std::string baselineModel;
 };
 
 struct CodexCostFileLine {

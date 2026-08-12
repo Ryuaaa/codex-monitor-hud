@@ -2171,13 +2171,13 @@ static int RunLogicDiagnostic(void) {
     NSURL *scanCache = [scanRoot URLByAppendingPathComponent:@"cache/history.json"];
     NSURL *scanStart = [scanRoot URLByAppendingPathComponent:@"cache/tracking-start.json"];
     [NSFileManager.defaultManager createDirectoryAtURL:scanDay withIntermediateDirectories:YES attributes:nil error:nil];
-    NSString *largeContext = [@"x" stringByPaddingToLength:600000 withString:@"x" startingAtIndex:0];
+    NSString *largeContext = [@"x" stringByPaddingToLength:1500000 withString:@"x" startingAtIndex:0];
     NSString *largeModelLine = [NSString stringWithFormat:@"{\"timestamp\":\"2026-02-02T02:00:00Z\",\"type\":\"turn_context\",\"payload\":{\"model\":\"gpt-5.6-terra\",\"context\":\"%@\"}}", largeContext];
     NSString *initialScanText = [@[largeModelLine, tokenLine, @""] componentsJoinedByString:@"\n"];
     [initialScanText writeToURL:scanFile atomically:YES encoding:NSUTF8StringEncoding error:nil];
     NSDictionary *baselineScan = CodexScanCostHistoryAtHome(scanRoot, scanCache, scanStart, costNow);
     NSDictionary *firstScan = CodexScanCostHistoryAtHome(scanRoot, scanCache, scanStart, costNow);
-    NSString *secondTokenLine = @"{\"timestamp\":\"2026-02-02T02:41:00Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"model\":\"gpt-5.6-terra\",\"last_token_usage\":{\"input_tokens\":200000,\"cached_input_tokens\":20000,\"output_tokens\":10000}}}}";
+    NSString *secondTokenLine = @"{\"timestamp\":\"2026-02-02T02:41:00Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"last_token_usage\":{\"input_tokens\":200000,\"cached_input_tokens\":20000,\"output_tokens\":10000}}}}";
     NSFileHandle *scanHandle = [NSFileHandle fileHandleForWritingToURL:scanFile error:nil];
     [scanHandle seekToEndOfFile];
     [scanHandle writeData:[[secondTokenLine stringByAppendingString:@"\n"] dataUsingEncoding:NSUTF8StringEncoding]];
