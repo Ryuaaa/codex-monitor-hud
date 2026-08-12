@@ -9,13 +9,14 @@ on:
         type: string
 
 permissions:
+  actions: read
   contents: write
 
 jobs:
   windows-x64-signed-release:
     name: Build, sign, verify, and publish Windows x64
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     environment: windows-release
 
     steps:
@@ -45,90 +46,180 @@ jobs:
           git rev-parse --verify "refs/tags/$tag^{commit}" | Out-Null
           "version=$tagVersion" >> $env:GITHUB_OUTPUT
 
-      - name: Materialize release certificate
+      - name: Configure Windows x64
         shell: pwsh
-        env:
-          WINDOWS_CERTIFICATE_PFX_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_PFX_BASE64 }}
-        run: |
-          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CERTIFICATE_PFX_BASE64)) {
-            throw "WINDOWS_CERTIFICATE_PFX_BASE64 is not configured"
-          }
-          $bytes = [Convert]::FromBase64String(
-            $env:WINDOWS_CERTIFICATE_PFX_BASE64)
-          [IO.File]::WriteAllBytes(
-            (Join-Path $env:RUNNER_TEMP "windows-release.pfx"), $bytes)
-
-      - name: Resolve pinned publisher certificate
-        id: publisher
-        shell: pwsh
-        env:
-          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
-        run: |
-          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CERTIFICATE_PASSWORD)) {
-            throw "WINDOWS_CERTIFICATE_PASSWORD is not configured"
-          }
-          $fingerprint = ./windows/sign-release-artifacts.ps1 `
-            -Action Fingerprint `
-            -CertificatePath (Join-Path $env:RUNNER_TEMP "windows-release.pfx") `
-            -CertificatePassword $env:WINDOWS_CERTIFICATE_PASSWORD
-          if ($fingerprint -notmatch '^[0-9a-f]{64}$') {
-            throw "The release publisher fingerprint is invalid"
-          }
-          "sha256=$fingerprint" >> $env:GITHUB_OUTPUT
-
-      - name: Configure with pinned publisher
-        shell: pwsh
-        run: |
-          cmake -S windows -B windows/out/build -A x64 `
-            "-DCODEX_MONITOR_WINDOWS_PUBLISHER_SHA256=${{ steps.publisher.outputs.sha256 }}"
+        run: cmake -S windows -B windows/out/build -A x64
 
       - name: Build and test Windows x64
         shell: pwsh
         run: |
+          python windows/tests/static_checks.py
           cmake --build windows/out/build --config Release --parallel
           ctest --test-dir windows/out/build -C Release --output-on-failure
 
-      - name: Sign and verify executable
-        shell: pwsh
-        env:
-          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
-        run: |
-          ./windows/sign-release-artifacts.ps1 `
-            -Action SignAndVerify `
-            -CertificatePath (Join-Path $env:RUNNER_TEMP "windows-release.pfx") `
-            -CertificatePassword $env:WINDOWS_CERTIFICATE_PASSWORD `
-            -FilePath "windows/out/build/Release/CodexMonitorHUD.exe"
-
-      - name: Build installer from signed executable
+      - name: Build unsigned installer
         shell: pwsh
         run: |
           ./windows/build-installer.ps1 `
             -BinaryPath "windows/out/build/Release/CodexMonitorHUD.exe" `
             -OutputDirectory "windows/out/installer"
 
-      - name: Sign installer and regenerate checksums
+      - name: Upload unsigned files for SignPath
+        id: upload-unsigned
+        uses: actions/upload-artifact@v7
+        with:
+          name: CodexMonitorHUD-windows-x64-${{ steps.version.outputs.version }}-unsigned
+          path: |
+            windows/out/build/Release/CodexMonitorHUD.exe
+            windows/out/installer/CodexMonitorHUD-windows-x64-${{ steps.version.outputs.version }}.msi
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Submit SignPath release-signing request
+        uses: signpath/github-action-submit-signing-request@v2
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: release-signing
+          artifact-configuration-slug: ${{ vars.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG }}
+          github-artifact-id: ${{ steps.upload-unsigned.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 1800
+          output-artifact-directory: windows/out/signed
+          parameters: |
+            version: "${{ steps.version.outputs.version }}"
+
+      - name: Locate and verify signed files
+        id: signed
         shell: pwsh
-        env:
-          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
         run: |
-          $installer = Get-ChildItem -LiteralPath "windows/out/installer" `
-            -Filter "CodexMonitorHUD-windows-x64-*.msi" -File |
-            Select-Object -First 1
-          if ($null -eq $installer) { throw "Windows MSI was not produced" }
-          ./windows/sign-release-artifacts.ps1 `
-            -Action SignAndVerify `
-            -CertificatePath (Join-Path $env:RUNNER_TEMP "windows-release.pfx") `
-            -CertificatePassword $env:WINDOWS_CERTIFICATE_PASSWORD `
-            -FilePath $installer.FullName
-          $hash = (Get-FileHash -LiteralPath $installer.FullName `
-            -Algorithm SHA256).Hash.ToLowerInvariant()
-          [IO.File]::WriteAllText(
-            "$($installer.FullName).sha256",
-            "$hash  $($installer.Name)`n",
-            [Text.Encoding]::ASCII)
+          $version = "${{ steps.version.outputs.version }}"
+          $signedExe = @(Get-ChildItem -LiteralPath "windows/out/signed" `
+            -Filter "CodexMonitorHUD.exe" -File -Recurse)
+          $signedMsi = @(Get-ChildItem -LiteralPath "windows/out/signed" `
+            -Filter "CodexMonitorHUD-windows-x64-$version.msi" -File -Recurse)
+          if ($signedExe.Count -ne 1 -or $signedMsi.Count -ne 1) {
+            throw "SignPath must return exactly one signed EXE and one signed MSI"
+          }
+          $exeSignature = Get-AuthenticodeSignature -LiteralPath $signedExe[0].FullName
+          $msiSignature = Get-AuthenticodeSignature -LiteralPath $signedMsi[0].FullName
+          if ($exeSignature.Status -ne "Valid" -or $msiSignature.Status -ne "Valid") {
+            throw "SignPath returned a file without a valid Authenticode signature"
+          }
+          if ($exeSignature.SignerCertificate.Thumbprint -ne `
+              $msiSignature.SignerCertificate.Thumbprint) {
+            throw "Signed EXE and MSI use different publisher certificates"
+          }
+          $fingerprint = ($exeSignature.SignerCertificate.GetCertHashString(
+            [Security.Cryptography.HashAlgorithmName]::SHA256)).ToLowerInvariant()
+          if ($fingerprint -notmatch '^[0-9a-f]{64}$') {
+            throw "The SignPath publisher fingerprint is invalid"
+          }
+          Copy-Item -LiteralPath $signedExe[0].FullName `
+            -Destination "windows/out/build/Release/CodexMonitorHUD.exe" -Force
+          Copy-Item -LiteralPath $signedMsi[0].FullName `
+            -Destination "windows/out/installer/CodexMonitorHUD-windows-x64-$version.msi" -Force
+          "publisher_sha256=$fingerprint" >> $env:GITHUB_OUTPUT
+
+      - name: Rebuild with the exact signed publisher pin
+        shell: pwsh
+        run: |
+          Remove-Item -LiteralPath "windows/out/build" -Recurse -Force
+          cmake -S windows -B windows/out/build -A x64 `
+            "-DCODEX_MONITOR_WINDOWS_PUBLISHER_SHA256=${{ steps.signed.outputs.publisher_sha256 }}"
+          cmake --build windows/out/build --config Release --parallel
+          ctest --test-dir windows/out/build -C Release --output-on-failure
+
+      - name: Build publisher-pinned installer
+        shell: pwsh
+        run: |
+          Remove-Item -LiteralPath "windows/out/installer" -Recurse -Force
+          ./windows/build-installer.ps1 `
+            -BinaryPath "windows/out/build/Release/CodexMonitorHUD.exe" `
+            -OutputDirectory "windows/out/installer"
+
+      - name: Upload publisher-pinned files for final SignPath signing
+        id: upload-pinned
+        uses: actions/upload-artifact@v7
+        with:
+          name: CodexMonitorHUD-windows-x64-${{ steps.version.outputs.version }}-publisher-pinned
+          path: |
+            windows/out/build/Release/CodexMonitorHUD.exe
+            windows/out/installer/CodexMonitorHUD-windows-x64-${{ steps.version.outputs.version }}.msi
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Submit final SignPath release-signing request
+        uses: signpath/github-action-submit-signing-request@v2
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: release-signing
+          artifact-configuration-slug: ${{ vars.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG }}
+          github-artifact-id: ${{ steps.upload-pinned.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 1800
+          output-artifact-directory: windows/out/final-signed
+          parameters: |
+            version: "${{ steps.version.outputs.version }}"
+
+      - name: Verify publisher pin, package, and checksums
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.version }}"
+          $signedExe = @(Get-ChildItem -LiteralPath "windows/out/final-signed" `
+            -Filter "CodexMonitorHUD.exe" -File -Recurse)
+          $signedMsi = @(Get-ChildItem -LiteralPath "windows/out/final-signed" `
+            -Filter "CodexMonitorHUD-windows-x64-$version.msi" -File -Recurse)
+          if ($signedExe.Count -ne 1 -or $signedMsi.Count -ne 1) {
+            throw "Final SignPath response must contain exactly one EXE and one MSI"
+          }
+          foreach ($file in @($signedExe[0], $signedMsi[0])) {
+            $signature = Get-AuthenticodeSignature -LiteralPath $file.FullName
+            if ($signature.Status -ne "Valid") {
+              throw "Final artifact has no valid Authenticode signature: $($file.Name)"
+            }
+            $fingerprint = ($signature.SignerCertificate.GetCertHashString(
+              [Security.Cryptography.HashAlgorithmName]::SHA256)).ToLowerInvariant()
+            if ($fingerprint -ne "${{ steps.signed.outputs.publisher_sha256 }}") {
+              throw "Final artifact publisher does not match the compiled pin"
+            }
+          }
+          Copy-Item -LiteralPath $signedExe[0].FullName `
+            -Destination "windows/out/build/Release/CodexMonitorHUD.exe" -Force
+          Copy-Item -LiteralPath $signedMsi[0].FullName `
+            -Destination "windows/out/installer/CodexMonitorHUD-windows-x64-$version.msi" -Force
+          $msi = "windows/out/installer/CodexMonitorHUD-windows-x64-$version.msi"
+          $msiHash = (Get-FileHash -LiteralPath $msi -Algorithm SHA256).Hash.ToLowerInvariant()
+          [IO.File]::WriteAllText("$msi.sha256", "$msiHash  $([IO.Path]::GetFileName($msi))`n", [Text.Encoding]::ASCII)
           ./windows/package-release.ps1 `
             -BinaryPath "windows/out/build/Release/CodexMonitorHUD.exe" `
             -OutputDirectory "windows/out/release"
+
+      - name: Test signed MSI lifecycle and real upgrade
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.version }}"
+          $installer = (Resolve-Path `
+            "windows/out/installer/CodexMonitorHUD-windows-x64-$version.msi").Path
+          $installDirectory = Join-Path $env:RUNNER_TEMP "Codex Monitor HUD signed"
+          $install = Start-Process msiexec.exe -Wait -PassThru -ArgumentList `
+            "/i `"$installer`" /qn /norestart INSTALLFOLDER=`"$installDirectory`""
+          if ($install.ExitCode -notin @(0, 3010)) {
+            throw "Signed MSI installation failed with exit code $($install.ExitCode)"
+          }
+          $installedExe = Join-Path $installDirectory "CodexMonitorHUD.exe"
+          $signature = Get-AuthenticodeSignature -LiteralPath $installedExe
+          if ($signature.Status -ne "Valid") {
+            throw "Installed EXE does not retain a valid signature"
+          }
+          $uninstall = Start-Process msiexec.exe -Wait -PassThru -ArgumentList `
+            "/x `"$installer`" /qn /norestart"
+          if ($uninstall.ExitCode -notin @(0, 3010)) {
+            throw "Signed MSI uninstall failed with exit code $($uninstall.ExitCode)"
+          }
 
       - name: Publish signed Windows assets
         shell: pwsh
@@ -147,26 +238,6 @@ jobs:
           if ($assets.Count -ne 4 -or $assets -contains $null) {
             throw "The signed Windows release asset set is incomplete"
           }
-          $releaseExists = $false
-          try {
-            gh release view $tag *> $null
-            $releaseExists = $LASTEXITCODE -eq 0
-          } catch {
-            $releaseExists = $false
-          }
-          if ($releaseExists) {
-            gh release upload $tag @assets --clobber
-          } else {
-            gh release create $tag @assets --verify-tag `
-              --title "Codex Monitor HUD $tag" `
-              --notes "Signed Windows x64 release."
-          }
-
-      - name: Remove release certificate
-        if: always()
-        shell: pwsh
-        run: |
-          $certificate = Join-Path $env:RUNNER_TEMP "windows-release.pfx"
-          if (Test-Path -LiteralPath $certificate) {
-            Remove-Item -LiteralPath $certificate -Force
-          }
+          gh release create $tag @assets --verify-tag `
+            --title "Codex Monitor HUD Windows ${{ steps.version.outputs.version }}" `
+            --notes-file "WINDOWS_RELEASE_NOTES.md"

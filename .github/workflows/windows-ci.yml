@@ -3,16 +3,15 @@ name: Windows CI
 on:
   push:
     branches:
+      - main
       - codex/windows-development
     paths:
       - "windows/**"
       - ".github/workflows/windows-ci.yml"
   pull_request:
     branches:
+      - main
       - codex/windows-development
-    paths:
-      - "windows/**"
-      - ".github/workflows/windows-ci.yml"
   workflow_dispatch:
 
 permissions:
