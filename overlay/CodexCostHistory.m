@@ -188,8 +188,10 @@ static void CodexParseCostLine(NSString *line,
     if (![payload[@"type"] isEqualToString:@"token_count"]) return;
     NSDictionary *info = [payload[@"info"] isKindOfClass:NSDictionary.class] ? payload[@"info"] : nil;
     if (!info) return;
-    NSString *model = [info[@"model"] isKindOfClass:NSString.class] ? info[@"model"] : state[@"model"];
+    BOOL hasExplicitModel = [info[@"model"] isKindOfClass:NSString.class];
+    NSString *model = hasExplicitModel ? info[@"model"] : state[@"model"];
     model = CodexNormalizedCostModel(model ?: @"");
+    if (hasExplicitModel && model.length > 0) state[@"model"] = model;
     NSDictionary<NSString *, NSNumber *> *last = CodexTokenTuple(info[@"last_token_usage"]);
     NSDictionary<NSString *, NSNumber *> *total = CodexTokenTuple(info[@"total_token_usage"]);
     NSDictionary *watermark = [state[@"rawTotalsWatermark"] isKindOfClass:NSDictionary.class] ? state[@"rawTotalsWatermark"] : nil;
@@ -408,6 +410,32 @@ static NSDate *CodexLoadTrackingStart(NSURL *url, NSDate *now) {
     return [NSDate dateWithTimeIntervalSince1970:value];
 }
 
+static NSString *CodexCostModelBeforeOffset(NSURL *file,
+                                             unsigned long long offset) {
+    if (offset == 0) return @"unknown";
+    NSFileHandle *handle = [NSFileHandle fileHandleForReadingFromURL:file error:nil];
+    if (!handle) return @"unknown";
+    unsigned long long prefixBytes = MIN(offset, 256ULL * 1024ULL);
+    [handle seekToFileOffset:0];
+    NSMutableData *sample = [[handle readDataOfLength:(NSUInteger)prefixBytes] mutableCopy];
+    unsigned long long tailBytes = MIN(offset, 1024ULL * 1024ULL);
+    if (offset > prefixBytes) {
+        [handle seekToFileOffset:offset - tailBytes];
+        [sample appendData:[handle readDataOfLength:(NSUInteger)tailBytes]];
+    }
+    [handle closeFile];
+    NSString *text = [[NSString alloc] initWithData:sample encoding:NSUTF8StringEncoding];
+    if (text.length == 0) return @"unknown";
+    NSRegularExpression *pattern = [NSRegularExpression regularExpressionWithPattern:@"\\\"type\\\"\\s*:\\s*\\\"turn_context\\\"[\\s\\S]{0,262144}?\\\"model\\\"\\s*:\\s*\\\"([^\\\"\\\\]+)\\\"" options:0 error:nil];
+    __block NSString *latest = @"unknown";
+    [pattern enumerateMatchesInString:text options:0 range:NSMakeRange(0, text.length) usingBlock:^(NSTextCheckingResult *match, __unused NSMatchingFlags flags, __unused BOOL *stop) {
+        if (match.numberOfRanges <= 1) return;
+        NSString *model = CodexNormalizedCostModel([text substringWithRange:[match rangeAtIndex:1]]);
+        if (model.length > 0) latest = model;
+    }];
+    return latest;
+}
+
 static NSDictionary *CodexCreateCostBaseline(NSArray<NSURL *> *files,
                                               NSURL *cacheURL,
                                               NSURL *trackingStartURL,
@@ -579,6 +607,21 @@ NSDictionary<NSString *, id> *CodexScanCostHistoryAtHome(NSURL *codexHome, NSURL
         unsigned long long startOffset = append ? [old[@"parsedBytes"] unsignedLongLongValue] : 0;
         NSMutableArray *events = append && [old[@"events"] isKindOfClass:NSArray.class] ? [old[@"events"] mutableCopy] : [NSMutableArray array];
         NSMutableDictionary *state = append && [old[@"state"] isKindOfClass:NSDictionary.class] ? [old[@"state"] mutableCopy] : [@{ @"model": @"unknown", @"occurrences": @{} } mutableCopy];
+        if (append && [state[@"model"] isEqualToString:@"unknown"]) {
+            NSString *seedModel = CodexCostModelBeforeOffset(file, startOffset);
+            state[@"model"] = seedModel;
+            if (![seedModel isEqualToString:@"unknown"]) {
+                for (NSUInteger index = 0; index < events.count; index++) {
+                    NSDictionary *event = events[index];
+                    if (![event[@"m"] isEqualToString:@"unknown"]) continue;
+                    NSMutableDictionary *reattributed = [event mutableCopy];
+                    reattributed[@"m"] = seedModel;
+                    [reattributed removeObjectForKey:@"x"];
+                    [reattributed removeObjectForKey:@"p"];
+                    events[index] = reattributed;
+                }
+            }
+        }
         if ([state[@"occurrences"] isKindOfClass:NSDictionary.class]) state[@"occurrences"] = [state[@"occurrences"] mutableCopy];
         BOOL complete = NO;
         BOOL reachedEnd = NO;
