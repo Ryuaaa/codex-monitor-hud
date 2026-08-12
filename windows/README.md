@@ -197,6 +197,10 @@ Windows CI 还包含以下原生集成测试：
 10. 模拟接口失败，确认旧值保留、失败提示出现、没有残留 `codex.exe app-server`；恢复后能重新刷新。
 11. 把窗口移到第二块显示器后退出，拔掉该显示器再启动，窗口应完整回到可见工作区。
 
+## Code signing policy
+
+Windows正式发行将使用SignPath.io提供的免费代码签名，证书由SignPath Foundation提供。签名文件必须来自本仓库公开标签和GitHub托管运行器；团队角色、人工批准、隐私和发布验证要求见[`../CODE_SIGNING_POLICY.md`](../CODE_SIGNING_POLICY.md)。
+
 ## 当前明确未完成
 
 - 尚未在真实 Windows x64 上完成视觉/交互验收，也未与真实任务管理器和真实 Codex 账号数据做逐项对照。

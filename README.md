@@ -119,6 +119,10 @@ Windows当前是公开预览版，EXE和MSI暂未配置可信商业代码签名�
 
 第二条必须返回 `quota_available=true`、`account_available=true` 和 `usage_available=true`，并给出官方7天、30天和月度Token汇总。第三条验证本机模型样本、费用和计价覆盖率；首次运行可能显示 `local_cost_scan_incomplete=true`，界面会标为“模型样本更新中”，但Token总量仍优先采用官方汇总。第四条包含Token解析、累计高水位、价格、长上下文、重复记录去重、增量缓存、额度预测和服务状态解析固定测试；第五条检查集中设置、位置和大小锁定、隐藏停采及等比缩放；倒数第二条实际访问OpenAI官方状态页，其余命令分别检查更新、安全交接和单实例保护。
 
+## Code signing policy
+
+Windows正式发行将使用SignPath.io提供的免费代码签名，证书由SignPath Foundation提供。签名只允许用于本仓库公开源码经GitHub Actions从精确标签自动构建的发行文件；团队角色、审批、隐私和构建来源约束见[`CODE_SIGNING_POLICY.md`](CODE_SIGNING_POLICY.md)。
+
 ## 开源
 
 项目采用 MIT 许可证。隐私边界见 `PRIVACY.md`。Codex是OpenAI的产品名称，本项目是社区工具，不代表OpenAI官方产品。
