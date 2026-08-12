@@ -55,7 +55,8 @@ struct SelectedWindowsRelease {
     GitHubReleaseAsset checksum;
 };
 
-// Selects the highest stable release newer than currentVersion. A candidate is
+// Selects the highest stable `windows-v<version>` release newer than
+// currentVersion. A candidate is
 // eligible only when it contains exactly one installer named
 // CodexMonitorHUD-windows-x64-<version>.msi and exactly one adjacent checksum
 // asset named <installer>.sha256. Relevant x64 assets carrying another version,

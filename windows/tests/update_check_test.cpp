@@ -32,14 +32,14 @@ std::wstring Release(std::wstring tag, std::wstring version) {
 
 void TestUpdateAndUpToDate() {
     const auto available = EvaluateWindowsUpdateReleaseJson(
-        "1.0.0", Release(L"v1.2.0", L"1.2.0"));
+        "1.0.0", Release(L"windows-v1.2.0", L"1.2.0"));
     Expect(available.status == WindowsUpdateCheckStatus::kUpdateAvailable &&
                available.release &&
                available.release->version.canonical == "1.2.0",
            "a newer signed-asset candidate must be surfaced");
 
     const auto current = EvaluateWindowsUpdateReleaseJson(
-        "1.2.0", Release(L"v1.2.0", L"1.2.0"));
+        "1.2.0", Release(L"windows-v1.2.0", L"1.2.0"));
     Expect(current.status == WindowsUpdateCheckStatus::kUpToDate &&
                !current.release,
            "an equal Windows release is up to date");

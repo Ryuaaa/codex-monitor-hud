@@ -62,6 +62,7 @@ struct CodexCostSummary {
 // 30-day window ending on the reference date are ignored.
 [[nodiscard]] std::optional<CodexCostSummary> CalculateCodexCostSummary(
     const std::vector<CodexCostEvent>& events,
-    std::string_view referenceLocalDate);
+    std::string_view referenceLocalDate,
+    std::string_view trackingStartLocalDate = {});
 
 }  // namespace codex_monitor::codex

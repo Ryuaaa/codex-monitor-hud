@@ -5,7 +5,9 @@
 static NSInteger const CodexCostHistoryDays = 30;
 static unsigned long long const CodexCostScanBudgetBytes = 64ULL * 1024ULL * 1024ULL;
 static NSUInteger const CodexCostMaxRetainedLineBytes = 512 * 1024;
-static NSInteger const CodexCostCacheVersion = 3;
+static unsigned long long const CodexCostCacheMaximumBytes = 8ULL * 1024ULL * 1024ULL;
+static NSInteger const CodexCostCacheVersion = 4;
+static NSInteger const CodexCostTrackingMarkerVersion = 1;
 static NSString *const CodexCostPricingVersion = @"OpenAI 2026-08-08";
 
 static NSDate *CodexCostParseTimestamp(id value) {
@@ -191,8 +193,15 @@ static void CodexParseCostLine(NSString *line,
     NSDictionary<NSString *, NSNumber *> *last = CodexTokenTuple(info[@"last_token_usage"]);
     NSDictionary<NSString *, NSNumber *> *total = CodexTokenTuple(info[@"total_token_usage"]);
     NSDictionary *watermark = [state[@"rawTotalsWatermark"] isKindOfClass:NSDictionary.class] ? state[@"rawTotalsWatermark"] : nil;
-    NSDictionary<NSString *, NSNumber *> *counted = total ? CodexTokenDeltaAboveWatermark(total, watermark) : last;
-    if (total) state[@"rawTotalsWatermark"] = CodexTokenWatermark(total, watermark);
+    BOOL baselinePending = [state[@"baselinePending"] boolValue];
+    NSDictionary<NSString *, NSNumber *> *counted = nil;
+    if (total) {
+        counted = watermark ? CodexTokenDeltaAboveWatermark(total, watermark) : (baselinePending ? last : total);
+        state[@"rawTotalsWatermark"] = CodexTokenWatermark(total, watermark);
+    } else {
+        counted = last;
+    }
+    if (baselinePending && (total || last)) [state removeObjectForKey:@"baselinePending"];
     long long countedTokens = [counted[@"i"] longLongValue] + [counted[@"o"] longLongValue];
     if (countedTokens <= 0) return;
     if (!counted) return;
@@ -263,7 +272,7 @@ static NSArray<NSDictionary<NSString *, id> *> *CodexCompactedCostEvents(NSArray
     }];
 }
 
-static NSArray<NSURL *> *CodexCostCandidateFiles(NSURL *home, NSDate *now) {
+static NSArray<NSURL *> *CodexCostCandidateFiles(NSURL *home, NSDate *now, NSDate *trackingStartedAt) {
     if (home.path.length == 0) return @[];
     NSFileManager *fm = NSFileManager.defaultManager;
     NSCalendar *calendar = [NSCalendar calendarWithIdentifier:NSCalendarIdentifierGregorian];
@@ -273,13 +282,17 @@ static NSArray<NSURL *> *CodexCostCandidateFiles(NSURL *home, NSDate *now) {
     folder.timeZone = calendar.timeZone; folder.dateFormat = @"yyyy/MM/dd";
     NSMutableArray<NSURL *> *files = [NSMutableArray array];
     NSURL *sessions = [home URLByAppendingPathComponent:@"sessions" isDirectory:YES];
-    for (NSInteger offset = 0; offset < CodexCostHistoryDays; offset++) {
+    NSDate *referenceNow = now ?: NSDate.date;
+    NSInteger dayCount = CodexCostHistoryDays;
+    for (NSInteger offset = 0; offset < dayCount; offset++) {
         NSDate *date = [calendar dateByAddingUnit:NSCalendarUnitDay value:-offset toDate:now ?: NSDate.date options:0];
         NSURL *dir = [sessions URLByAppendingPathComponent:[folder stringFromDate:date] isDirectory:YES];
         NSArray<NSURL *> *dayFiles = [fm contentsOfDirectoryAtURL:dir includingPropertiesForKeys:@[NSURLContentModificationDateKey, NSURLFileSizeKey, NSURLIsRegularFileKey] options:NSDirectoryEnumerationSkipsHiddenFiles error:nil];
         for (NSURL *file in dayFiles ?: @[]) if ([file.pathExtension.lowercaseString isEqualToString:@"jsonl"]) [files addObject:file];
     }
-    NSDate *oldestModification = [calendar dateByAddingUnit:NSCalendarUnitDay value:-(CodexCostHistoryDays + 2) toDate:now ?: NSDate.date options:0];
+    NSDate *oldestModification = trackingStartedAt
+        ? trackingStartedAt
+        : [calendar dateByAddingUnit:NSCalendarUnitDay value:-(CodexCostHistoryDays + 2) toDate:referenceNow options:0];
     NSURL *archived = [home URLByAppendingPathComponent:@"archived_sessions" isDirectory:YES];
     NSArray<NSURL *> *archivedFiles = [fm contentsOfDirectoryAtURL:archived includingPropertiesForKeys:@[NSURLContentModificationDateKey, NSURLFileSizeKey, NSURLIsRegularFileKey] options:NSDirectoryEnumerationSkipsHiddenFiles error:nil];
     for (NSURL *file in archivedFiles ?: @[]) {
@@ -365,6 +378,13 @@ static NSDictionary *CodexLoadDictionary(NSURL *url) {
     return [object isKindOfClass:NSDictionary.class] ? object : @{};
 }
 
+static NSDictionary *CodexLoadCostCache(NSURL *url) {
+    if (!url) return @{};
+    NSNumber *size = [url resourceValuesForKeys:@[NSURLFileSizeKey] error:nil][NSURLFileSizeKey];
+    if (!size || size.unsignedLongLongValue > CodexCostCacheMaximumBytes) return @{};
+    return CodexLoadDictionary(url);
+}
+
 static BOOL CodexWriteJSONObject(id object, NSURL *url) {
     if (!object || !url) return NO;
     [NSFileManager.defaultManager createDirectoryAtURL:url.URLByDeletingLastPathComponent withIntermediateDirectories:YES attributes:nil error:nil];
@@ -372,7 +392,68 @@ static BOOL CodexWriteJSONObject(id object, NSURL *url) {
     return data && [data writeToURL:url options:NSDataWritingAtomic error:nil];
 }
 
-NSDictionary<NSString *, id> *CodexAggregateCostEvents(NSArray<NSDictionary<NSString *, id> *> *events, NSDate *now, BOOL scanIncomplete) {
+static BOOL CodexWriteTrackingStart(NSURL *url, NSDate *date) {
+    return CodexWriteJSONObject(@{
+        @"version": @(CodexCostTrackingMarkerVersion),
+        @"startedAt": @((date ?: NSDate.date).timeIntervalSince1970)
+    }, url);
+}
+
+static NSDate *CodexLoadTrackingStart(NSURL *url, NSDate *now) {
+    NSDictionary *marker = CodexLoadDictionary(url);
+    NSTimeInterval value = [marker[@"startedAt"] doubleValue];
+    NSTimeInterval nowValue = (now ?: NSDate.date).timeIntervalSince1970;
+    if ([marker[@"version"] integerValue] != CodexCostTrackingMarkerVersion ||
+        value <= 0 || value > nowValue + 60.0) return nil;
+    return [NSDate dateWithTimeIntervalSince1970:value];
+}
+
+static NSDictionary *CodexCreateCostBaseline(NSArray<NSURL *> *files,
+                                              NSURL *cacheURL,
+                                              NSURL *trackingStartURL,
+                                              NSDate *now) {
+    NSDate *start = now ?: NSDate.date;
+    NSMutableDictionary *baselineFiles = [NSMutableDictionary dictionary];
+    for (NSURL *file in files ?: @[]) {
+        NSDictionary *values = [file resourceValuesForKeys:@[NSURLContentModificationDateKey, NSURLFileSizeKey, NSURLIsRegularFileKey] error:nil];
+        if (![values[NSURLIsRegularFileKey] boolValue]) continue;
+        unsigned long long size = [values[NSURLFileSizeKey] unsignedLongLongValue];
+        NSTimeInterval mtime = [values[NSURLContentModificationDateKey] timeIntervalSince1970];
+        baselineFiles[CodexPathCacheKey(file.path)] = @{
+            @"size": @(size), @"mtime": @(mtime), @"parsedBytes": @(size),
+            @"complete": @YES, @"state": @{ @"model": @"unknown", @"baselinePending": @YES },
+            @"events": @[]
+        };
+    }
+    BOOL wroteMarker = CodexWriteTrackingStart(trackingStartURL, start);
+    BOOL wroteCache = CodexWriteJSONObject(@{
+        @"version": @(CodexCostCacheVersion),
+        @"startedAt": @(start.timeIntervalSince1970),
+        @"updatedAt": @(start.timeIntervalSince1970),
+        @"files": baselineFiles
+    }, cacheURL);
+    if (!wroteMarker || !wroteCache) {
+        return @{
+            @"available": @NO, @"scanIncomplete": @NO,
+            @"trackingStartedAt": @0,
+            @"updatedAt": @(start.timeIntervalSince1970),
+            @"error": @"无法保存安装后统计起点",
+            @"pricingVersion": CodexCostPricingVersion
+        };
+    }
+    return @{
+        @"available": @NO, @"scanIncomplete": @NO,
+        @"trackingStartedAt": @(start.timeIntervalSince1970),
+        @"updatedAt": @(start.timeIntervalSince1970),
+        @"error": @"已从现在开始记录安装后的Token与费用",
+        @"pricingVersion": CodexCostPricingVersion
+    };
+}
+
+static NSDictionary<NSString *, id> *CodexAggregateCostEventsFromTrackingStart(NSArray<NSDictionary<NSString *, id> *> *events,
+                                                                                 NSDate *now,
+                                                                                 BOOL scanIncomplete,
+                                                                                 NSDate *trackingStartedAt) {
     NSDate *referenceNow = now ?: NSDate.date;
     NSCalendar *calendar = [NSCalendar calendarWithIdentifier:NSCalendarIdentifierGregorian];
     calendar.timeZone = NSTimeZone.localTimeZone;
@@ -423,15 +504,18 @@ NSDictionary<NSString *, id> *CodexAggregateCostEvents(NSArray<NSDictionary<NSSt
     }
     NSDateComponents *monthParts = [calendar components:NSCalendarUnitYear | NSCalendarUnitMonth fromDate:today];
     NSDate *monthStart = [calendar dateFromComponents:monthParts];
-    NSRange daysRange = [calendar rangeOfUnit:NSCalendarUnitDay inUnit:NSCalendarUnitMonth forDate:today];
     for (NSString *key in daily) {
         NSDate *date = [formatter dateFromString:key];
         if (date && [date compare:monthStart] != NSOrderedAscending && [date compare:today] != NSOrderedDescending) monthCost += [daily[key][@"cost"] doubleValue];
     }
-    NSInteger dayOfMonth = [calendar component:NSCalendarUnitDay fromDate:today];
-    NSTimeInterval secondsToday = [referenceNow timeIntervalSinceDate:today];
-    double elapsedDays = MAX(1.0, (double)(dayOfMonth - 1) + MIN(1.0, secondsToday / 86400.0));
-    double monthForecast = monthCost > 0 ? monthCost / elapsedDays * (double)daysRange.length : 0;
+    NSDate *observationStart = monthStart;
+    if (trackingStartedAt && [trackingStartedAt compare:monthStart] == NSOrderedDescending) {
+        observationStart = trackingStartedAt;
+    }
+    NSDate *monthEnd = [calendar dateByAddingUnit:NSCalendarUnitMonth value:1 toDate:monthStart options:0];
+    double elapsedDays = MAX(1.0, [referenceNow timeIntervalSinceDate:observationStart] / 86400.0);
+    double observedHorizonDays = MAX(1.0, [monthEnd timeIntervalSinceDate:observationStart] / 86400.0);
+    double monthForecast = monthCost > 0 ? monthCost / elapsedDays * observedHorizonDays : 0;
     long long maxTrend = 0;
     for (NSNumber *value in trendRaw) maxTrend = MAX(maxTrend, value.longLongValue);
     NSMutableArray<NSNumber *> *trend = [NSMutableArray array];
@@ -452,16 +536,29 @@ NSDictionary<NSString *, id> *CodexAggregateCostEvents(NSArray<NSDictionary<NSSt
     };
 }
 
-NSDictionary<NSString *, id> *CodexScanCostHistoryAtHome(NSURL *codexHome, NSURL *cacheURL, NSDate *now) {
+NSDictionary<NSString *, id> *CodexAggregateCostEvents(NSArray<NSDictionary<NSString *, id> *> *events, NSDate *now, BOOL scanIncomplete) {
+    return CodexAggregateCostEventsFromTrackingStart(events, now, scanIncomplete, nil);
+}
+
+NSDictionary<NSString *, id> *CodexScanCostHistoryAtHome(NSURL *codexHome, NSURL *cacheURL, NSURL *trackingStartURL, NSDate *now) {
     NSDate *referenceNow = now ?: NSDate.date;
-    NSArray<NSURL *> *files = CodexCostCandidateFiles(codexHome, referenceNow);
-    if (files.count == 0) return @{ @"available": @NO, @"error": @"未找到本机会话Token记录", @"pricingVersion": CodexCostPricingVersion };
-    NSDictionary *cache = CodexLoadDictionary(cacheURL);
-    NSDictionary *cachedFiles = [cache[@"version"] integerValue] == CodexCostCacheVersion && [cache[@"files"] isKindOfClass:NSDictionary.class] ? cache[@"files"] : @{};
+    NSDate *trackingStartedAt = CodexLoadTrackingStart(trackingStartURL, referenceNow);
+    NSDictionary *cache = CodexLoadCostCache(cacheURL);
+    NSTimeInterval cachedStart = [cache[@"startedAt"] doubleValue];
+    BOOL validCache = trackingStartedAt && [cache[@"version"] integerValue] == CodexCostCacheVersion &&
+                      [cache[@"files"] isKindOfClass:NSDictionary.class] && cachedStart > 0 &&
+                      cachedStart <= referenceNow.timeIntervalSince1970 + 60.0 &&
+                      fabs(cachedStart - trackingStartedAt.timeIntervalSince1970) < 1.0;
+    if (validCache) trackingStartedAt = [NSDate dateWithTimeIntervalSince1970:cachedStart];
+    NSArray<NSURL *> *files = CodexCostCandidateFiles(codexHome, referenceNow, trackingStartedAt ?: referenceNow);
+    if (!validCache) return CodexCreateCostBaseline(files, cacheURL, trackingStartURL, referenceNow);
+    if (files.count == 0) return @{ @"available": @NO, @"trackingStartedAt": @(trackingStartedAt.timeIntervalSince1970), @"error": @"安装后暂未找到本机会话Token记录", @"pricingVersion": CodexCostPricingVersion };
+    NSDictionary *cachedFiles = cache[@"files"];
     NSMutableDictionary *newFiles = [NSMutableDictionary dictionary];
     NSCalendar *calendar = [NSCalendar calendarWithIdentifier:NSCalendarIdentifierGregorian];
     calendar.timeZone = NSTimeZone.localTimeZone;
-    NSDate *earliest = [calendar dateByAddingUnit:NSCalendarUnitDay value:-(CodexCostHistoryDays - 1) toDate:[calendar startOfDayForDate:referenceNow] options:0];
+    NSDate *thirtyDayStart = [calendar dateByAddingUnit:NSCalendarUnitDay value:-(CodexCostHistoryDays - 1) toDate:[calendar startOfDayForDate:referenceNow] options:0];
+    NSDate *earliest = [trackingStartedAt compare:thirtyDayStart] == NSOrderedDescending ? trackingStartedAt : thirtyDayStart;
     NSDateFormatter *formatter = CodexCostDayFormatter();
     unsigned long long remainingBudget = CodexCostScanBudgetBytes;
     BOOL incomplete = NO;
@@ -496,10 +593,17 @@ NSDictionary<NSString *, id> *CodexScanCostHistoryAtHome(NSURL *codexHome, NSURL
         newFiles[fileKey] = entry;
         if (!complete && !reachedEnd) incomplete = YES;
     }
-    CodexWriteJSONObject(@{ @"version": @(CodexCostCacheVersion), @"updatedAt": @(referenceNow.timeIntervalSince1970), @"files": newFiles }, cacheURL);
+    if (!CodexWriteJSONObject(@{ @"version": @(CodexCostCacheVersion), @"startedAt": @(trackingStartedAt.timeIntervalSince1970), @"updatedAt": @(referenceNow.timeIntervalSince1970), @"files": newFiles }, cacheURL)) {
+        return @{ @"available": @NO, @"scanIncomplete": @NO,
+                  @"trackingStartedAt": @(trackingStartedAt.timeIntervalSince1970),
+                  @"updatedAt": @(referenceNow.timeIntervalSince1970),
+                  @"error": @"安装后Token缓存保存失败",
+                  @"pricingVersion": CodexCostPricingVersion };
+    }
     NSMutableArray *allEvents = [NSMutableArray array];
     for (NSDictionary *entry in newFiles.allValues) if ([entry[@"events"] isKindOfClass:NSArray.class]) [allEvents addObjectsFromArray:entry[@"events"]];
-    NSMutableDictionary *aggregate = [CodexAggregateCostEvents(allEvents, referenceNow, incomplete) mutableCopy];
+    NSMutableDictionary *aggregate = [CodexAggregateCostEventsFromTrackingStart(allEvents, referenceNow, incomplete, trackingStartedAt) mutableCopy];
+    aggregate[@"trackingStartedAt"] = @(trackingStartedAt.timeIntervalSince1970);
     aggregate[@"updatedAt"] = @(referenceNow.timeIntervalSince1970);
     if (![aggregate[@"available"] boolValue]) aggregate[@"error"] = incomplete ? @"正在补齐本机Token历史" : @"本机记录暂时没有Token数据";
     return aggregate;

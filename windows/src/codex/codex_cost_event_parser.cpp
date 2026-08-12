@@ -815,10 +815,13 @@ CodexCostLineParseResult ParseCodexCostJsonlLine(
     CodexTokenUsage counted;
     bool stateUpdated = false;
     if (total) {
-        counted = state.hasRawTotalsWatermark
-                      ? DeltaAboveWatermark(*total,
-                                            state.rawTotalsWatermark)
-                      : *total;
+        if (state.hasRawTotalsWatermark) {
+            counted = DeltaAboveWatermark(*total, state.rawTotalsWatermark);
+        } else if (state.baselinePending) {
+            counted = last.value_or(CodexTokenUsage{});
+        } else {
+            counted = *total;
+        }
         state.rawTotalsWatermark =
             state.hasRawTotalsWatermark
                 ? UpdatedWatermark(*total, state.rawTotalsWatermark)
@@ -829,6 +832,10 @@ CodexCostLineParseResult ParseCodexCostJsonlLine(
         counted = *last;
     } else {
         return {};
+    }
+    if (state.baselinePending && (total || last)) {
+        state.baselinePending = false;
+        stateUpdated = true;
     }
 
     if (!HasCountableTokens(counted) || !root.timestamp) {

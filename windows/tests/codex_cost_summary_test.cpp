@@ -133,6 +133,20 @@ void TestLeapYearMonthBoundaryAndForecast() {
            "non-leap reference date is rejected");
 }
 
+void TestPostInstallForecastUsesObservedWindow() {
+    const std::vector<CodexCostEvent> events{
+        Event("installed", "2026-08-10", "gpt-5.6-luna", 1000000, 0),
+        Event("today", "2026-08-11", "gpt-5.6-luna", 1000000, 0),
+    };
+    const CodexCostSummary result = Require(
+        CalculateCodexCostSummary(events, "2026-08-11", "2026-08-10"),
+        "post-install forecast result");
+    ExpectNear(result.monthToDate.estimatedUsd, 0.8, 1e-12,
+               "post-install month cost includes observed events");
+    ExpectNear(result.monthForecastEstimatedUsd, 8.8, 1e-12,
+               "forecast extrapolates only across the post-install horizon");
+}
+
 void TestInvalidFutureAndMalformedEvents() {
     const std::vector<CodexCostEvent> events{
         Event("future", "2026-08-12", "gpt-5.6-luna", 100, 100),
@@ -234,6 +248,7 @@ int main() {
     TestWindowsAndDuplicateFingerprint();
     TestUnknownModelAndCachedHistory();
     TestLeapYearMonthBoundaryAndForecast();
+    TestPostInstallForecastUsesObservedWindow();
     TestInvalidFutureAndMalformedEvents();
     TestInvalidDuplicateDoesNotPoisonValidEvent();
     TestCachedValueValidationAndClipping();

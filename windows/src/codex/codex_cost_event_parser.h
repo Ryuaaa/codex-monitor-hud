@@ -14,6 +14,7 @@ namespace codex_monitor::codex {
 // no source path, raw JSON, task text, account data, or other session content.
 struct CodexCostEventParserState {
     std::string currentModel = "unknown";
+    bool baselinePending = false;
     bool hasRawTotalsWatermark = false;
     CodexTokenUsage rawTotalsWatermark;
 

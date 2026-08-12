@@ -23,6 +23,7 @@ inline constexpr std::size_t kCodexCostHistoryCacheMaximumRows = 32768;
 // line fingerprint.
 struct CodexCostHistoryParserSnapshot {
     std::string currentModel = "unknown";
+    bool baselinePending = false;
     bool hasRawTotalsWatermark = false;
     CodexTokenUsage rawTotalsWatermark;
 };
@@ -50,6 +51,7 @@ struct CodexCostHistoryFileSnapshot {
 };
 
 struct CodexCostHistorySnapshot {
+    std::int64_t trackingStartedAtUnixSeconds = 0;
     std::int64_t updatedAtUnixSeconds = 0;
     std::vector<CodexCostHistoryFileSnapshot> files;
 };

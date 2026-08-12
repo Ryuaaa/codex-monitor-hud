@@ -63,6 +63,7 @@ FOUNDATION_EXPORT NSDictionary<NSString *, id> *CodexScanRecentActivityAtRoot(NS
 @property(nonatomic) NSTimeInterval localCostUpdatedAt;
 @property(nonatomic, copy) NSString *localCostErrorText;
 @property(nonatomic) BOOL localCostScanIncomplete;
+@property(nonatomic) NSTimeInterval localCostTrackingStartedAt;
 @property(nonatomic) long long localTodayTokens;
 @property(nonatomic) long long localSevenDayTokens;
 @property(nonatomic) long long localThirtyDayTokens;

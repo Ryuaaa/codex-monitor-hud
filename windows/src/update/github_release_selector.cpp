@@ -11,6 +11,7 @@ constexpr std::string_view kAssetPrefix =
     "CodexMonitorHUD-windows-x64-";
 constexpr std::string_view kInstallerSuffix = ".msi";
 constexpr std::string_view kChecksumSuffix = ".msi.sha256";
+constexpr std::string_view kWindowsTagPrefix = "windows-v";
 
 bool IsAsciiDigit(char value) noexcept {
     return value >= '0' && value <= '9';
@@ -234,9 +235,10 @@ std::optional<SelectedWindowsRelease> SelectLatestWindowsRelease(
     std::optional<SelectedWindowsRelease> selected;
     for (const GitHubReleaseCandidate& release : releases) {
         if (release.draft || release.prerelease) continue;
+        if (!StartsWith(release.tagName, kWindowsTagPrefix)) continue;
 
         std::optional<SemanticVersion> version =
-            ParseSemVerTag(release.tagName);
+            ParseSemVerTag(std::string_view(release.tagName).substr(kWindowsTagPrefix.size()));
         // The WiX packaging pipeline and MSI ProductVersion use exactly three
         // numeric components. Build metadata cannot be represented there, so
         // it is not a valid automatic-install target even though SemVer treats

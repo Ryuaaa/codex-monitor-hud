@@ -31,7 +31,7 @@
 namespace codex_monitor::codex {
 namespace {
 
-constexpr std::string_view kVersionLine = "version=1";
+constexpr std::string_view kVersionLine = "version=2";
 constexpr std::int64_t kMaximumUnixSeconds = 253402300799LL;
 constexpr std::size_t kMaximumFileIdBytes = 96;
 constexpr std::size_t kMaximumModelBytes = 128;
@@ -149,7 +149,9 @@ std::int64_t SaturatingCountedTokens(const CodexTokenUsage& usage) noexcept {
 SnapshotValidation ValidateSnapshot(const CodexCostHistorySnapshot& snapshot,
                                     std::size_t& rowCount) {
     rowCount = 0;
-    if (snapshot.updatedAtUnixSeconds < 0 ||
+    if (snapshot.trackingStartedAtUnixSeconds <= 0 ||
+        snapshot.trackingStartedAtUnixSeconds > snapshot.updatedAtUnixSeconds ||
+        snapshot.updatedAtUnixSeconds < 0 ||
         snapshot.updatedAtUnixSeconds > kMaximumUnixSeconds) {
         return SnapshotValidation::kInvalid;
     }
@@ -269,7 +271,8 @@ SnapshotValidation SerializeSnapshot(
     {
         std::ostringstream line;
         line.imbue(std::locale::classic());
-        line << "meta\tupdated_at=" << snapshot.updatedAtUnixSeconds
+        line << "meta\tstarted_at=" << snapshot.trackingStartedAtUnixSeconds
+             << "\tupdated_at=" << snapshot.updatedAtUnixSeconds
              << "\tfiles=" << snapshot.files.size();
         if (!AppendLine(output, line.str())) {
             return SnapshotValidation::kTooLarge;
@@ -304,6 +307,8 @@ SnapshotValidation SerializeSnapshot(
                  << "\tskipped=" << (file->hasSkippedOversizedLine ? 1 : 0)
                  << "\tcomplete=" << (file->complete ? 1 : 0)
                  << "\tcurrent_model=" << HexEncode(file->parser.currentModel)
+                 << "\tbaseline_pending="
+                 << (file->parser.baselinePending ? 1 : 0)
                  << "\thas_watermark="
                  << (file->parser.hasRawTotalsWatermark ? 1 : 0)
                  << "\twi=" << file->parser.rawTotalsWatermark.inputTokens
@@ -445,16 +450,21 @@ CodexCostHistoryLoadStatus ParseContents(
     }
     if (lines->size() < 2) return CodexCostHistoryLoadStatus::kCorrupt;
 
-    const auto meta = SplitExact<3>((*lines)[1]);
+    const auto meta = SplitExact<4>((*lines)[1]);
     if (!meta || (*meta)[0] != "meta") {
         return CodexCostHistoryLoadStatus::kCorrupt;
     }
+    std::string_view startedText;
     std::string_view updatedText;
     std::string_view fileCountText;
     std::uint64_t rawFileCount = 0;
-    if (!StripPrefix((*meta)[1], "updated_at=", updatedText) ||
-        !StripPrefix((*meta)[2], "files=", fileCountText) ||
+    if (!StripPrefix((*meta)[1], "started_at=", startedText) ||
+        !StripPrefix((*meta)[2], "updated_at=", updatedText) ||
+        !StripPrefix((*meta)[3], "files=", fileCountText) ||
+        !ParseSigned(startedText, snapshot.trackingStartedAtUnixSeconds) ||
         !ParseSigned(updatedText, snapshot.updatedAtUnixSeconds) ||
+        snapshot.trackingStartedAtUnixSeconds <= 0 ||
+        snapshot.trackingStartedAtUnixSeconds > snapshot.updatedAtUnixSeconds ||
         snapshot.updatedAtUnixSeconds < 0 ||
         snapshot.updatedAtUnixSeconds > kMaximumUnixSeconds ||
         !ParseUnsigned(fileCountText, rawFileCount)) {
@@ -473,16 +483,16 @@ CodexCostHistoryLoadStatus ParseContents(
         if (lineIndex >= lines->size()) {
             return CodexCostHistoryLoadStatus::kCorrupt;
         }
-        const auto fields = SplitExact<15>((*lines)[lineIndex++]);
+        const auto fields = SplitExact<16>((*lines)[lineIndex++]);
         if (!fields || (*fields)[0] != "file") {
             return CodexCostHistoryLoadStatus::kCorrupt;
         }
 
-        constexpr std::array<std::string_view, 14> kPrefixes{
+        constexpr std::array<std::string_view, 15> kPrefixes{
             "id=", "size=", "mtime_ns=", "offset=", "discard=", "skipped=",
-            "complete=", "current_model=", "has_watermark=", "wi=", "wc=",
+            "complete=", "current_model=", "baseline_pending=", "has_watermark=", "wi=", "wc=",
             "ww=", "wo=", "rows="};
-        std::array<std::string_view, 14> values{};
+        std::array<std::string_view, 15> values{};
         for (std::size_t index = 0; index < kPrefixes.size(); ++index) {
             if (!StripPrefix((*fields)[index + 1], kPrefixes[index],
                              values[index])) {
@@ -501,17 +511,18 @@ CodexCostHistoryLoadStatus ParseContents(
             !ParseBoolean(values[4], file.discardingOversizedLine) ||
             !ParseBoolean(values[5], file.hasSkippedOversizedLine) ||
             !ParseBoolean(values[6], file.complete) || !currentModel ||
-            !ParseBoolean(values[8], file.parser.hasRawTotalsWatermark) ||
-            !ParseSigned(values[9],
-                         file.parser.rawTotalsWatermark.inputTokens) ||
+            !ParseBoolean(values[8], file.parser.baselinePending) ||
+            !ParseBoolean(values[9], file.parser.hasRawTotalsWatermark) ||
             !ParseSigned(values[10],
+                         file.parser.rawTotalsWatermark.inputTokens) ||
+            !ParseSigned(values[11],
                          file.parser.rawTotalsWatermark.cachedInputTokens) ||
             !ParseSigned(
-                values[11],
+                values[12],
                 file.parser.rawTotalsWatermark.cacheWriteInputTokens) ||
-            !ParseSigned(values[12],
+            !ParseSigned(values[13],
                          file.parser.rawTotalsWatermark.outputTokens) ||
-            !ParseUnsigned(values[13], rawRowCount)) {
+            !ParseUnsigned(values[14], rawRowCount)) {
             return CodexCostHistoryLoadStatus::kCorrupt;
         }
         if (rawRowCount > kCodexCostHistoryCacheMaximumRows ||
@@ -609,7 +620,8 @@ ExistingVersionStatus CheckExistingVersion(
         return ExistingVersionStatus::kIoError;
     }
     if (!firstLine.empty() && firstLine.back() == '\r') firstLine.pop_back();
-    if (StartsWith(firstLine, "version=") && firstLine != kVersionLine) {
+    if (StartsWith(firstLine, "version=") && firstLine != kVersionLine &&
+        firstLine != "version=1") {
         return ExistingVersionStatus::kUnsupported;
     }
     return ExistingVersionStatus::kWritable;

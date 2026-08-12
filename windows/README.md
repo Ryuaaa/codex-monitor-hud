@@ -123,6 +123,8 @@ ctest --test-dir windows/out/build -C Release --output-on-failure
 
 CI 还会生成 `CodexMonitorHUD-windows-x64.zip`，其中包含 EXE、许可证和本说明，并同时生成 `.zip.sha256` 校验文件。这个便携包尚未进行 Windows 代码签名，不等同于正式安装包。便携版可以检查新版，但不会启用“安装更新”；一键安装只对从 MSI 安装目录启动的版本开放。
 
+Windows 自动更新只读取 `windows-v版本号` 发布；普通 `v版本号` 保留给 macOS，避免两个平台相互误判版本。
+
 每次准备新更新前会低成本清理旧临时目录：只识别 `update-` 加 32 位小写十六进制字符的普通目录，重解析点或异常内容一律跳过；七天内的目录不会删除，并始终保留最新两个。清理失败不影响悬浮窗或本次更新。
 
 在 Windows 本机完成 Release 编译后，也可运行：

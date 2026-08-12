@@ -40,7 +40,8 @@ public:
     // one-scan resetAfterTruncation signal. Invalid internal data or an invalid
     // capture time returns nullopt rather than producing a partial snapshot.
     [[nodiscard]] std::optional<CodexCostHistorySnapshot> ExportSnapshot(
-        std::int64_t updatedAtUnixSeconds) const noexcept;
+        std::int64_t updatedAtUnixSeconds,
+        std::int64_t trackingStartedAtUnixSeconds = 0) const noexcept;
 
     // Import validates the complete snapshot before replacing any live state.
     // On invalid input or allocation failure, the existing state is unchanged.
@@ -49,13 +50,15 @@ public:
 
     [[nodiscard]] CodexCostHistoryApplyResult Apply(
         const CodexCostFileScanResult& scan,
-        const CodexCostLocalDateResolver& localDateResolver);
+        const CodexCostLocalDateResolver& localDateResolver,
+        std::int64_t earliestEventUnixMilliseconds = 0);
 
     void Clear() noexcept;
 
 private:
     struct FileState;
     std::vector<FileState> files_;
+    std::int64_t trackingStartedAtUnixSeconds_ = 0;
 };
 
 }  // namespace codex_monitor::codex

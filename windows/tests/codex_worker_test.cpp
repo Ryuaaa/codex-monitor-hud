@@ -591,30 +591,48 @@ void TestCostHistoryDemandGating(HWND window,
     if (enabled && enabled->costHistoryUpdate) {
         const auto& update = *enabled->costHistoryUpdate;
         Expect(update.status ==
-                   codex_monitor::codex::CodexCostRefreshStatus::kAvailable,
-               "the real temporary rollout must produce an available result");
-        Expect(update.localSummary && update.localSummary->available &&
-                   update.localSummary->today.tokens == 1100,
-               "the worker must parse and summarize the temporary Token event");
-        Expect(update.localSummary &&
-                   update.localSummary->pricedTokenPercent == 100.0,
-               "the known model must have complete price coverage");
+                   codex_monitor::codex::CodexCostRefreshStatus::kNoTokenEvents,
+               "the first enabled refresh must establish a zero baseline");
+        Expect(update.localSummary && !update.localSummary->available,
+               "pre-install Token events must not enter the summary");
     }
     Expect(std::filesystem::exists(cachePath),
            "the first successful enabled scan must create a restart cache");
     const auto firstCacheWrite = std::filesystem::last_write_time(
         cachePath, error);
     Expect(!error, "the restart cache write time must be readable");
+
+    const std::string postInstallEvent =
+        "{\"timestamp\":\"" + timestamp +
+        "\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\","
+        "\"info\":{\"model\":\"gpt-5.6-luna\",\"last_token_usage\":{"
+        "\"input_tokens\":1000,\"cached_input_tokens\":200,"
+        "\"output_tokens\":100}}}}\n";
+    Expect(WriteTextFile(rolloutPath, fixture + postInstallEvent),
+           "the cost test must append one post-install Token event");
+    Expect(worker.RequestRefresh(),
+           "the cost test must request a post-install incremental refresh");
+    const auto counted = WaitForRefresh(window, worker, 10s);
+    Expect(counted && counted->succeeded && counted->costHistoryUpdate &&
+               counted->costHistoryUpdate->localSummary &&
+               counted->costHistoryUpdate->localSummary->available &&
+               counted->costHistoryUpdate->localSummary->today.tokens == 1100 &&
+               counted->costHistoryUpdate->localSummary->pricedTokenPercent == 100.0,
+           "only the post-install Token event must be summarized");
+    const auto secondCacheWrite = std::filesystem::last_write_time(
+        cachePath, error);
+    Expect(!error && secondCacheWrite >= firstCacheWrite,
+           "the appended event must update the restart cache");
+
     Expect(worker.RequestRefresh(),
            "the cost test must request an unchanged incremental refresh");
     const auto unchanged = WaitForRefresh(window, worker, 10s);
-    Expect(unchanged && unchanged->succeeded &&
-               unchanged->costHistoryUpdate &&
+    Expect(unchanged && unchanged->succeeded && unchanged->costHistoryUpdate &&
                !unchanged->costHistoryUpdate->historyStateChanged,
            "an unchanged source must not mark the persisted history dirty");
-    const auto secondCacheWrite = std::filesystem::last_write_time(
+    const auto thirdCacheWrite = std::filesystem::last_write_time(
         cachePath, error);
-    Expect(!error && secondCacheWrite == firstCacheWrite,
+    Expect(!error && thirdCacheWrite == secondCacheWrite,
            "an unchanged refresh must not rewrite the restart cache");
 
     Expect(worker.SetCostHistoryEnabled(false),
@@ -636,7 +654,7 @@ void TestCostHistoryDemandGating(HWND window,
     // Damage an already-consumed byte, then append one valid event. A second
     // worker must restore the durable cursor and parser model before scanning:
     // a full rescan would report the damaged first line and lose the model.
-    std::string resumedFixture = fixture;
+    std::string resumedFixture = fixture + postInstallEvent;
     Expect(!resumedFixture.empty(),
            "the restart fixture must have an already-consumed prefix");
     if (!resumedFixture.empty()) resumedFixture.front() = '!';

@@ -28,15 +28,15 @@ WindowsUpdateInstallRequest ValidRequest() {
     request.updatesRoot = "/tmp/codex-monitor-updates";
 #endif
     request.release.version = *version;
-    request.release.tagName = "v1.2.0";
+    request.release.tagName = "windows-v1.2.0";
     request.release.installer = {
         "CodexMonitorHUD-windows-x64-1.2.0.msi",
         "https://github.com/Ryuaaa/codex-monitor-hud/releases/download/"
-        "v1.2.0/CodexMonitorHUD-windows-x64-1.2.0.msi"};
+        "windows-v1.2.0/CodexMonitorHUD-windows-x64-1.2.0.msi"};
     request.release.checksum = {
         "CodexMonitorHUD-windows-x64-1.2.0.msi.sha256",
         "https://github.com/Ryuaaa/codex-monitor-hud/releases/download/"
-        "v1.2.0/CodexMonitorHUD-windows-x64-1.2.0.msi.sha256"};
+        "windows-v1.2.0/CodexMonitorHUD-windows-x64-1.2.0.msi.sha256"};
     return request;
 }
 

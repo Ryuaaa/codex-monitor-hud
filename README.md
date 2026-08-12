@@ -1,6 +1,6 @@
 # Codex 电脑轻量监测器
 
-> macOS 正式版：1.0.0，已完成Developer ID签名和Apple公证。Windows x64公开预览版：0.3.0，已经通过GitHub Windows虚拟机的构建、窗口、安装、升级和安全测试，暂未配置可信商业代码签名。
+> macOS 当前源码版：1.0.1（正式包完成签名公证后发布）。Windows x64当前源码版：0.3.1，需通过GitHub Windows虚拟机复验；Windows仍未配置可信商业代码签名。
 
 这是一个常驻在电脑屏幕角落的原生三页面悬浮窗：主页可自由组合Codex和电脑模块，Codex页显示账户额度、订阅与Token用量，电脑性能页用来快速判断电脑是否吃紧、是否主要由 Codex 引起、瓶颈在 CPU 还是内存。macOS版使用AppKit，Windows版使用Win32 + C++17；两者都不嵌入网页浏览器引擎。
 
@@ -87,8 +87,10 @@ Token增量缓存和额度预测样本位于：
 不想自行构建时，可从[GitHub发布页](https://github.com/Ryuaaa/codex-monitor-hud/releases/tag/v1.0.0)下载：
 
 - macOS：`Codex-Monitor-HUD.app.zip`。解压后把应用移到“应用程序”文件夹并打开；文件已经Developer ID签名并通过Apple公证。
-- Windows安装版：`CodexMonitorHUD-windows-x64-0.3.0-unsigned.msi`。
+- Windows安装版：`CodexMonitorHUD-windows-x64-0.3.0-preview-unsigned.msi`。
 - Windows便携版：`CodexMonitorHUD-windows-x64-0.3.0-preview-unsigned.zip`，解压后运行其中的 `CodexMonitorHUD.exe`。
+
+macOS 与 Windows 使用独立更新通道：macOS 读取 `v版本号`，Windows 读取 `windows-v版本号`。两个平台不会把对方的发布当成自己的新版。
 
 Windows当前是公开预览版，EXE和MSI暂未配置可信商业代码签名，Windows可能显示“未知发布者”或SmartScreen提示。安装包来自已全绿的公开GitHub Windows流水线；签名前，一键安装更新按设计保持关闭。完整Windows说明见[`windows/README.md`](windows/README.md)。
 

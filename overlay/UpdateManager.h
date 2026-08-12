@@ -19,6 +19,7 @@ NSComparisonResult HUDCompareVersions(NSString *left, NSString *right);
 NSString *HUDSHA256ForFile(NSURL *fileURL);
 NSString *HUDInstallHelperScript(void);
 HUDReleaseInfo *HUDReleaseInfoFromDictionary(NSDictionary *dictionary, NSError **error);
+HUDReleaseInfo *HUDLatestMacReleaseInfoFromArray(NSArray *releases, NSError **error);
 
 @interface HUDUpdateManager : NSObject
 @property(nonatomic, strong, readonly) HUDReleaseInfo *latestRelease;
