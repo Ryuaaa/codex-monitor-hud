@@ -61,6 +61,26 @@ void TestTurnContextAndLastUsage() {
            "event fingerprint matches the frozen macOS FNV identity");
 }
 
+void TestExplicitModelSeedsIncrementalState() {
+    CodexCostEventParserState state;
+    const auto& explicitModel = RequireEvent(
+        ParseCodexCostJsonlLine(
+            R"json({"timestamp":"2026-08-11T00:00:00Z","type":"event_msg","payload":{"type":"token_count","info":{"model":"gpt-5.6-luna","last_token_usage":{"input_tokens":2,"output_tokens":1}}}})json",
+            state),
+        "an explicit Token event model must produce an event");
+    Expect(explicitModel.model == "gpt-5.6-luna" &&
+               state.currentModel == "gpt-5.6-luna",
+           "an explicit Token event model must seed incremental parser state");
+
+    const auto& inherited = RequireEvent(
+        ParseCodexCostJsonlLine(
+            R"json({"timestamp":"2026-08-11T00:00:01Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":3,"output_tokens":1}}}})json",
+            state),
+        "a later incremental event must inherit the explicit model");
+    Expect(inherited.model == "gpt-5.6-luna",
+           "incremental parsing must retain the latest explicit model");
+}
+
 void TestCumulativeWatermarkAndReset() {
     CodexCostEventParserState state;
     const auto parseTotal = [&state](std::int64_t input,
@@ -216,6 +236,7 @@ void TestMalformedAndTimestampValidation() {
 
 int main() {
     TestTurnContextAndLastUsage();
+    TestExplicitModelSeedsIncrementalState();
     TestCumulativeWatermarkAndReset();
     TestUnknownModelsAndOccurrenceIdentity();
     TestNegativeAndInvalidTokenFields();

@@ -853,6 +853,13 @@ CodexCostLineParseResult ParseCodexCostJsonlLine(
     std::string model = info.model ? NormalizeCodexCostModel(*info.model)
                                    : state.currentModel;
     if (model.empty()) model = "unknown";
+    if (info.model && state.currentModel != model) {
+        // Token events may carry the model even when the post-install cursor
+        // starts after the preceding turn_context line. Retain that explicit
+        // model for subsequent incremental events and restart recovery.
+        state.currentModel = model;
+        stateUpdated = true;
+    }
 
     const std::uint64_t hash = StableLineHash(line);
     std::uint64_t& occurrence = state.emittedOccurrences[hash];
