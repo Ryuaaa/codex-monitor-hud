@@ -161,7 +161,7 @@ void TestFirstRunBaselineSkipsExistingContent() {
     auto request = Request(temporary.path(), now);
     request.trackingStartedAtUnixSeconds = now;
     request.baselineExistingFiles = true;
-    const auto baseline = ScanCodexCostRolloutFiles(request);
+    auto baseline = ScanCodexCostRolloutFiles(request);
     Require(baseline.ok() && baseline.lines.empty() &&
                 baseline.files.size() == 1 &&
                 baseline.files.front().establishBaseline &&
@@ -175,6 +175,39 @@ void TestFirstRunBaselineSkipsExistingContent() {
     Require(incremental.ok() && incremental.lines.size() == 1 &&
                 incremental.lines.front().text == "new-after-install",
             "the next scan must return only content appended after install");
+}
+
+void TestFirstRunBaselineSeedsOnlyModelMetadata() {
+    TemporaryDirectory temporary;
+    const std::int64_t now = NowUnixSeconds();
+    const auto session = CurrentSessionDirectory(temporary.path(), now);
+    const auto rollout = session / "rollout-model-before-install.jsonl";
+    const std::string oldContext =
+        R"({"timestamp":"2026-08-12T00:00:00Z","type":"turn_context","payload":{"model":"openai/gpt-5.6-terra"}})";
+    const std::string oldTokens =
+        R"({"timestamp":"2026-08-12T00:00:01Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":999999,"output_tokens":999999}}}})";
+    WriteFile(rollout, oldContext + "\n" + oldTokens + "\n" +
+              std::string(2 * 1024 * 1024, 'x') + "\n");
+
+    auto request = Request(temporary.path(), now);
+    request.trackingStartedAtUnixSeconds = now;
+    request.baselineExistingFiles = true;
+    auto baseline = ScanCodexCostRolloutFiles(request);
+    Require(baseline.ok() && baseline.lines.empty() &&
+                baseline.files.size() == 1 &&
+                baseline.files.front().baselineModel.empty(),
+            "the install baseline must return no historical Token data");
+    AppendFile(rollout,
+        R"({"timestamp":"2026-08-12T00:01:00Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":5,"output_tokens":1}}}})"
+        "\n");
+    baseline.files.front().needsModelSeed = true;
+    request.previousFiles = baseline.files;
+    request.baselineExistingFiles = false;
+    const auto incremental = ScanCodexCostRolloutFiles(request);
+    Require(incremental.ok() && incremental.lines.size() == 1 &&
+                incremental.files.front().baselineModel ==
+                    "openai/gpt-5.6-terra",
+            "the first post-install append may seed only prior model metadata while returning only new Token content");
 }
 
 void TestCandidateDiscoveryRetentionAndPrivacy() {
@@ -400,6 +433,7 @@ int main() {
     TestWindowsRootSyntaxPolicy();
     TestRecentDatePolicy();
     TestFirstRunBaselineSkipsExistingContent();
+    TestFirstRunBaselineSeedsOnlyModelMetadata();
     TestCandidateDiscoveryRetentionAndPrivacy();
     TestIncrementalAppendPartialLineAndTruncation();
     TestBudgetBoundaryAndResume();
