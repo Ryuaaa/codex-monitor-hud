@@ -41,6 +41,9 @@ or API keys.
 - Windows release binaries are built on GitHub-hosted runners from the exact
   public tag.
 - The signing service verifies the build origin before signing.
+- The versioned `windows-release-v1` artifact configuration is checked into
+  this repository at `windows/signpath-artifact-configuration.xml`; it signs
+  the standalone EXE and the MSI package built from that signed EXE.
 - The release pipeline verifies version metadata, tests, signatures, installer
   identity, and SHA-256 checksums before publishing.
 - Security issues should be reported through the repository's private security

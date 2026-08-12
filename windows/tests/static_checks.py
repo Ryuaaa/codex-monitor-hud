@@ -96,6 +96,9 @@ SIGNED_RELEASE_WORKFLOW = (
     REPOSITORY_ROOT / ".github" / "workflows" /
     "windows-signed-release.yml"
 ).read_text(encoding="utf-8")
+SIGNPATH_ARTIFACT_CONFIGURATION = (
+    WINDOWS_ROOT / "signpath-artifact-configuration.xml"
+).read_text(encoding="utf-8")
 RELEASE_SIGNING_SCRIPT = (
     WINDOWS_ROOT / "sign-release-artifacts.ps1"
 ).read_text(encoding="utf-8")
@@ -1363,22 +1366,32 @@ def main() -> None:
             "GitHub can apply a protected release environment",
         "actions: read":
             "SignPath can verify the exact GitHub-hosted build origin",
-        "signpath/github-action-submit-signing-request@v2":
-            "release signing uses the official SignPath GitHub integration",
+        "signpath/github-action-submit-signing-request@b9d91eadd323de506c0c81cf0c7fe7438f3360fd":
+            "release signing pins the reviewed official SignPath action commit",
         "SIGNPATH_API_TOKEN":
             "the SignPath submitter credential is sourced from an encrypted secret",
+        "artifact-configuration-slug: windows-release-v1":
+            "the reviewed artifact configuration version is fixed in source",
         "github-artifact-id":
             "SignPath signs an artifact produced by the current GitHub workflow",
         "release-signing":
             "the production release signing policy is explicit",
         "CODEX_MONITOR_WINDOWS_PUBLISHER_SHA256":
             "the update verifier is compiled with the exact release publisher pin",
+        'Checked-out source $headCommit does not match release tag $tagCommit':
+            "the built source must be the exact commit named by the release tag",
+        "git merge-base --is-ancestor $tagCommit origin/main":
+            "the release tag must identify reviewed source on the public main branch",
         "Get-AuthenticodeSignature":
             "every returned file is independently verified before publication",
         "Final artifact publisher does not match the compiled pin":
             "the second signing pass must use the publisher compiled into the updater",
         "Test signed MSI lifecycle and real upgrade":
             "the exact signed MSI is installed and removed before publication",
+        "test-msi-major-upgrade.ps1":
+            "the signed installer must replace a real previous installation",
+        "ExpectedPublisherSha256":
+            "the executable installed from the MSI must retain the pinned publisher",
         "gh release create $tag @assets --verify-tag":
             "only the verified signed asset set becomes the stable release",
     }
@@ -1386,6 +1399,27 @@ def main() -> None:
         require(SIGNED_RELEASE_WORKFLOW, token, reason)
     reject(SIGNED_RELEASE_WORKFLOW, "echo ${{ secrets.SIGNPATH_API_TOKEN }}",
            "release secrets must never be printed")
+    for workflow, description in (
+        (WINDOWS_WORKFLOW, "Windows CI"),
+        (SIGNED_RELEASE_WORKFLOW, "Windows signed release"),
+    ):
+        reject(workflow, "uses: actions/checkout@v",
+               f"{description} must pin checkout to an immutable commit")
+        reject(workflow, "uses: actions/upload-artifact@v",
+               f"{description} must pin artifact upload to an immutable commit")
+
+    signpath_artifact_contracts = {
+        '<parameter name="version" required="true" />':
+            "the SignPath configuration receives the exact release version",
+        'path="build/Release/CodexMonitorHUD.exe"':
+            "the portable executable is signed",
+        'path="installer/CodexMonitorHUD-windows-x64-${version}.msi"':
+            "the exact versioned installer is signed",
+        "<authenticode-sign />":
+            "the configuration uses Authenticode signing",
+    }
+    for token, reason in signpath_artifact_contracts.items():
+        require(SIGNPATH_ARTIFACT_CONFIGURATION, token, reason)
 
     installer_contracts = {
         'InstallScope="perUser"': "the MSI defaults to a no-admin per-user install",
