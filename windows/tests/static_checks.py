@@ -1306,10 +1306,8 @@ def main() -> None:
     ci_branch_contracts = {
         "      - main":
             "Windows changes merged to the public default branch remain gated",
-        "Smoke-test the native Windows HUD window":
-            "the release executable must open a real native window in CI",
-        "CodexMonitorWindowRuntimeSmokeTests.exe":
-            "the dedicated native window smoke binary is executed explicitly",
+        "ctest --test-dir windows/out/build -C Release --output-on-failure":
+            "the suite that contains the native window smoke test runs in CI",
     }
     for token, reason in ci_branch_contracts.items():
         require(WINDOWS_WORKFLOW, token, reason)
