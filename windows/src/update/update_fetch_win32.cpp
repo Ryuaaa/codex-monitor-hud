@@ -20,7 +20,7 @@ namespace codex_monitor::update {
 namespace {
 
 #ifndef CODEX_MONITOR_WINDOWS_VERSION
-#define CODEX_MONITOR_WINDOWS_VERSION "0.3.1"
+#define CODEX_MONITOR_WINDOWS_VERSION "1.1.0"
 #endif
 #define CODEX_MONITOR_WIDEN_IMPL(value) L##value
 #define CODEX_MONITOR_WIDEN(value) CODEX_MONITOR_WIDEN_IMPL(value)

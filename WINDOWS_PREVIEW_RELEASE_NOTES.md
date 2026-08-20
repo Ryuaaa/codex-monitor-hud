@@ -1,12 +1,12 @@
-# Codex Monitor HUD Windows 1.0.0 未签名预览版
+# Codex Monitor HUD Windows 1.1.0 未签名预览版
 
-这是 Windows 10/11 x64 的 1.0.0 功能候选版，供信任本项目并愿意参与测试的用户提前使用。
+这是 Windows 10/11 x64 的 1.1.0 功能预览版，产品版本已与macOS 1.1.0统一，供信任本项目并愿意参与测试的用户提前使用。两个平台共享核心产品方向，平台专属界面和系统能力可能不同。
 
 ## 重要说明
 
 - EXE 和 MSI 尚未获得 SignPath Foundation 可信签名，Windows 会显示“未知发布者”。
 - 该 GitHub Release 标记为预发布，不会被 Codex Monitor HUD 的 Windows 自动更新通道选中。
-- 可信签名完成后，将另行发布 `windows-v1.0.0` 正式版。
+- 可信签名完成后，将另行发布 `windows-v1.1.0` 正式版。
 - 安装或运行前，可使用同名 `.sha256` 文件核对下载内容。
 
 ## 主要功能

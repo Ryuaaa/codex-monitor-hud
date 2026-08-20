@@ -1,6 +1,7 @@
-# Codex Monitor HUD Windows 1.0.0
+# Codex Monitor HUD Windows 1.1.0
 
-Windows 1.0 is the first stable Windows x64 release. It is a native Win32 and
+Windows 1.1 is the first stable Windows x64 release, aligned with the macOS 1.1
+product version. It is a native Win32 and
 C++17 desktop HUD with no embedded browser engine.
 
 ## Highlights
@@ -29,4 +30,3 @@ C++17 desktop HUD with no embedded browser engine.
 - Signature, checksum, publisher-pin, MSI identity, and tamper-rejection tests.
 
 System requirement: Windows 10 or Windows 11 x64. Windows ARM64 is not yet supported.
-

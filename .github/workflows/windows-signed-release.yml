@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: Existing Windows tag, for example windows-v1.0.0
+        description: Existing Windows tag, for example windows-v1.1.0
         required: true
         type: string
 

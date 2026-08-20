@@ -14,4 +14,4 @@
 - 性能历史不保存额度、订阅、Token用量或对话内容。
 - 安装脚本只写入用户的 `~/Applications`、`~/Library/LaunchAgents` 和 `~/Library/Application Support/CodexSystemMonitor`。
 - macOS 1.0及后续正式更新包必须同时通过SHA-256、应用身份、版本、Developer ID代码签名和macOS安全评估；未经过Apple公证的包不会被应用内更新器安装。
-- Windows 1.0及后续正式更新包必须通过SHA-256、固定发布者Authenticode签名、MSI身份、版本和安装后EXE身份核验；未签名、发布者不匹配或身份不匹配的安装包不会被一键更新器执行。
+- Windows 1.1及后续正式更新包必须通过SHA-256、固定发布者Authenticode签名、MSI身份、版本和安装后EXE身份核验；未签名、发布者不匹配或身份不匹配的安装包不会被一键更新器执行。

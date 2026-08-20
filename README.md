@@ -1,6 +1,6 @@
 # Codex 电脑轻量监测器
 
-> macOS正式版：1.1.0，使用Developer ID签名并通过Apple公证。Windows x64的1.0.0未签名预览版已通过GitHub Windows虚拟机的编译、完整测试、安装、卸载和旧版升级验证；正式安装包仍在等待SignPath.io与SignPath Foundation可信签名。
+> macOS正式版：1.1.0，使用Developer ID签名并通过Apple公证。Windows x64的1.1.0未签名预览版已通过GitHub Windows虚拟机的编译、完整测试、安装、卸载和旧版升级验证；正式安装包仍在等待SignPath.io与SignPath Foundation可信签名。
 
 这是一个常驻在电脑屏幕角落的原生三页面悬浮窗：主页可自由组合Codex和电脑模块，Codex页显示账户额度、订阅与Token用量，电脑性能页用来快速判断电脑是否吃紧、是否主要由 Codex 引起、瓶颈在 CPU 还是内存。macOS版使用AppKit，Windows版使用Win32 + C++17；两者都不嵌入网页浏览器引擎。
 
@@ -82,7 +82,7 @@ Token增量缓存和额度预测样本位于：
 ## 系统要求
 
 - macOS正式版：macOS 15或更高版本，支持Apple芯片和Intel处理器；从源码构建需要Xcode Command Line Tools。
-- Windows候选版：Windows 10/11 x64；暂不支持ARM64。
+- Windows 1.1.0预览版：Windows 10/11 x64；暂不支持ARM64。
 - 电脑性能监控可独立工作；Codex额度、订阅和用量需要本机安装并登录ChatGPT桌面版、Codex桌面版或Codex命令行工具。
 
 ## 安装或更新
@@ -90,9 +90,11 @@ Token增量缓存和额度预测样本位于：
 不想自行构建时，可从GitHub发布页下载：
 
 - [macOS 1.1.0](https://github.com/Ryuaaa/codex-monitor-hud/releases/tag/v1.1.0)：`Codex-Monitor-HUD.app.zip`。解压后把应用移到“应用程序”文件夹并打开；文件已经Developer ID签名并通过Apple公证。
-- [Windows 1.0.0未签名预览版](https://github.com/Ryuaaa/codex-monitor-hud/releases/tag/windows-preview-v1.0.0)：可下载便携ZIP和MSI安装包；Windows会显示“未知发布者”。该预发布不进入应用内自动更新通道。Windows 1.0.0正式安装包会在可信签名完成后发布。
+- [Windows 1.1.0未签名预览版](https://github.com/Ryuaaa/codex-monitor-hud/releases/tag/windows-preview-v1.1.0)：可下载便携ZIP和MSI安装包；Windows会显示“未知发布者”。该预发布不进入应用内自动更新通道。Windows 1.1.0正式安装包会在可信签名完成后发布。
 
 macOS 与 Windows 使用独立更新通道：macOS 读取 `v版本号`，Windows 读取 `windows-v版本号`。两个平台不会把对方的发布当成自己的新版。
+
+从1.1.0起，macOS与Windows尽量使用相同的产品版本号；平台专属功能、签名状态和发布进度通过发布说明与独立标签表达，不再通过降低Windows版本号表达。
 
 Windows正式版的EXE和MSI将使用SignPath.io与SignPath Foundation公开可信签名；只有来自全绿公开GitHub Windows流水线并通过签名验收的安装包才会发布。一键更新会核验SHA-256、固定发布者、MSI身份、版本和安装后的EXE身份。完整Windows说明见[`windows/README.md`](windows/README.md)。
 

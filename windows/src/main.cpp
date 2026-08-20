@@ -62,7 +62,7 @@ constexpr wchar_t kWindowTitle[] = L"Codex Monitor HUD";
 constexpr wchar_t kSingletonName[] = L"Local\\CodexMonitorHUDWindowsFoundation";
 
 #ifndef CODEX_MONITOR_WINDOWS_VERSION
-#define CODEX_MONITOR_WINDOWS_VERSION "0.3.1"
+#define CODEX_MONITOR_WINDOWS_VERSION "1.1.0"
 #endif
 constexpr char kApplicationVersion[] = CODEX_MONITOR_WINDOWS_VERSION;
 
