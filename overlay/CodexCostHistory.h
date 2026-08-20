@@ -11,6 +11,10 @@ FOUNDATION_EXPORT NSDictionary<NSString *, id> *CodexCostEventsFromJSONLLines(NS
 FOUNDATION_EXPORT NSDictionary<NSString *, id> *CodexAggregateCostEvents(NSArray<NSDictionary<NSString *, id> *> *events,
                                                                           NSDate *now,
                                                                           BOOL scanIncomplete);
+FOUNDATION_EXPORT NSDictionary<NSString *, id> *CodexTokenWindowSummary(NSArray<NSDictionary<NSString *, id> *> *buckets,
+                                                                         NSTimeInterval windowStart,
+                                                                         NSTimeInterval windowEnd,
+                                                                         NSTimeInterval trackingStartedAt);
 FOUNDATION_EXPORT NSDictionary<NSString *, id> *CodexScanCostHistoryAtHome(NSURL *codexHome,
                                                                             NSURL *cacheURL,
                                                                             NSURL *trackingStartURL,
@@ -21,6 +25,11 @@ FOUNDATION_EXPORT NSDictionary<NSString *, id> *CodexQuotaForecastFromSamples(NS
                                                                                double currentRemaining,
                                                                                NSTimeInterval currentResetAt,
                                                                                NSDate *now);
+FOUNDATION_EXPORT NSDictionary<NSString *, id> *CodexWeeklyConsumptionFromSamples(NSArray<NSDictionary<NSString *, id> *> *samples,
+                                                                                   double currentRemaining,
+                                                                                   NSTimeInterval currentResetAt,
+                                                                                   NSString *mode,
+                                                                                   NSDate *now);
 FOUNDATION_EXPORT NSDictionary<NSString *, id> *CodexUpdateQuotaForecastHistory(NSURL *historyURL,
                                                                                  NSDictionary<NSString *, id> *sample,
                                                                                  NSDate *now);

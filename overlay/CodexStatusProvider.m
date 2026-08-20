@@ -506,18 +506,44 @@ NSDictionary<NSString *, id> *CodexCalendarUsage(NSArray *buckets, NSDate *now) 
     NSDictionary *buckets = [result[@"rateLimitsByLimitId"] isKindOfClass:NSDictionary.class] ? result[@"rateLimitsByLimitId"] : nil;
     NSDictionary *rate = [buckets[@"codex"] isKindOfClass:NSDictionary.class] ? buckets[@"codex"] : result[@"rateLimits"];
     if (![rate isKindOfClass:NSDictionary.class]) {
-        self.snapshot.statusText = @"额度当前未返回";
+        NSTimeInterval now = NSDate.date.timeIntervalSince1970;
+        BOOL retained = NO;
+        if (self.snapshot.fiveHourAvailable && self.snapshot.fiveHourResetAt > now) {
+            self.snapshot.fiveHourDataState = @"previous";
+            retained = YES;
+        } else if (self.snapshot.fiveHourAvailable) {
+            self.snapshot.fiveHourAvailable = NO;
+            self.snapshot.fiveHourDataState = @"expired";
+        }
+        if (self.snapshot.weeklyAvailable && self.snapshot.weeklyResetAt > now) {
+            self.snapshot.weeklyDataState = @"previous";
+            retained = YES;
+        } else if (self.snapshot.weeklyAvailable) {
+            self.snapshot.weeklyAvailable = NO;
+            self.snapshot.weeklyDataState = @"expired";
+        }
+        self.snapshot.quotaErrorText = retained ? @"本轮未返回，显示上次数据" : @"额度当前未返回";
+        self.snapshot.quotaAvailable = retained;
+        self.snapshot.statusText = self.snapshot.quotaErrorText;
         [self notifyUpdate];
         return;
     }
-    self.snapshot.quotaAvailable = YES;
-    self.snapshot.quotaUpdatedAt = NSDate.date.timeIntervalSince1970;
-    self.snapshot.quotaErrorText = nil;
-    self.snapshot.fiveHourAvailable = NO;
-    self.snapshot.weeklyAvailable = NO;
+    NSTimeInterval now = NSDate.date.timeIntervalSince1970;
+    BOOL previousFiveAvailable = self.snapshot.fiveHourAvailable;
+    BOOL previousWeeklyAvailable = self.snapshot.weeklyAvailable;
+    BOOL receivedFive = NO;
+    BOOL receivedWeekly = NO;
+    double fiveRemaining = 0, fiveDuration = 0, weeklyRemaining = 0, weeklyDuration = 0;
+    NSTimeInterval fiveReset = 0, weeklyReset = 0;
     self.snapshot.modelQuotaAvailable = NO;
+    self.snapshot.rateLimitReachedType = [rate[@"rateLimitReachedType"] isKindOfClass:NSString.class] ? rate[@"rateLimitReachedType"] : @"";
+    NSDictionary *resetCredits = [result[@"rateLimitResetCredits"] isKindOfClass:NSDictionary.class] ? result[@"rateLimitResetCredits"] : nil;
+    NSNumber *resetCount = [resetCredits[@"availableCount"] isKindOfClass:NSNumber.class] ? resetCredits[@"availableCount"] : nil;
+    self.snapshot.rateLimitResetCreditsAvailable = resetCount != nil;
+    self.snapshot.rateLimitResetCreditsCount = MAX(0, resetCount.integerValue);
     NSString *plan = [rate[@"planType"] isKindOfClass:NSString.class] ? rate[@"planType"] : nil;
     if (plan.length > 0) { self.snapshot.accountAvailable = YES; self.snapshot.planType = plan; }
+    NSMutableArray<NSDictionary<NSString *, id> *> *quotaRows = [NSMutableArray array];
     for (id value in @[rate[@"primary"] ?: NSNull.null, rate[@"secondary"] ?: NSNull.null]) {
         if (![value isKindOfClass:NSDictionary.class]) continue;
         NSDictionary *window = value;
@@ -527,33 +553,83 @@ NSDictionary<NSString *, id> *CodexCalendarUsage(NSArray *buckets, NSDate *now) 
         double remaining = MAX(0, MIN(100, 100.0 - used.doubleValue));
         NSTimeInterval reset = [window[@"resetsAt"] doubleValue];
         if ([duration isKindOfClass:NSNumber.class] && duration.doubleValue <= 24.0 * 60.0) {
-            self.snapshot.fiveHourAvailable = YES;
-            self.snapshot.fiveHourRemainingPercent = remaining;
-            self.snapshot.fiveHourResetAt = reset;
+            receivedFive = YES; fiveRemaining = remaining; fiveReset = reset; fiveDuration = duration.doubleValue;
         } else {
-            self.snapshot.weeklyAvailable = YES;
-            self.snapshot.weeklyRemainingPercent = remaining;
-            self.snapshot.weeklyResetAt = reset;
+            receivedWeekly = YES; weeklyRemaining = remaining; weeklyReset = reset; weeklyDuration = duration.doubleValue;
         }
     }
     for (NSString *key in [buckets.allKeys sortedArrayUsingSelector:@selector(localizedCaseInsensitiveCompare:)]) {
-        if ([key isEqualToString:@"codex"]) continue;
         NSDictionary *bucket = [buckets[key] isKindOfClass:NSDictionary.class] ? buckets[key] : nil;
         if (!bucket) continue;
-        NSDictionary *window = [bucket[@"primary"] isKindOfClass:NSDictionary.class] ? bucket[@"primary"] : ([bucket[@"secondary"] isKindOfClass:NSDictionary.class] ? bucket[@"secondary"] : nil);
-        NSNumber *used = [window[@"usedPercent"] isKindOfClass:NSNumber.class] ? window[@"usedPercent"] : nil;
-        if (!used) continue;
-        NSString *name = [bucket[@"limitName"] isKindOfClass:NSString.class] ? bucket[@"limitName"] : key;
-        NSNumber *duration = [window[@"windowDurationMins"] isKindOfClass:NSNumber.class] ? window[@"windowDurationMins"] : nil;
-        self.snapshot.modelQuotaAvailable = YES;
-        self.snapshot.modelQuotaName = name.length > 0 ? name : key;
-        self.snapshot.modelQuotaRemainingPercent = MAX(0, MIN(100, 100.0 - used.doubleValue));
-        self.snapshot.modelQuotaResetAt = [window[@"resetsAt"] doubleValue];
-        self.snapshot.modelQuotaWindowLabel = duration.doubleValue <= 24.0 * 60.0 ? @"短周期" : @"每周";
-        break;
+        NSString *name = [bucket[@"limitName"] isKindOfClass:NSString.class] ? bucket[@"limitName"] : ([key isEqualToString:@"codex"] ? @"Codex" : key);
+        NSInteger slot = 0;
+        for (id value in @[bucket[@"primary"] ?: NSNull.null, bucket[@"secondary"] ?: NSNull.null]) {
+            slot++;
+            if (![value isKindOfClass:NSDictionary.class]) continue;
+            NSDictionary *window = value;
+            NSNumber *used = [window[@"usedPercent"] isKindOfClass:NSNumber.class] ? window[@"usedPercent"] : nil;
+            if (!used) continue;
+            NSNumber *duration = [window[@"windowDurationMins"] isKindOfClass:NSNumber.class] ? window[@"windowDurationMins"] : nil;
+            double remaining = MAX(0, MIN(100, 100.0 - used.doubleValue));
+            [quotaRows addObject:@{
+                @"limitId": key, @"name": name.length > 0 ? name : key,
+                @"slot": @(slot), @"remainingPercent": @(remaining),
+                @"usedPercent": @(MAX(0, MIN(100, used.doubleValue))),
+                @"windowDurationMins": duration ?: @0,
+                @"resetsAt": @([window[@"resetsAt"] doubleValue]),
+                @"reachedType": [bucket[@"rateLimitReachedType"] isKindOfClass:NSString.class] ? bucket[@"rateLimitReachedType"] : @""
+            }];
+            if (![key isEqualToString:@"codex"] && !self.snapshot.modelQuotaAvailable) {
+                self.snapshot.modelQuotaAvailable = YES;
+                self.snapshot.modelQuotaName = name.length > 0 ? name : key;
+                self.snapshot.modelQuotaRemainingPercent = remaining;
+                self.snapshot.modelQuotaResetAt = [window[@"resetsAt"] doubleValue];
+                self.snapshot.modelQuotaWindowLabel = duration.doubleValue <= 24.0 * 60.0 ? @"短周期" : @"每周";
+            }
+        }
     }
-    self.snapshot.updatedAt = NSDate.date.timeIntervalSince1970;
-    self.snapshot.statusText = @"Codex额度已更新";
+    if (quotaRows.count == 0) {
+        NSInteger slot = 0;
+        for (id value in @[rate[@"primary"] ?: NSNull.null, rate[@"secondary"] ?: NSNull.null]) {
+            slot++;
+            if (![value isKindOfClass:NSDictionary.class]) continue;
+            NSDictionary *window = value;
+            NSNumber *used = [window[@"usedPercent"] isKindOfClass:NSNumber.class] ? window[@"usedPercent"] : nil;
+            if (!used) continue;
+            [quotaRows addObject:@{ @"limitId": @"codex", @"name": @"Codex", @"slot": @(slot),
+                                    @"remainingPercent": @(MAX(0, MIN(100, 100.0 - used.doubleValue))),
+                                    @"usedPercent": @(MAX(0, MIN(100, used.doubleValue))),
+                                    @"windowDurationMins": [window[@"windowDurationMins"] isKindOfClass:NSNumber.class] ? window[@"windowDurationMins"] : @0,
+                                    @"resetsAt": @([window[@"resetsAt"] doubleValue]), @"reachedType": self.snapshot.rateLimitReachedType ?: @"" }];
+        }
+    }
+    self.snapshot.rateLimitBuckets = quotaRows;
+    if (receivedFive) {
+        self.snapshot.fiveHourAvailable = YES; self.snapshot.fiveHourRemainingPercent = fiveRemaining;
+        self.snapshot.fiveHourResetAt = fiveReset; self.snapshot.fiveHourWindowDurationMins = fiveDuration;
+        self.snapshot.fiveHourDataState = @"live";
+    } else if (previousFiveAvailable && self.snapshot.fiveHourResetAt > now) {
+        self.snapshot.fiveHourAvailable = YES; self.snapshot.fiveHourDataState = @"previous";
+    } else {
+        self.snapshot.fiveHourAvailable = NO; self.snapshot.fiveHourDataState = previousFiveAvailable ? @"expired" : @"unavailable";
+    }
+    if (receivedWeekly) {
+        self.snapshot.weeklyAvailable = YES; self.snapshot.weeklyRemainingPercent = weeklyRemaining;
+        self.snapshot.weeklyResetAt = weeklyReset; self.snapshot.weeklyWindowDurationMins = weeklyDuration;
+        self.snapshot.weeklyDataState = @"live";
+    } else if (previousWeeklyAvailable && self.snapshot.weeklyResetAt > now) {
+        self.snapshot.weeklyAvailable = YES; self.snapshot.weeklyDataState = @"previous";
+    } else {
+        self.snapshot.weeklyAvailable = NO; self.snapshot.weeklyDataState = previousWeeklyAvailable ? @"expired" : @"unavailable";
+    }
+    BOOL receivedAny = receivedFive || receivedWeekly || quotaRows.count > 0;
+    self.snapshot.quotaAvailable = receivedAny || self.snapshot.fiveHourAvailable || self.snapshot.weeklyAvailable;
+    if (receivedAny) self.snapshot.quotaUpdatedAt = now;
+    BOOL retainedPrevious = [self.snapshot.fiveHourDataState isEqualToString:@"previous"] ||
+                            [self.snapshot.weeklyDataState isEqualToString:@"previous"];
+    self.snapshot.quotaErrorText = retainedPrevious ? @"本轮部分额度未返回，显示上次数据" : nil;
+    self.snapshot.updatedAt = now;
+    self.snapshot.statusText = retainedPrevious ? self.snapshot.quotaErrorText : @"Codex额度已更新";
     [self notifyUpdate];
     if (self.quotaForecastEnabled) {
         NSMutableDictionary<NSString *, id> *sample = [NSMutableDictionary dictionary];
@@ -596,6 +672,9 @@ NSDictionary<NSString *, id> *CodexCalendarUsage(NSArray *buckets, NSDate *now) 
     self.snapshot.latestUsageDate = usage[@"latestDate"];
     self.snapshot.latestUsageTokens = [usage[@"latestTokens"] longLongValue];
     self.snapshot.lifetimeTokens = [summary[@"lifetimeTokens"] longLongValue];
+    NSNumber *peakDaily = [summary[@"peakDailyTokens"] isKindOfClass:NSNumber.class] ? summary[@"peakDailyTokens"] : nil;
+    self.snapshot.peakDailyTokensAvailable = peakDaily != nil;
+    self.snapshot.peakDailyTokens = peakDaily.longLongValue;
     self.snapshot.currentStreakDays = [summary[@"currentStreakDays"] integerValue];
     NSNumber *longestTurn = [summary[@"longestRunningTurnSec"] isKindOfClass:NSNumber.class] ? summary[@"longestRunningTurnSec"] : nil;
     self.snapshot.longestRunningTurnAvailable = longestTurn != nil;
@@ -638,6 +717,8 @@ NSDictionary<NSString *, id> *CodexCalendarUsage(NSArray *buckets, NSDate *now) 
             weakSelf.snapshot.localCostErrorText = [summary[@"error"] length] > 0 ? summary[@"error"] : nil;
             weakSelf.snapshot.localCostScanIncomplete = [summary[@"scanIncomplete"] boolValue];
             weakSelf.snapshot.localCostTrackingStartedAt = [summary[@"trackingStartedAt"] doubleValue];
+            weakSelf.snapshot.localTokenBucketsStartedAt = [summary[@"tokenBucketsStartedAt"] doubleValue];
+            weakSelf.snapshot.localTokenBuckets = [summary[@"tokenBuckets"] isKindOfClass:NSArray.class] ? summary[@"tokenBuckets"] : @[];
             weakSelf.snapshot.localTodayTokens = [summary[@"todayTokens"] longLongValue];
             weakSelf.snapshot.localSevenDayTokens = [summary[@"sevenDayTokens"] longLongValue];
             weakSelf.snapshot.localThirtyDayTokens = [summary[@"thirtyDayTokens"] longLongValue];
@@ -669,12 +750,18 @@ NSDictionary<NSString *, id> *CodexCalendarUsage(NSArray *buckets, NSDate *now) 
             weakSelf.quotaForecastInProgress = NO;
             NSDictionary *five = [forecast[@"fiveHour"] isKindOfClass:NSDictionary.class] ? forecast[@"fiveHour"] : nil;
             NSDictionary *weekly = [forecast[@"weekly"] isKindOfClass:NSDictionary.class] ? forecast[@"weekly"] : nil;
+            NSDictionary *weeklyRolling = [forecast[@"weeklyRolling24h"] isKindOfClass:NSDictionary.class] ? forecast[@"weeklyRolling24h"] : nil;
+            NSDictionary *weeklyNaturalDay = [forecast[@"weeklyNaturalDay"] isKindOfClass:NSDictionary.class] ? forecast[@"weeklyNaturalDay"] : nil;
             weakSelf.snapshot.fiveHourForecastAvailable = [five[@"available"] boolValue];
             weakSelf.snapshot.fiveHourForecastHeadline = [five[@"headline"] isKindOfClass:NSString.class] ? five[@"headline"] : @"";
             weakSelf.snapshot.fiveHourForecastDetail = [five[@"detail"] isKindOfClass:NSString.class] ? five[@"detail"] : @"";
             weakSelf.snapshot.weeklyForecastAvailable = [weekly[@"available"] boolValue];
             weakSelf.snapshot.weeklyForecastHeadline = [weekly[@"headline"] isKindOfClass:NSString.class] ? weekly[@"headline"] : @"";
             weakSelf.snapshot.weeklyForecastDetail = [weekly[@"detail"] isKindOfClass:NSString.class] ? weekly[@"detail"] : @"";
+            weakSelf.snapshot.weeklyRolling24hConsumptionAvailable = [weeklyRolling[@"available"] boolValue];
+            weakSelf.snapshot.weeklyRolling24hConsumedPercent = [weeklyRolling[@"consumedPercent"] doubleValue];
+            weakSelf.snapshot.weeklyNaturalDayConsumptionAvailable = [weeklyNaturalDay[@"available"] boolValue];
+            weakSelf.snapshot.weeklyNaturalDayConsumedPercent = [weeklyNaturalDay[@"consumedPercent"] doubleValue];
             [weakSelf notifyUpdate];
             NSDictionary *pending = weakSelf.pendingQuotaForecastSample;
             weakSelf.pendingQuotaForecastSample = nil;

@@ -5,6 +5,7 @@
 #import "OpenAIServiceStatus.h"
 #import "HUDView.h"
 #import "UpdateManager.h"
+#import <UserNotifications/UserNotifications.h>
 #import <errno.h>
 #import <fcntl.h>
 #import <sys/file.h>
@@ -75,6 +76,48 @@ static NSString *FormatTokens(long long tokens) {
     if (tokens >= 1000000LL) return [NSString stringWithFormat:@"%.2fM", tokens / 1000000.0];
     if (tokens >= 1000LL) return [NSString stringWithFormat:@"%.1fK", tokens / 1000.0];
     return [NSString stringWithFormat:@"%lld", tokens];
+}
+
+static NSString *FormatQuotaWindow(double durationMins) {
+    NSInteger minutes = (NSInteger)llround(durationMins);
+    if (minutes <= 0) return @"周期未返回";
+    if (minutes == 300) return @"5小时";
+    if (minutes == 10080) return @"每周";
+    if (minutes % 1440 == 0) return [NSString stringWithFormat:@"%ld天", (long)(minutes / 1440)];
+    if (minutes % 60 == 0) return [NSString stringWithFormat:@"%ld小时", (long)(minutes / 60)];
+    return [NSString stringWithFormat:@"%ld分钟", (long)minutes];
+}
+
+static BOOL HUDWeeklyAlertEligible(BOOL enabled,
+                                   BOOL weeklyAvailable,
+                                   NSString *weeklyDataState,
+                                   NSTimeInterval weeklyResetAt,
+                                   NSTimeInterval now,
+                                   BOOL consumptionAvailable,
+                                   double consumedPercent,
+                                   double thresholdPercent) {
+    return enabled && weeklyAvailable && [weeklyDataState isEqualToString:@"live"] &&
+           weeklyResetAt > now && consumptionAvailable && consumedPercent >= thresholdPercent;
+}
+
+static NSString *HUDWeeklyAlertCycleKey(NSTimeInterval weeklyResetAt) {
+    return [NSString stringWithFormat:@"%.0f", weeklyResetAt];
+}
+
+static void HUDApplyQuotaDataState(HUDQuotaCard *card, NSString *state, BOOL available, double remaining, NSTimeInterval resetAt, NSString *reachedType) {
+    if ([state isEqualToString:@"previous"] && available) {
+        card.windowLabel.stringValue = @"上次数据";
+        card.resetLabel.stringValue = [NSString stringWithFormat:@"本轮未返回 · %@", FormatReset(resetAt)];
+    } else if ([state isEqualToString:@"expired"]) {
+        card.windowLabel.stringValue = @"已过期";
+        card.valueLabel.stringValue = @"上次数据已过期";
+        card.valueLabel.font = [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold];
+        card.valueLabel.textColor = NSColor.systemOrangeColor;
+        card.resetLabel.stringValue = @"等待官方返回新周期";
+    } else if (available && reachedType.length > 0 && remaining <= 0.01) {
+        card.windowLabel.stringValue = @"官方触顶";
+        card.valueLabel.textColor = NSColor.systemRedColor;
+    }
 }
 
 static NSString *FormatUSD(double value) {
@@ -159,7 +202,7 @@ static NSString *FormatModuleState(NSTimeInterval timestamp, NSString *error, NS
     return FormatAge(timestamp);
 }
 
-static NSArray<NSString *> *HUDDefaultHomeCodexOrder(void) { return @[@"activity", @"recent", @"quota", @"insights", @"cost", @"forecast", @"service", @"history"]; }
+static NSArray<NSString *> *HUDDefaultHomeCodexOrder(void) { return @[@"activity", @"recent", @"quota", @"insights", @"tokenWindows", @"cost", @"forecast", @"service", @"quotaDetails", @"history"]; }
 static NSArray<NSString *> *HUDDefaultHomeComputerOrder(void) { return @[@"summary", @"attribution", @"memory", @"trend"]; }
 static NSTimeInterval HUDCodexActivityRefreshInterval(NSInteger activeTaskCount) { return activeTaskCount > 0 ? 5.0 : 20.0; }
 
@@ -267,7 +310,14 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
 @property(nonatomic) BOOL showUsage;
 @property(nonatomic) BOOL showModelQuota;
 @property(nonatomic) BOOL showLocalCost;
+@property(nonatomic) BOOL showTokenWindows;
 @property(nonatomic) BOOL showQuotaForecast;
+@property(nonatomic) BOOL showQuotaDetails;
+@property(nonatomic) BOOL showPeakDailyTokens;
+@property(nonatomic) BOOL weeklyConsumptionAlertEnabled;
+@property(nonatomic) double weeklyConsumptionAlertThreshold;
+@property(nonatomic, copy) NSString *weeklyConsumptionAlertMode;
+@property(nonatomic) BOOL weeklyConsumptionSystemNotificationEnabled;
 @property(nonatomic) BOOL showServiceStatus;
 @property(nonatomic) BOOL showTaskActivity;
 @property(nonatomic) BOOL showRecentTasks;
@@ -283,7 +333,10 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
 @property(nonatomic) BOOL homeShowUsage;
 @property(nonatomic) BOOL homeShowModelQuota;
 @property(nonatomic) BOOL homeShowLocalCost;
+@property(nonatomic) BOOL homeShowTokenWindows;
 @property(nonatomic) BOOL homeShowQuotaForecast;
+@property(nonatomic) BOOL homeShowQuotaDetails;
+@property(nonatomic) BOOL homeShowPeakDailyTokens;
 @property(nonatomic) BOOL homeShowServiceStatus;
 @property(nonatomic) BOOL homeShowTaskActivity;
 @property(nonatomic) BOOL homeShowRecentTasks;
@@ -310,6 +363,7 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
 @property(nonatomic) NSTimeInterval lastServiceStatusFetchAt;
 @property(nonatomic, strong) NSTextField *updateStatusLabel;
 @property(nonatomic, strong) NSButton *updateButton;
+@property(nonatomic, strong) NSTextField *weeklyConsumptionThresholdLabel;
 @property(nonatomic) BOOL updateCheckInProgress;
 @property(nonatomic) BOOL updateInstalling;
 - (void)showSettingsWindow:(id)sender;
@@ -322,6 +376,10 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
 - (void)scheduleCodexRefreshTimer;
 - (void)startServiceStatusIfNeeded;
 - (void)updateServiceStatusDisplay;
+- (void)updateTokenWindowDisplay:(CodexStatusSnapshot *)snapshot;
+- (void)updateQuotaDetailsDisplay:(CodexStatusSnapshot *)snapshot;
+- (void)evaluateWeeklyConsumptionAlert:(CodexStatusSnapshot *)snapshot;
+- (void)requestWeeklyNotificationPermissionIfNeeded;
 - (void)applyPositionLock;
 - (BOOL)systemDataNeeded;
 - (void)performUpdateCheckManual:(BOOL)manual;
@@ -375,8 +433,17 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
     self.showUsage = [d objectForKey:@"showUsage"] ? [d boolForKey:@"showUsage"] : YES;
     self.showModelQuota = [d objectForKey:@"showModelQuota"] ? [d boolForKey:@"showModelQuota"] : NO;
     self.showLocalCost = [d objectForKey:@"showLocalCost"] ? [d boolForKey:@"showLocalCost"] : YES;
+    self.showTokenWindows = [d objectForKey:@"showTokenWindows"] ? [d boolForKey:@"showTokenWindows"] : YES;
     self.showQuotaForecast = [d objectForKey:@"showQuotaForecast"] ? [d boolForKey:@"showQuotaForecast"] : YES;
-    self.showServiceStatus = [d objectForKey:@"showServiceStatus"] ? [d boolForKey:@"showServiceStatus"] : YES;
+    self.showQuotaDetails = [d objectForKey:@"showQuotaDetails"] ? [d boolForKey:@"showQuotaDetails"] : NO;
+    self.showPeakDailyTokens = [d objectForKey:@"showPeakDailyTokens"] ? [d boolForKey:@"showPeakDailyTokens"] : NO;
+    self.weeklyConsumptionAlertEnabled = [d objectForKey:@"weeklyConsumptionAlertEnabled"] ? [d boolForKey:@"weeklyConsumptionAlertEnabled"] : NO;
+    self.weeklyConsumptionAlertThreshold = [d objectForKey:@"weeklyConsumptionAlertThreshold"] ? [d doubleForKey:@"weeklyConsumptionAlertThreshold"] : 15.0;
+    self.weeklyConsumptionAlertThreshold = MAX(1.0, MIN(100.0, self.weeklyConsumptionAlertThreshold));
+    self.weeklyConsumptionAlertMode = [d stringForKey:@"weeklyConsumptionAlertMode"] ?: @"rolling24h";
+    if (![@[@"rolling24h", @"naturalDay"] containsObject:self.weeklyConsumptionAlertMode]) self.weeklyConsumptionAlertMode = @"rolling24h";
+    self.weeklyConsumptionSystemNotificationEnabled = [d objectForKey:@"weeklyConsumptionSystemNotificationEnabled"] ? [d boolForKey:@"weeklyConsumptionSystemNotificationEnabled"] : NO;
+    self.showServiceStatus = [d objectForKey:@"showServiceStatus"] ? [d boolForKey:@"showServiceStatus"] : NO;
     self.showTaskActivity = [d objectForKey:@"showTaskActivity"] ? [d boolForKey:@"showTaskActivity"] : YES;
     self.showRecentTasks = [d objectForKey:@"showRecentTasks"] ? [d boolForKey:@"showRecentTasks"] : YES;
     self.showLongestTurn = [d objectForKey:@"showLongestTurn"] ? [d boolForKey:@"showLongestTurn"] : NO;
@@ -391,7 +458,10 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
     self.homeShowUsage = [d objectForKey:@"homeShowUsage"] ? [d boolForKey:@"homeShowUsage"] : YES;
     self.homeShowModelQuota = [d objectForKey:@"homeShowModelQuota"] ? [d boolForKey:@"homeShowModelQuota"] : NO;
     self.homeShowLocalCost = [d objectForKey:@"homeShowLocalCost"] ? [d boolForKey:@"homeShowLocalCost"] : NO;
+    self.homeShowTokenWindows = [d objectForKey:@"homeShowTokenWindows"] ? [d boolForKey:@"homeShowTokenWindows"] : NO;
     self.homeShowQuotaForecast = [d objectForKey:@"homeShowQuotaForecast"] ? [d boolForKey:@"homeShowQuotaForecast"] : NO;
+    self.homeShowQuotaDetails = [d objectForKey:@"homeShowQuotaDetails"] ? [d boolForKey:@"homeShowQuotaDetails"] : NO;
+    self.homeShowPeakDailyTokens = [d objectForKey:@"homeShowPeakDailyTokens"] ? [d boolForKey:@"homeShowPeakDailyTokens"] : NO;
     self.homeShowServiceStatus = [d objectForKey:@"homeShowServiceStatus"] ? [d boolForKey:@"homeShowServiceStatus"] : NO;
     self.homeShowTaskActivity = [d objectForKey:@"homeShowTaskActivity"] ? [d boolForKey:@"homeShowTaskActivity"] : YES;
     self.homeShowRecentTasks = [d objectForKey:@"homeShowRecentTasks"] ? [d boolForKey:@"homeShowRecentTasks"] : NO;
@@ -479,17 +549,19 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
 
 - (CGFloat)homePanelHeight {
     CGFloat height = 52;
-    BOOL hasCodex = self.homeShowTaskActivity || self.homeShowRecentTasks || self.homeShowFiveHour || self.homeShowWeekly || self.homeShowPlan || self.homeShowUsage || self.homeShowModelQuota || self.homeShowLocalCost || self.homeShowQuotaForecast || self.homeShowServiceStatus || self.homeShowLongestTurn || self.homeShowLongestStreak;
+    BOOL hasCodex = self.homeShowTaskActivity || self.homeShowRecentTasks || self.homeShowFiveHour || self.homeShowWeekly || self.homeShowPlan || self.homeShowUsage || self.homeShowModelQuota || self.homeShowTokenWindows || self.homeShowLocalCost || self.homeShowQuotaForecast || self.homeShowServiceStatus || self.homeShowQuotaDetails || self.homeShowLongestTurn || self.homeShowLongestStreak || self.homeShowPeakDailyTokens;
     BOOL hasComputer = self.homeShowDiagnosis || self.homeShowSystem || self.homeShowAttribution || self.homeShowMemoryApps || self.homeShowTrend;
     if (hasCodex) height += 26;
     if (self.homeShowTaskActivity) height += 66;
     if (self.homeShowRecentTasks) height += 94;
     if (self.homeShowFiveHour || self.homeShowWeekly) height += 82;
     if (self.homeShowPlan || self.homeShowUsage || self.homeShowModelQuota) height += 66;
+    if (self.homeShowTokenWindows) height += 66;
     if (self.homeShowLocalCost) height += 66;
     if (self.homeShowQuotaForecast) height += 66;
     if (self.homeShowServiceStatus) height += 66;
-    if (self.homeShowLongestTurn || self.homeShowLongestStreak) height += 66;
+    if (self.homeShowQuotaDetails) height += MAX(66, 48 + self.codexProvider.snapshot.rateLimitBuckets.count * 14);
+    if (self.homeShowLongestTurn || self.homeShowLongestStreak || self.homeShowPeakDailyTokens) height += 66;
     if (hasComputer) height += 26;
     if (self.homeShowDiagnosis || self.homeShowSystem) height += 66;
     if (self.homeShowAttribution) height += 25;
@@ -503,12 +575,14 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
     if (self.collapsed) return NSMakeSize(430, 54);
     BOOL hasQuota = self.showFiveHourQuota || self.showWeeklyQuota || self.showModelQuota;
     BOOL hasInsights = self.showPlan || self.showUsage || self.showModelQuota;
-    CGFloat codexHeight = 260 + (self.showTaskActivity ? 66 : 0) + (self.showRecentTasks ? 94 : 0) + ((self.showLongestTurn || self.showLongestStreak) ? 66 : 0);
+    CGFloat codexHeight = 260 + (self.showTaskActivity ? 66 : 0) + (self.showRecentTasks ? 94 : 0) + ((self.showLongestTurn || self.showLongestStreak || self.showPeakDailyTokens) ? 66 : 0);
     if (!hasQuota) codexHeight -= 82;
     if (!hasInsights) codexHeight -= 66;
+    if (self.showTokenWindows) codexHeight += 66;
     if (self.showLocalCost) codexHeight += 66;
     if (self.showQuotaForecast) codexHeight += 66;
     if (self.showServiceStatus) codexHeight += 66;
+    if (self.showQuotaDetails) codexHeight += MAX(66, 48 + self.codexProvider.snapshot.rateLimitBuckets.count * 14);
     codexHeight = MAX(170, codexHeight);
     CGFloat height = self.currentPage == 0 ? [self homePanelHeight] : (self.currentPage == 1 ? codexHeight : (self.showMemoryApps ? 421 : 303));
     if (!self.compact && self.currentPage != 0) height += 110;
@@ -598,12 +672,15 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
     [self.hudView setUsageVisible:self.showUsage];
     [self.hudView setModelQuotaVisible:NO];
     [self.hudView setLocalCostVisible:self.showLocalCost];
+    [self.hudView setTokenWindowsVisible:self.showTokenWindows];
     [self.hudView setQuotaForecastVisible:self.showQuotaForecast];
     [self.hudView setServiceStatusVisible:self.showServiceStatus];
+    [self.hudView setQuotaDetailsVisible:self.showQuotaDetails];
     [self.hudView setTaskActivityVisible:self.showTaskActivity];
     [self.hudView setRecentTasksVisible:self.showRecentTasks];
     [self.hudView setLongestTurnVisible:self.showLongestTurn];
     [self.hudView setLongestStreakVisible:self.showLongestStreak];
+    [self.hudView setPeakDailyTokensVisible:self.showPeakDailyTokens];
     [self.hudView setSystemVisible:self.showSystem];
     [self.hudView setAttributionVisible:self.showAttribution];
     [self.hudView setTrendVisible:self.showTrend];
@@ -614,12 +691,15 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
     [self.hudView setHomeUsageVisible:self.homeShowUsage];
     [self.hudView setHomeModelQuotaVisible:NO];
     [self.hudView setHomeLocalCostVisible:self.homeShowLocalCost];
+    [self.hudView setHomeTokenWindowsVisible:self.homeShowTokenWindows];
     [self.hudView setHomeQuotaForecastVisible:self.homeShowQuotaForecast];
     [self.hudView setHomeServiceStatusVisible:self.homeShowServiceStatus];
+    [self.hudView setHomeQuotaDetailsVisible:self.homeShowQuotaDetails];
     [self.hudView setHomeTaskActivityVisible:self.homeShowTaskActivity];
     [self.hudView setHomeRecentTasksVisible:self.homeShowRecentTasks];
     [self.hudView setHomeLongestTurnVisible:self.homeShowLongestTurn];
     [self.hudView setHomeLongestStreakVisible:self.homeShowLongestStreak];
+    [self.hudView setHomePeakDailyTokensVisible:self.homeShowPeakDailyTokens];
     [self.hudView setHomeDiagnosisVisible:self.homeShowDiagnosis];
     [self.hudView setHomeSystemVisible:self.homeShowSystem];
     [self.hudView setHomeAttributionVisible:self.homeShowAttribution];
@@ -696,9 +776,9 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
 
 - (void)startCodexProviderIfNeeded {
     BOOL needsActivity = self.showTaskActivity || self.homeShowTaskActivity;
-    BOOL needsCostHistory = self.showLocalCost || self.homeShowLocalCost;
-    BOOL needsForecast = self.showQuotaForecast || self.homeShowQuotaForecast;
-    BOOL needsAccountData = needsForecast || self.showFiveHourQuota || self.showWeeklyQuota || self.showPlan || self.showUsage || self.showModelQuota || self.showRecentTasks || self.showLongestTurn || self.showLongestStreak || self.homeShowFiveHour || self.homeShowWeekly || self.homeShowPlan || self.homeShowUsage || self.homeShowModelQuota || self.homeShowRecentTasks || self.homeShowLongestTurn || self.homeShowLongestStreak;
+    BOOL needsCostHistory = self.showLocalCost || self.homeShowLocalCost || self.showTokenWindows || self.homeShowTokenWindows;
+    BOOL needsForecast = self.showQuotaForecast || self.homeShowQuotaForecast || self.weeklyConsumptionAlertEnabled;
+    BOOL needsAccountData = needsForecast || self.showTokenWindows || self.homeShowTokenWindows || self.showQuotaDetails || self.homeShowQuotaDetails || self.showFiveHourQuota || self.showWeeklyQuota || self.showPlan || self.showUsage || self.showModelQuota || self.showRecentTasks || self.showLongestTurn || self.showLongestStreak || self.showPeakDailyTokens || self.homeShowFiveHour || self.homeShowWeekly || self.homeShowPlan || self.homeShowUsage || self.homeShowModelQuota || self.homeShowRecentTasks || self.homeShowLongestTurn || self.homeShowLongestStreak || self.homeShowPeakDailyTokens;
     BOOL needsCodexData = needsActivity || needsAccountData || needsCostHistory;
     if (!needsCodexData) { [self.codexProvider stop]; self.codexProvider = nil; [self.codexTimer invalidate]; self.codexTimer = nil; return; }
     if (!self.codexProvider) {
@@ -730,8 +810,8 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
     [self.codexTimer invalidate]; self.codexTimer = nil;
     if (!self.codexProvider) return;
     BOOL needsActivity = self.showTaskActivity || self.homeShowTaskActivity;
-    BOOL needsCostHistory = self.showLocalCost || self.homeShowLocalCost;
-    BOOL needsAccountData = self.showQuotaForecast || self.homeShowQuotaForecast || self.showFiveHourQuota || self.showWeeklyQuota || self.showPlan || self.showUsage || self.showModelQuota || self.showRecentTasks || self.showLongestTurn || self.showLongestStreak || self.homeShowFiveHour || self.homeShowWeekly || self.homeShowPlan || self.homeShowUsage || self.homeShowModelQuota || self.homeShowRecentTasks || self.homeShowLongestTurn || self.homeShowLongestStreak;
+    BOOL needsCostHistory = self.showLocalCost || self.homeShowLocalCost || self.showTokenWindows || self.homeShowTokenWindows;
+    BOOL needsAccountData = self.weeklyConsumptionAlertEnabled || self.showTokenWindows || self.homeShowTokenWindows || self.showQuotaDetails || self.homeShowQuotaDetails || self.showQuotaForecast || self.homeShowQuotaForecast || self.showFiveHourQuota || self.showWeeklyQuota || self.showPlan || self.showUsage || self.showModelQuota || self.showRecentTasks || self.showLongestTurn || self.showLongestStreak || self.showPeakDailyTokens || self.homeShowFiveHour || self.homeShowWeekly || self.homeShowPlan || self.homeShowUsage || self.homeShowModelQuota || self.homeShowRecentTasks || self.homeShowLongestTurn || self.homeShowLongestStreak || self.homeShowPeakDailyTokens;
     NSTimeInterval now = NSDate.date.timeIntervalSince1970;
     NSTimeInterval next = DBL_MAX;
     if (needsActivity) {
@@ -751,8 +831,8 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
     if (!self.codexProvider) return;
     NSTimeInterval now = NSDate.date.timeIntervalSince1970;
     BOOL needsActivity = self.showTaskActivity || self.homeShowTaskActivity;
-    BOOL needsCostHistory = self.showLocalCost || self.homeShowLocalCost;
-    BOOL needsAccountData = self.showQuotaForecast || self.homeShowQuotaForecast || self.showFiveHourQuota || self.showWeeklyQuota || self.showPlan || self.showUsage || self.showModelQuota || self.showRecentTasks || self.showLongestTurn || self.showLongestStreak || self.homeShowFiveHour || self.homeShowWeekly || self.homeShowPlan || self.homeShowUsage || self.homeShowModelQuota || self.homeShowRecentTasks || self.homeShowLongestTurn || self.homeShowLongestStreak;
+    BOOL needsCostHistory = self.showLocalCost || self.homeShowLocalCost || self.showTokenWindows || self.homeShowTokenWindows;
+    BOOL needsAccountData = self.weeklyConsumptionAlertEnabled || self.showTokenWindows || self.homeShowTokenWindows || self.showQuotaDetails || self.homeShowQuotaDetails || self.showQuotaForecast || self.homeShowQuotaForecast || self.showFiveHourQuota || self.showWeeklyQuota || self.showPlan || self.showUsage || self.showModelQuota || self.showRecentTasks || self.showLongestTurn || self.showLongestStreak || self.showPeakDailyTokens || self.homeShowFiveHour || self.homeShowWeekly || self.homeShowPlan || self.homeShowUsage || self.homeShowModelQuota || self.homeShowRecentTasks || self.homeShowLongestTurn || self.homeShowLongestStreak || self.homeShowPeakDailyTokens;
     NSTimeInterval activityInterval = HUDCodexActivityRefreshInterval(self.codexProvider.snapshot.activeTaskCount);
     if (needsActivity && now - self.lastActivityRefreshRequestAt >= activityInterval - 0.5) {
         [self.codexProvider refreshActivity]; self.lastActivityRefreshRequestAt = now;
@@ -1067,15 +1147,15 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
     CodexStatusSnapshot *s = self.codexProvider.snapshot;
     if (!s) { [self updateDetailLabels]; return; }
     NSString *plan = s.accountAvailable ? FormatPlan(s.planType) : nil;
-    BOOL pageUsesUsageData = self.showUsage || self.showLongestTurn || self.showLongestStreak;
-    BOOL homeUsesUsageData = self.homeShowUsage || self.homeShowLongestTurn || self.homeShowLongestStreak;
+    BOOL pageUsesUsageData = self.showUsage || self.showLongestTurn || self.showLongestStreak || self.showPeakDailyTokens;
+    BOOL homeUsesUsageData = self.homeShowUsage || self.homeShowLongestTurn || self.homeShowLongestStreak || self.homeShowPeakDailyTokens;
     NSString *statusText = [self visibleCodexStatus:s fiveHour:self.showFiveHourQuota weekly:self.showWeeklyQuota plan:self.showPlan usage:pageUsesUsageData model:self.showModelQuota activity:self.showTaskActivity recent:self.showRecentTasks];
-    BOOL pageHasOfficialData = self.showFiveHourQuota || self.showWeeklyQuota || self.showPlan || pageUsesUsageData || self.showModelQuota || self.showTaskActivity || self.showRecentTasks || self.showQuotaForecast;
+    BOOL pageHasOfficialData = self.showFiveHourQuota || self.showWeeklyQuota || self.showPlan || pageUsesUsageData || self.showModelQuota || self.showQuotaDetails || self.showTokenWindows || self.showTaskActivity || self.showRecentTasks || self.showQuotaForecast;
     if (self.showLocalCost && !pageHasOfficialData) statusText = s.localCostAvailable ? @"本机Token历史正常" : (s.localCostErrorText ?: @"正在读取本机Token历史");
     else if (self.showLocalCost && s.localCostErrorText.length > 0) statusText = @"本机Token历史读取失败";
     self.hudView.codexStatusLabel.stringValue = self.showPlan && plan ? [NSString stringWithFormat:@"● %@ · %@", plan, statusText] : [NSString stringWithFormat:@"● %@", statusText];
     NSString *homeStatusText = [self visibleCodexStatus:s fiveHour:self.homeShowFiveHour weekly:self.homeShowWeekly plan:self.homeShowPlan usage:homeUsesUsageData model:self.homeShowModelQuota activity:self.homeShowTaskActivity recent:self.homeShowRecentTasks];
-    BOOL homeHasOfficialData = self.homeShowFiveHour || self.homeShowWeekly || self.homeShowPlan || homeUsesUsageData || self.homeShowModelQuota || self.homeShowTaskActivity || self.homeShowRecentTasks || self.homeShowQuotaForecast;
+    BOOL homeHasOfficialData = self.homeShowFiveHour || self.homeShowWeekly || self.homeShowPlan || homeUsesUsageData || self.homeShowModelQuota || self.homeShowQuotaDetails || self.homeShowTokenWindows || self.homeShowTaskActivity || self.homeShowRecentTasks || self.homeShowQuotaForecast;
     if (self.homeShowLocalCost && !homeHasOfficialData) homeStatusText = s.localCostAvailable ? @"本机Token历史正常" : (s.localCostErrorText ?: @"正在读取本机Token历史");
     else if (self.homeShowLocalCost && s.localCostErrorText.length > 0) homeStatusText = @"本机Token历史读取失败";
     self.hudView.homeCodexStatusLabel.stringValue = self.homeShowPlan && plan ? [NSString stringWithFormat:@"● %@ · %@", plan, homeStatusText] : [NSString stringWithFormat:@"● %@", homeStatusText];
@@ -1085,12 +1165,14 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
     [self.hudView.weeklyCard showAvailable:s.weeklyAvailable remaining:s.weeklyRemainingPercent reset:FormatReset(s.weeklyResetAt) accent:weeklyColor];
     [self.hudView.homeFiveHourCard showAvailable:s.fiveHourAvailable remaining:s.fiveHourRemainingPercent reset:FormatReset(s.fiveHourResetAt) accent:fiveHourColor];
     [self.hudView.homeWeeklyCard showAvailable:s.weeklyAvailable remaining:s.weeklyRemainingPercent reset:FormatReset(s.weeklyResetAt) accent:weeklyColor];
-    if (s.quotaErrorText.length > 0 && s.quotaAvailable) {
-        self.hudView.fiveHourCard.windowLabel.stringValue = @"上次数据";
-        self.hudView.weeklyCard.windowLabel.stringValue = @"上次数据";
-        self.hudView.homeFiveHourCard.windowLabel.stringValue = @"上次数据";
-        self.hudView.homeWeeklyCard.windowLabel.stringValue = @"上次数据";
-    }
+    NSString *fiveState = s.fiveHourDataState ?: ((s.quotaErrorText.length > 0 && s.fiveHourAvailable) ? @"previous" : nil);
+    NSString *weeklyState = s.weeklyDataState ?: ((s.quotaErrorText.length > 0 && s.weeklyAvailable) ? @"previous" : nil);
+    HUDApplyQuotaDataState(self.hudView.fiveHourCard, fiveState, s.fiveHourAvailable, s.fiveHourRemainingPercent, s.fiveHourResetAt, s.rateLimitReachedType);
+    HUDApplyQuotaDataState(self.hudView.weeklyCard, weeklyState, s.weeklyAvailable, s.weeklyRemainingPercent, s.weeklyResetAt, s.rateLimitReachedType);
+    HUDApplyQuotaDataState(self.hudView.homeFiveHourCard, fiveState, s.fiveHourAvailable, s.fiveHourRemainingPercent, s.fiveHourResetAt, s.rateLimitReachedType);
+    HUDApplyQuotaDataState(self.hudView.homeWeeklyCard, weeklyState, s.weeklyAvailable, s.weeklyRemainingPercent, s.weeklyResetAt, s.rateLimitReachedType);
+    [self updateTokenWindowDisplay:s];
+    [self updateQuotaDetailsDisplay:s];
     self.hudView.planCard.valueLabel.stringValue = plan ?: @"当前未返回";
     self.hudView.planCard.subtitleLabel.stringValue = s.accountErrorText.length > 0 ? s.accountErrorText : [NSString stringWithFormat:@"不显示邮箱 · %@", FormatAge(s.accountUpdatedAt)];
     self.hudView.homePlanCard.valueLabel.stringValue = self.hudView.planCard.valueLabel.stringValue;
@@ -1178,6 +1260,10 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
     self.hudView.longestStreakCard.subtitleLabel.stringValue = s.usageErrorText.length > 0 ? @"显示上次数据 · 更新失败" : @"账户历史最长";
     self.hudView.homeLongestStreakCard.valueLabel.stringValue = self.hudView.longestStreakCard.valueLabel.stringValue;
     self.hudView.homeLongestStreakCard.subtitleLabel.stringValue = self.hudView.longestStreakCard.subtitleLabel.stringValue;
+    self.hudView.peakDailyTokensCard.valueLabel.stringValue = s.peakDailyTokensAvailable ? FormatTokens(s.peakDailyTokens) : @"当前未返回";
+    self.hudView.peakDailyTokensCard.subtitleLabel.stringValue = s.usageErrorText.length > 0 ? @"显示上次数据 · 更新失败" : @"官方账户历史峰值";
+    self.hudView.homePeakDailyTokensCard.valueLabel.stringValue = self.hudView.peakDailyTokensCard.valueLabel.stringValue;
+    self.hudView.homePeakDailyTokensCard.subtitleLabel.stringValue = self.hudView.peakDailyTokensCard.subtitleLabel.stringValue;
     if (s.modelQuotaAvailable) {
         self.hudView.modelQuotaCard.valueLabel.stringValue = [NSString stringWithFormat:@"%@ %.0f%%", s.modelQuotaName, s.modelQuotaRemainingPercent];
         self.hudView.modelQuotaCard.subtitleLabel.stringValue = [NSString stringWithFormat:@"%@ · %@", s.modelQuotaWindowLabel ?: @"独立额度", FormatReset(s.modelQuotaResetAt)];
@@ -1188,22 +1274,29 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
     [self.hudView setHomeModelQuotaVisible:self.homeShowModelQuota && s.modelQuotaAvailable];
     [self.hudView setLongestTurnVisible:self.showLongestTurn];
     [self.hudView setLongestStreakVisible:self.showLongestStreak];
+    [self.hudView setPeakDailyTokensVisible:self.showPeakDailyTokens];
     [self.hudView setHomeLongestTurnVisible:self.homeShowLongestTurn];
     [self.hudView setHomeLongestStreakVisible:self.homeShowLongestStreak];
+    [self.hudView setHomePeakDailyTokensVisible:self.homeShowPeakDailyTokens];
     [self.hudView setTaskActivityVisible:self.showTaskActivity];
     [self.hudView setHomeTaskActivityVisible:self.homeShowTaskActivity];
     [self.hudView setRecentTasksVisible:self.showRecentTasks];
     [self.hudView setHomeRecentTasksVisible:self.homeShowRecentTasks];
     [self.hudView setLocalCostVisible:self.showLocalCost];
     [self.hudView setHomeLocalCostVisible:self.homeShowLocalCost];
+    [self.hudView setTokenWindowsVisible:self.showTokenWindows];
+    [self.hudView setHomeTokenWindowsVisible:self.homeShowTokenWindows];
     [self.hudView setQuotaForecastVisible:self.showQuotaForecast];
     [self.hudView setHomeQuotaForecastVisible:self.homeShowQuotaForecast];
-    BOOL anyQuotaVisible = self.showFiveHourQuota || self.showWeeklyQuota || self.showModelQuota || self.homeShowFiveHour || self.homeShowWeekly || self.homeShowModelQuota;
-    BOOL anyCostVisible = self.showLocalCost || self.homeShowLocalCost;
+    [self.hudView setQuotaDetailsVisible:self.showQuotaDetails];
+    [self.hudView setHomeQuotaDetailsVisible:self.homeShowQuotaDetails];
+    [self evaluateWeeklyConsumptionAlert:s];
+    BOOL anyQuotaVisible = self.showFiveHourQuota || self.showWeeklyQuota || self.showModelQuota || self.showQuotaDetails || self.homeShowFiveHour || self.homeShowWeekly || self.homeShowModelQuota || self.homeShowQuotaDetails;
+    BOOL anyCostVisible = self.showLocalCost || self.homeShowLocalCost || self.showTokenWindows || self.homeShowTokenWindows;
     BOOL anyStale = (anyQuotaVisible && HUDTimestampIsStale(s.quotaUpdatedAt, 900)) || ((self.showPlan || self.homeShowPlan) && HUDTimestampIsStale(s.accountUpdatedAt, 900)) || ((pageUsesUsageData || homeUsesUsageData) && HUDTimestampIsStale(s.usageUpdatedAt, 900)) || ((self.showTaskActivity || self.homeShowTaskActivity) && HUDTimestampIsStale(s.activityUpdatedAt, 60)) || ((self.showRecentTasks || self.homeShowRecentTasks) && HUDTimestampIsStale(s.recentTasksUpdatedAt, 900)) || (anyCostVisible && HUDTimestampIsStale(s.localCostUpdatedAt, 900));
     BOOL anyError = ((self.showFiveHourQuota || self.showWeeklyQuota || self.showModelQuota || self.homeShowFiveHour || self.homeShowWeekly || self.homeShowModelQuota) && s.quotaErrorText.length > 0) || ((self.showPlan || self.homeShowPlan) && s.accountErrorText.length > 0) || ((pageUsesUsageData || homeUsesUsageData) && s.usageErrorText.length > 0) || ((self.showTaskActivity || self.homeShowTaskActivity) && s.activityErrorText.length > 0) || ((self.showRecentTasks || self.homeShowRecentTasks) && s.recentTasksErrorText.length > 0) || (anyCostVisible && s.localCostErrorText.length > 0);
     NSString *pageFreshness = [self freshnessText:s fiveHour:self.showFiveHourQuota weekly:self.showWeeklyQuota plan:self.showPlan usage:pageUsesUsageData model:self.showModelQuota activity:self.showTaskActivity recent:self.showRecentTasks];
-    if (self.showLocalCost) {
+    if (self.showLocalCost || self.showTokenWindows) {
         NSString *costFreshness = [NSString stringWithFormat:@"本机Token %@", FormatModuleState(s.localCostUpdatedAt, s.localCostErrorText, 900)];
         pageFreshness = [pageFreshness isEqualToString:@"未启用Codex显示模块"] ? costFreshness : [NSString stringWithFormat:@"%@ · %@", pageFreshness, costFreshness];
     }
@@ -1212,13 +1305,150 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
     self.hudView.codexStatusLabel.textColor = (anyError || anyStale) ? NSColor.systemOrangeColor : [self accentColor];
     self.hudView.homeCodexStatusLabel.textColor = self.hudView.codexStatusLabel.textColor;
     NSString *homeCodexFreshness = [self freshnessText:s fiveHour:self.homeShowFiveHour weekly:self.homeShowWeekly plan:self.homeShowPlan usage:homeUsesUsageData model:self.homeShowModelQuota activity:self.homeShowTaskActivity recent:self.homeShowRecentTasks];
-    if (self.homeShowLocalCost) {
+    if (self.homeShowLocalCost || self.homeShowTokenWindows) {
         NSString *costFreshness = [NSString stringWithFormat:@"本机Token %@", FormatModuleState(s.localCostUpdatedAt, s.localCostErrorText, 900)];
         homeCodexFreshness = [homeCodexFreshness isEqualToString:@"未启用Codex显示模块"] ? costFreshness : [NSString stringWithFormat:@"%@ · %@", homeCodexFreshness, costFreshness];
     }
     self.hudView.homeFreshnessLabel.stringValue = [homeCodexFreshness isEqualToString:@"未启用Codex显示模块"] ? @"电脑 刚刚" : [NSString stringWithFormat:@"电脑 刚刚 · %@", homeCodexFreshness];
     self.hudView.homeFreshnessLabel.textColor = self.hudView.codexFreshnessLabel.textColor;
     [self updateDetailLabels];
+}
+
+- (void)updateTokenWindowDisplay:(CodexStatusSnapshot *)s {
+    NSTimeInterval now = NSDate.date.timeIntervalSince1970;
+    NSArray<NSDictionary<NSString *, id> *> *buckets = s.localTokenBuckets ?: @[];
+    NSTimeInterval trackingStart = s.localTokenBucketsStartedAt;
+    NSDictionary *five = nil;
+    NSDictionary *week = nil;
+    if (s.fiveHourAvailable && s.fiveHourWindowDurationMins > 0 && s.fiveHourResetAt > now) {
+        NSTimeInterval start = s.fiveHourResetAt - s.fiveHourWindowDurationMins * 60.0;
+        five = CodexTokenWindowSummary(buckets, start, now + 1.0, trackingStart);
+        NSString *windowName = FormatQuotaWindow(s.fiveHourWindowDurationMins);
+        self.hudView.fiveHourTokensCard.titleLabel.stringValue = [NSString stringWithFormat:@"%@ Token", windowName];
+        self.hudView.homeFiveHourTokensCard.titleLabel.stringValue = self.hudView.fiveHourTokensCard.titleLabel.stringValue;
+    }
+    NSDictionary *day = CodexTokenWindowSummary(buckets, now - 24.0 * 3600.0, now + 1.0, trackingStart);
+    if (s.weeklyAvailable && s.weeklyWindowDurationMins > 0 && s.weeklyResetAt > now) {
+        NSTimeInterval start = s.weeklyResetAt - s.weeklyWindowDurationMins * 60.0;
+        week = CodexTokenWindowSummary(buckets, start, now + 1.0, trackingStart);
+    }
+    long long weeklyTokens = [week[@"tokens"] longLongValue];
+    BOOL weeklyComparisonAvailable = [week[@"complete"] boolValue] && !s.localCostScanIncomplete;
+    void (^fill)(HUDMetricCard *, NSDictionary *, NSString *, double, BOOL) = ^(HUDMetricCard *card, NSDictionary *summary, NSString *extra, double officialUsed, BOOL baseline) {
+        if (![summary[@"available"] boolValue]) {
+            card.valueLabel.stringValue = @"正在积累";
+            card.subtitleLabel.stringValue = @"本地统计 · 暂无完整时间点";
+            card.valueLabel.textColor = NSColor.tertiaryLabelColor;
+            return;
+        }
+        long long tokens = [summary[@"tokens"] longLongValue];
+        BOOL complete = [summary[@"complete"] boolValue] && !s.localCostScanIncomplete;
+        card.valueLabel.stringValue = FormatTokens(tokens);
+        card.valueLabel.textColor = [self accentColor];
+        NSMutableArray<NSString *> *parts = [NSMutableArray array];
+        if (baseline) [parts addObject:weeklyComparisonAvailable ? @"周基准100%" : @"周基准待完整"];
+        else if (weeklyComparisonAvailable && weeklyTokens > 0) [parts addObject:[NSString stringWithFormat:@"周占%.1f%%", (double)tokens / (double)weeklyTokens * 100.0]];
+        else [parts addObject:@"周占待完整"];
+        if (officialUsed >= 0) [parts addObject:[NSString stringWithFormat:@"额度%.0f%%", officialUsed]];
+        [parts addObject:complete ? @"本地完整" : @"本地局部"];
+        if (extra.length > 0) [parts addObject:extra];
+        card.subtitleLabel.stringValue = [parts componentsJoinedByString:@" · "];
+    };
+    double fiveOfficialUsed = s.fiveHourAvailable ? 100.0 - s.fiveHourRemainingPercent : -1;
+    double weeklyOfficialUsed = s.weeklyAvailable ? 100.0 - s.weeklyRemainingPercent : -1;
+    fill(self.hudView.fiveHourTokensCard, five ?: @{}, @"约5分钟精度", fiveOfficialUsed, NO);
+    fill(self.hudView.rollingDayTokensCard, day, @"滚动24h", -1, NO);
+    fill(self.hudView.weeklyTokensCard, week ?: @{}, @"官方周期", weeklyOfficialUsed, YES);
+    if (!five) self.hudView.fiveHourTokensCard.subtitleLabel.stringValue = @"等待官方短周期 · 本地统计";
+    if (!week) self.hudView.weeklyTokensCard.subtitleLabel.stringValue = @"等待官方每周周期 · 本地统计";
+    for (NSArray *pair in @[
+        @[self.hudView.homeFiveHourTokensCard, self.hudView.fiveHourTokensCard],
+        @[self.hudView.homeRollingDayTokensCard, self.hudView.rollingDayTokensCard],
+        @[self.hudView.homeWeeklyTokensCard, self.hudView.weeklyTokensCard]
+    ]) {
+        HUDMetricCard *target = pair[0], *source = pair[1];
+        target.titleLabel.stringValue = source.titleLabel.stringValue;
+        target.valueLabel.stringValue = source.valueLabel.stringValue;
+        target.valueLabel.textColor = source.valueLabel.textColor;
+        target.subtitleLabel.stringValue = source.subtitleLabel.stringValue;
+    }
+}
+
+- (void)updateQuotaDetailsDisplay:(CodexStatusSnapshot *)s {
+    NSMutableArray<NSString *> *rows = [NSMutableArray array];
+    for (NSDictionary<NSString *, id> *bucket in s.rateLimitBuckets ?: @[]) {
+        NSString *name = [bucket[@"name"] isKindOfClass:NSString.class] ? bucket[@"name"] : @"额度";
+        double duration = [bucket[@"windowDurationMins"] doubleValue];
+        double remaining = [bucket[@"remainingPercent"] doubleValue];
+        NSTimeInterval reset = [bucket[@"resetsAt"] doubleValue];
+        [rows addObject:[NSString stringWithFormat:@"%@ · %@ · 剩余%.0f%% · %@", name, FormatQuotaWindow(duration), remaining, FormatReset(reset)]];
+    }
+    NSMutableArray<NSString *> *footer = [NSMutableArray arrayWithObject:@"官方完整额度列表"];
+    if (s.rateLimitResetCreditsAvailable) [footer addObject:[NSString stringWithFormat:@"可用恢复次数%ld", (long)s.rateLimitResetCreditsCount]];
+    else [footer addObject:@"恢复次数未返回"];
+    if (s.rateLimitReachedType.length > 0) [footer addObject:[NSString stringWithFormat:@"官方触顶：%@", s.rateLimitReachedType]];
+    NSString *footerText = [footer componentsJoinedByString:@" · "];
+    [self.hudView.quotaDetailsCard updateRows:rows footer:footerText];
+    [self.hudView.homeQuotaDetailsCard updateRows:rows footer:footerText];
+}
+
+- (void)requestWeeklyNotificationPermissionIfNeeded {
+    if (!self.weeklyConsumptionSystemNotificationEnabled) return;
+    UNUserNotificationCenter *center = UNUserNotificationCenter.currentNotificationCenter;
+    [center getNotificationSettingsWithCompletionHandler:^(UNNotificationSettings *settings) {
+        if (settings.authorizationStatus != UNAuthorizationStatusNotDetermined) return;
+        [center requestAuthorizationWithOptions:UNAuthorizationOptionAlert completionHandler:^(__unused BOOL granted, __unused NSError *error) {}];
+    }];
+}
+
+- (void)evaluateWeeklyConsumptionAlert:(CodexStatusSnapshot *)s {
+    if (!self.weeklyConsumptionAlertEnabled || !s.weeklyAvailable ||
+        ![s.weeklyDataState isEqualToString:@"live"] ||
+        s.weeklyResetAt <= NSDate.date.timeIntervalSince1970) return;
+    BOOL naturalDay = [self.weeklyConsumptionAlertMode isEqualToString:@"naturalDay"];
+    BOOL available = naturalDay ? s.weeklyNaturalDayConsumptionAvailable : s.weeklyRolling24hConsumptionAvailable;
+    double consumed = naturalDay ? s.weeklyNaturalDayConsumedPercent : s.weeklyRolling24hConsumedPercent;
+    if (!available) return;
+    NSString *period = naturalDay ? @"今日" : @"最近24小时";
+    NSString *alertText = [NSString stringWithFormat:@"%@已用周额度%.1f%% · 阈值%.0f%%", period, consumed, self.weeklyConsumptionAlertThreshold];
+    NSString *baseReset = FormatReset(s.weeklyResetAt);
+    self.hudView.weeklyCard.resetLabel.stringValue = [NSString stringWithFormat:@"%@ · %@", baseReset, alertText];
+    self.hudView.homeWeeklyCard.resetLabel.stringValue = self.hudView.weeklyCard.resetLabel.stringValue;
+    BOOL eligible = HUDWeeklyAlertEligible(self.weeklyConsumptionAlertEnabled,
+                                           s.weeklyAvailable,
+                                           s.weeklyDataState,
+                                           s.weeklyResetAt,
+                                           NSDate.date.timeIntervalSince1970,
+                                           available,
+                                           consumed,
+                                           self.weeklyConsumptionAlertThreshold);
+    if (!eligible) return;
+    self.hudView.weeklyCard.valueLabel.textColor = NSColor.systemOrangeColor;
+    self.hudView.homeWeeklyCard.valueLabel.textColor = NSColor.systemOrangeColor;
+    if (!self.showWeeklyQuota) {
+        self.hudView.codexStatusLabel.stringValue = [NSString stringWithFormat:@"● %@", alertText];
+        self.hudView.codexStatusLabel.textColor = NSColor.systemOrangeColor;
+    }
+    if (!self.homeShowWeekly) {
+        self.hudView.homeCodexStatusLabel.stringValue = [NSString stringWithFormat:@"● %@", alertText];
+        self.hudView.homeCodexStatusLabel.textColor = NSColor.systemOrangeColor;
+    }
+    if (!self.weeklyConsumptionSystemNotificationEnabled) return;
+    NSString *cycleKey = HUDWeeklyAlertCycleKey(s.weeklyResetAt);
+    NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+    if ([[defaults stringForKey:@"weeklyConsumptionLastNotifiedCycle"] isEqualToString:cycleKey]) return;
+    UNUserNotificationCenter *center = UNUserNotificationCenter.currentNotificationCenter;
+    [center getNotificationSettingsWithCompletionHandler:^(UNNotificationSettings *settings) {
+        if (settings.authorizationStatus != UNAuthorizationStatusAuthorized && settings.authorizationStatus != UNAuthorizationStatusProvisional) return;
+        UNMutableNotificationContent *content = [UNMutableNotificationContent new];
+        content.title = @"Codex周额度提醒";
+        content.body = alertText;
+        content.threadIdentifier = @"codex-monitor-weekly-quota";
+        UNNotificationRequest *request = [UNNotificationRequest requestWithIdentifier:[@"weekly-quota-" stringByAppendingString:cycleKey] content:content trigger:nil];
+        [center addNotificationRequest:request withCompletionHandler:^(NSError *error) {
+            if (!error) [defaults setObject:cycleKey forKey:@"weeklyConsumptionLastNotifiedCycle"];
+        }];
+    }];
 }
 
 - (void)updateDetailLabels {
@@ -1319,7 +1549,14 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
 - (void)togglePlan:(id)sender { self.showPlan = !self.showPlan; [NSUserDefaults.standardUserDefaults setBool:self.showPlan forKey:@"showPlan"]; [self.hudView setPlanVisible:self.showPlan]; [self startCodexProviderIfNeeded]; [self updateCodexDisplay]; [self resizePanel]; }
 - (void)toggleUsage:(id)sender { self.showUsage = !self.showUsage; [NSUserDefaults.standardUserDefaults setBool:self.showUsage forKey:@"showUsage"]; [self.hudView setUsageVisible:self.showUsage]; [self startCodexProviderIfNeeded]; [self updateCodexDisplay]; [self resizePanel]; }
 - (void)toggleLocalCost:(id)sender { self.showLocalCost = !self.showLocalCost; [NSUserDefaults.standardUserDefaults setBool:self.showLocalCost forKey:@"showLocalCost"]; [self.hudView setLocalCostVisible:self.showLocalCost]; if (self.showLocalCost) self.lastCostHistoryFetchAt = 0; [self startCodexProviderIfNeeded]; [self updateCodexDisplay]; [self resizePanel]; }
+- (void)toggleTokenWindows:(id)sender { self.showTokenWindows = !self.showTokenWindows; [NSUserDefaults.standardUserDefaults setBool:self.showTokenWindows forKey:@"showTokenWindows"]; [self.hudView setTokenWindowsVisible:self.showTokenWindows]; if (self.showTokenWindows) self.lastCostHistoryFetchAt = 0; [self startCodexProviderIfNeeded]; [self updateCodexDisplay]; [self resizePanel]; }
 - (void)toggleQuotaForecast:(id)sender { self.showQuotaForecast = !self.showQuotaForecast; [NSUserDefaults.standardUserDefaults setBool:self.showQuotaForecast forKey:@"showQuotaForecast"]; [self.hudView setQuotaForecastVisible:self.showQuotaForecast]; [self startCodexProviderIfNeeded]; [self updateCodexDisplay]; [self resizePanel]; }
+- (void)toggleQuotaDetails:(id)sender { self.showQuotaDetails = !self.showQuotaDetails; [NSUserDefaults.standardUserDefaults setBool:self.showQuotaDetails forKey:@"showQuotaDetails"]; [self.hudView setQuotaDetailsVisible:self.showQuotaDetails]; [self startCodexProviderIfNeeded]; [self updateCodexDisplay]; [self resizePanel]; }
+- (void)togglePeakDailyTokens:(id)sender { self.showPeakDailyTokens = !self.showPeakDailyTokens; [NSUserDefaults.standardUserDefaults setBool:self.showPeakDailyTokens forKey:@"showPeakDailyTokens"]; [self.hudView setPeakDailyTokensVisible:self.showPeakDailyTokens]; [self startCodexProviderIfNeeded]; [self updateCodexDisplay]; [self resizePanel]; }
+- (void)toggleWeeklyConsumptionAlert:(NSButton *)sender { self.weeklyConsumptionAlertEnabled = sender.state == NSControlStateValueOn; [NSUserDefaults.standardUserDefaults setBool:self.weeklyConsumptionAlertEnabled forKey:@"weeklyConsumptionAlertEnabled"]; [self startCodexProviderIfNeeded]; [self updateCodexDisplay]; }
+- (void)toggleWeeklyConsumptionSystemNotification:(NSButton *)sender { self.weeklyConsumptionSystemNotificationEnabled = sender.state == NSControlStateValueOn; [NSUserDefaults.standardUserDefaults setBool:self.weeklyConsumptionSystemNotificationEnabled forKey:@"weeklyConsumptionSystemNotificationEnabled"]; [self requestWeeklyNotificationPermissionIfNeeded]; [self updateCodexDisplay]; }
+- (void)changeWeeklyConsumptionAlertMode:(NSPopUpButton *)sender { NSString *mode = sender.selectedItem.representedObject; if (![@[@"rolling24h", @"naturalDay"] containsObject:mode]) return; self.weeklyConsumptionAlertMode = mode; [NSUserDefaults.standardUserDefaults setObject:mode forKey:@"weeklyConsumptionAlertMode"]; [self updateCodexDisplay]; }
+- (void)changeWeeklyConsumptionAlertThreshold:(NSSlider *)sender { self.weeklyConsumptionAlertThreshold = MAX(1.0, MIN(100.0, round(sender.doubleValue))); sender.doubleValue = self.weeklyConsumptionAlertThreshold; [NSUserDefaults.standardUserDefaults setDouble:self.weeklyConsumptionAlertThreshold forKey:@"weeklyConsumptionAlertThreshold"]; self.weeklyConsumptionThresholdLabel.stringValue = [NSString stringWithFormat:@"提醒阈值：%.0f%%", self.weeklyConsumptionAlertThreshold]; [self updateCodexDisplay]; }
 - (void)toggleServiceStatus:(id)sender { self.showServiceStatus = !self.showServiceStatus; [NSUserDefaults.standardUserDefaults setBool:self.showServiceStatus forKey:@"showServiceStatus"]; [self.hudView setServiceStatusVisible:self.showServiceStatus]; [self startServiceStatusIfNeeded]; [self updateServiceStatusDisplay]; [self resizePanel]; }
 - (void)toggleModelQuota:(id)sender { self.showModelQuota = !self.showModelQuota; [NSUserDefaults.standardUserDefaults setBool:self.showModelQuota forKey:@"showModelQuota"]; [self.hudView setModelQuotaVisible:self.showModelQuota && self.codexProvider.snapshot.modelQuotaAvailable]; [self startCodexProviderIfNeeded]; [self updateCodexDisplay]; [self resizePanel]; }
 - (void)toggleTaskActivity:(id)sender { self.showTaskActivity = !self.showTaskActivity; [NSUserDefaults.standardUserDefaults setBool:self.showTaskActivity forKey:@"showTaskActivity"]; [self.hudView setTaskActivityVisible:self.showTaskActivity]; [self startCodexProviderIfNeeded]; [self updateCodexDisplay]; [self resizePanel]; }
@@ -1335,7 +1572,10 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
 - (void)toggleHomePlan:(id)sender { self.homeShowPlan = !self.homeShowPlan; [NSUserDefaults.standardUserDefaults setBool:self.homeShowPlan forKey:@"homeShowPlan"]; [self.hudView setHomePlanVisible:self.homeShowPlan]; [self startCodexProviderIfNeeded]; [self updateCodexDisplay]; [self resizePanel]; }
 - (void)toggleHomeUsage:(id)sender { self.homeShowUsage = !self.homeShowUsage; [NSUserDefaults.standardUserDefaults setBool:self.homeShowUsage forKey:@"homeShowUsage"]; [self.hudView setHomeUsageVisible:self.homeShowUsage]; [self startCodexProviderIfNeeded]; [self updateCodexDisplay]; [self resizePanel]; }
 - (void)toggleHomeLocalCost:(id)sender { self.homeShowLocalCost = !self.homeShowLocalCost; [NSUserDefaults.standardUserDefaults setBool:self.homeShowLocalCost forKey:@"homeShowLocalCost"]; [self.hudView setHomeLocalCostVisible:self.homeShowLocalCost]; if (self.homeShowLocalCost) self.lastCostHistoryFetchAt = 0; [self startCodexProviderIfNeeded]; [self updateCodexDisplay]; [self resizePanel]; }
+- (void)toggleHomeTokenWindows:(id)sender { self.homeShowTokenWindows = !self.homeShowTokenWindows; [NSUserDefaults.standardUserDefaults setBool:self.homeShowTokenWindows forKey:@"homeShowTokenWindows"]; [self.hudView setHomeTokenWindowsVisible:self.homeShowTokenWindows]; if (self.homeShowTokenWindows) self.lastCostHistoryFetchAt = 0; [self startCodexProviderIfNeeded]; [self updateCodexDisplay]; [self resizePanel]; }
 - (void)toggleHomeQuotaForecast:(id)sender { self.homeShowQuotaForecast = !self.homeShowQuotaForecast; [NSUserDefaults.standardUserDefaults setBool:self.homeShowQuotaForecast forKey:@"homeShowQuotaForecast"]; [self.hudView setHomeQuotaForecastVisible:self.homeShowQuotaForecast]; [self startCodexProviderIfNeeded]; [self updateCodexDisplay]; [self resizePanel]; }
+- (void)toggleHomeQuotaDetails:(id)sender { self.homeShowQuotaDetails = !self.homeShowQuotaDetails; [NSUserDefaults.standardUserDefaults setBool:self.homeShowQuotaDetails forKey:@"homeShowQuotaDetails"]; [self.hudView setHomeQuotaDetailsVisible:self.homeShowQuotaDetails]; [self startCodexProviderIfNeeded]; [self updateCodexDisplay]; [self resizePanel]; }
+- (void)toggleHomePeakDailyTokens:(id)sender { self.homeShowPeakDailyTokens = !self.homeShowPeakDailyTokens; [NSUserDefaults.standardUserDefaults setBool:self.homeShowPeakDailyTokens forKey:@"homeShowPeakDailyTokens"]; [self.hudView setHomePeakDailyTokensVisible:self.homeShowPeakDailyTokens]; [self startCodexProviderIfNeeded]; [self updateCodexDisplay]; [self resizePanel]; }
 - (void)toggleHomeServiceStatus:(id)sender { self.homeShowServiceStatus = !self.homeShowServiceStatus; [NSUserDefaults.standardUserDefaults setBool:self.homeShowServiceStatus forKey:@"homeShowServiceStatus"]; [self.hudView setHomeServiceStatusVisible:self.homeShowServiceStatus]; [self startServiceStatusIfNeeded]; [self updateServiceStatusDisplay]; [self resizePanel]; }
 - (void)toggleHomeModelQuota:(id)sender { self.homeShowModelQuota = !self.homeShowModelQuota; [NSUserDefaults.standardUserDefaults setBool:self.homeShowModelQuota forKey:@"homeShowModelQuota"]; [self.hudView setHomeModelQuotaVisible:self.homeShowModelQuota && self.codexProvider.snapshot.modelQuotaAvailable]; [self startCodexProviderIfNeeded]; [self updateCodexDisplay]; [self resizePanel]; }
 - (void)toggleHomeTaskActivity:(id)sender { self.homeShowTaskActivity = !self.homeShowTaskActivity; [NSUserDefaults.standardUserDefaults setBool:self.homeShowTaskActivity forKey:@"homeShowTaskActivity"]; [self.hudView setHomeTaskActivityVisible:self.homeShowTaskActivity]; [self startCodexProviderIfNeeded]; [self updateCodexDisplay]; [self resizePanel]; }
@@ -1520,12 +1760,15 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
         [self settingsCheckbox:@"每周额度" action:@selector(toggleHomeWeekly:) state:self.homeShowWeekly],
         [self settingsCheckbox:@"订阅类型" action:@selector(toggleHomePlan:) state:self.homeShowPlan],
         [self settingsCheckbox:@"账户Token统计" action:@selector(toggleHomeUsage:) state:self.homeShowUsage],
+        [self settingsCheckbox:@"5小时/24小时/每周Token对比" action:@selector(toggleHomeTokenWindows:) state:self.homeShowTokenWindows],
         [self settingsCheckbox:@"Token用量与费用" action:@selector(toggleHomeLocalCost:) state:self.homeShowLocalCost],
         [self settingsCheckbox:@"额度趋势预测" action:@selector(toggleHomeQuotaForecast:) state:self.homeShowQuotaForecast],
         [self settingsCheckbox:@"OpenAI服务状态" action:@selector(toggleHomeServiceStatus:) state:self.homeShowServiceStatus],
+        [self settingsCheckbox:@"完整额度列表与恢复次数" action:@selector(toggleHomeQuotaDetails:) state:self.homeShowQuotaDetails],
         [self settingsCheckbox:@"模型专属额度" action:@selector(toggleHomeModelQuota:) state:self.homeShowModelQuota],
         [self settingsCheckbox:@"最长单次任务时长" action:@selector(toggleHomeLongestTurn:) state:self.homeShowLongestTurn],
         [self settingsCheckbox:@"历史最长连续天数" action:@selector(toggleHomeLongestStreak:) state:self.homeShowLongestStreak],
+        [self settingsCheckbox:@"历史单日峰值Token" action:@selector(toggleHomePeakDailyTokens:) state:self.homeShowPeakDailyTokens],
         [self settingsCheckbox:@"瓶颈判断" action:@selector(toggleHomeDiagnosis:) state:self.homeShowDiagnosis],
         [self settingsCheckbox:@"电脑核心状态" action:@selector(toggleHomeSystem:) state:self.homeShowSystem],
         [self settingsCheckbox:@"Codex性能占用" action:@selector(toggleHomeAttribution:) state:self.homeShowAttribution],
@@ -1539,12 +1782,15 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
         [self settingsCheckbox:@"每周额度" action:@selector(toggleWeeklyQuota:) state:self.showWeeklyQuota],
         [self settingsCheckbox:@"订阅类型" action:@selector(togglePlan:) state:self.showPlan],
         [self settingsCheckbox:@"账户Token统计" action:@selector(toggleUsage:) state:self.showUsage],
+        [self settingsCheckbox:@"5小时/24小时/每周Token对比" action:@selector(toggleTokenWindows:) state:self.showTokenWindows],
         [self settingsCheckbox:@"Token用量与费用" action:@selector(toggleLocalCost:) state:self.showLocalCost],
         [self settingsCheckbox:@"额度趋势预测" action:@selector(toggleQuotaForecast:) state:self.showQuotaForecast],
         [self settingsCheckbox:@"OpenAI服务状态" action:@selector(toggleServiceStatus:) state:self.showServiceStatus],
+        [self settingsCheckbox:@"完整额度列表与恢复次数" action:@selector(toggleQuotaDetails:) state:self.showQuotaDetails],
         [self settingsCheckbox:@"模型专属额度" action:@selector(toggleModelQuota:) state:self.showModelQuota],
         [self settingsCheckbox:@"最长单次任务时长" action:@selector(toggleLongestTurn:) state:self.showLongestTurn],
-        [self settingsCheckbox:@"历史最长连续天数" action:@selector(toggleLongestStreak:) state:self.showLongestStreak]
+        [self settingsCheckbox:@"历史最长连续天数" action:@selector(toggleLongestStreak:) state:self.showLongestStreak],
+        [self settingsCheckbox:@"历史单日峰值Token" action:@selector(togglePeakDailyTokens:) state:self.showPeakDailyTokens]
     ];
     NSArray<NSView *> *computerControls = @[
         [self settingsCheckbox:@"电脑核心状态" action:@selector(toggleSystem:) state:self.showSystem],
@@ -1564,8 +1810,8 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
     __weak typeof(self) weakSelf = self;
     HUDModuleOrderController *codexOrderController = [[HUDModuleOrderController alloc] initWithOrderKey:@"codex" items:HUDOrderItems(self.homeCodexModuleOrder, @{
         @"activity": @"任务活动", @"recent": @"最近任务", @"quota": @"5小时与每周额度",
-        @"insights": @"订阅与账户Token统计", @"cost": @"Token用量与费用",
-        @"forecast": @"额度趋势预测", @"service": @"OpenAI服务状态", @"history": @"最长任务与连续天数"
+        @"insights": @"订阅与账户Token统计", @"tokenWindows": @"5小时/24小时/每周Token对比", @"cost": @"Token用量与费用",
+        @"forecast": @"额度趋势预测", @"service": @"OpenAI服务状态", @"quotaDetails": @"完整额度列表", @"history": @"历史峰值与连续使用"
     }) changed:^(NSArray<NSString *> *order) {
         weakSelf.homeCodexModuleOrder = order; [NSUserDefaults.standardUserDefaults setObject:order forKey:@"homeCodexModuleOrder"];
         [weakSelf.hudView applyHomeCodexOrder:weakSelf.homeCodexModuleOrder computerOrder:weakSelf.homeComputerModuleOrder];
@@ -1587,6 +1833,28 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
     [computerOrderController.scrollView.widthAnchor constraintEqualToAnchor:computerOrderBox.contentView.widthAnchor constant:-24].active = YES;
     NSStackView *orderColumns = [NSStackView stackViewWithViews:@[codexOrderBox, computerOrderBox]];
     orderColumns.orientation = NSUserInterfaceLayoutOrientationHorizontal; orderColumns.distribution = NSStackViewDistributionFillEqually; orderColumns.spacing = 12;
+
+    NSButton *weeklyAlertToggle = [self settingsCheckbox:@"启用周额度消耗提醒（默认关闭）" action:@selector(toggleWeeklyConsumptionAlert:) state:self.weeklyConsumptionAlertEnabled];
+    NSButton *weeklySystemNotificationToggle = [self settingsCheckbox:@"同时发送静音系统通知（可选）" action:@selector(toggleWeeklyConsumptionSystemNotification:) state:self.weeklyConsumptionSystemNotificationEnabled];
+    NSPopUpButton *weeklyAlertMode = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
+    [weeklyAlertMode addItemWithTitle:@"滚动24小时"];
+    weeklyAlertMode.lastItem.representedObject = @"rolling24h";
+    [weeklyAlertMode addItemWithTitle:@"自然日（当天零点起）"];
+    weeklyAlertMode.lastItem.representedObject = @"naturalDay";
+    [weeklyAlertMode selectItemAtIndex:[self.weeklyConsumptionAlertMode isEqualToString:@"naturalDay"] ? 1 : 0];
+    weeklyAlertMode.target = self; weeklyAlertMode.action = @selector(changeWeeklyConsumptionAlertMode:);
+    NSTextField *modeLabel = [NSTextField labelWithString:@"统计方式"];
+    modeLabel.font = [NSFont systemFontOfSize:12.5];
+    NSStackView *modeRow = [NSStackView stackViewWithViews:@[modeLabel, weeklyAlertMode]];
+    modeRow.orientation = NSUserInterfaceLayoutOrientationHorizontal; modeRow.alignment = NSLayoutAttributeCenterY; modeRow.spacing = 10;
+    self.weeklyConsumptionThresholdLabel = [NSTextField labelWithString:[NSString stringWithFormat:@"提醒阈值：%.0f%%", self.weeklyConsumptionAlertThreshold]];
+    self.weeklyConsumptionThresholdLabel.font = [NSFont systemFontOfSize:12.5];
+    NSSlider *weeklyAlertThreshold = [NSSlider sliderWithValue:self.weeklyConsumptionAlertThreshold minValue:1 maxValue:100 target:self action:@selector(changeWeeklyConsumptionAlertThreshold:)];
+    weeklyAlertThreshold.continuous = YES;
+    [weeklyAlertThreshold.widthAnchor constraintEqualToConstant:280].active = YES;
+    NSTextField *alertHint = [NSTextField wrappingLabelWithString:@"阈值可选1%—100%；数据不足不提醒，同一周额度周期只提醒一次。系统通知复用现有额度刷新，不增加轮询。"];
+    alertHint.font = [NSFont systemFontOfSize:11]; alertHint.textColor = NSColor.secondaryLabelColor;
+    NSBox *weeklyAlertBox = [self settingsGroup:@"周额度消耗提醒" controls:@[weeklyAlertToggle, weeklySystemNotificationToggle, modeRow, self.weeklyConsumptionThresholdLabel, weeklyAlertThreshold, alertHint]];
 
     NSTextField *sizeLabel = [NSTextField wrappingLabelWithString:@"拖动悬浮窗任意边角连续缩放；最小75%，最大尺寸按当前屏幕自动决定"];
     sizeLabel.font = [NSFont systemFontOfSize:12.5 weight:NSFontWeightRegular];
@@ -1615,7 +1883,7 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
     NSStackView *bottom = [NSStackView stackViewWithViews:@[behaviorBox, sizeBox, updateBox]];
     bottom.orientation = NSUserInterfaceLayoutOrientationHorizontal; bottom.distribution = NSStackViewDistributionFillEqually; bottom.spacing = 12;
 
-    NSTextField *sourceText = [NSTextField wrappingLabelWithString:@"电脑性能：macOS系统接口。  Codex额度、订阅、账户Token与任务历史：本机Codex官方接口。  OpenAI服务状态：官方公开状态页，不带账号信息。  Token费用：只读取本机会话记录中的时间、模型和Token计数。  任务活动：只读检查近期写入记录。  更新：仅访问本项目GitHub Release。"];
+    NSTextField *sourceText = [NSTextField wrappingLabelWithString:@"电脑性能：macOS系统接口。  Codex额度、订阅、账户Token与任务历史：本机Codex官方接口。  5小时/24小时/每周Token与费用：只读取本机会话记录中的时间、模型和Token计数，属于本地统计。  OpenAI服务状态：官方公开状态页，不带账号信息且默认关闭。  任务活动：只读检查近期写入记录。  更新：仅访问本项目GitHub Release。"];
     sourceText.font = [NSFont systemFontOfSize:11.5]; sourceText.textColor = NSColor.labelColor;
     NSTextField *permissionText = [NSTextField wrappingLabelWithString:@"默认不需要屏幕录制、辅助功能、完全磁盘访问、浏览器Cookie或API密钥；费用缓存不保存提示词、回复或工具内容；单任务实时Token速度因无法连接桌面版同一接口实例，当前不会显示。"];
     permissionText.font = [NSFont systemFontOfSize:11.5]; permissionText.textColor = NSColor.secondaryLabelColor;
@@ -1623,14 +1891,14 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
 
     NSTextField *hint = [NSTextField labelWithString:@"所有勾选状态集中显示；主页扩展和长期历史默认关闭，按需勾选。"];
     hint.font = [NSFont systemFontOfSize:12]; hint.textColor = NSColor.secondaryLabelColor;
-    NSStackView *root = [NSStackView stackViewWithViews:@[hint, moduleColumns, orderColumns, dataBox, bottom]];
+    NSStackView *root = [NSStackView stackViewWithViews:@[hint, moduleColumns, orderColumns, weeklyAlertBox, dataBox, bottom]];
     root.orientation = NSUserInterfaceLayoutOrientationVertical; root.alignment = NSLayoutAttributeLeading; root.spacing = 14;
     root.translatesAutoresizingMaskIntoConstraints = NO;
     NSView *content = [[HUDFlippedView alloc] initWithFrame:NSMakeRect(0, 0, 804, 820)]; [content addSubview:root];
     [NSLayoutConstraint activateConstraints:@[
         [root.leadingAnchor constraintEqualToAnchor:content.leadingAnchor constant:18], [root.trailingAnchor constraintEqualToAnchor:content.trailingAnchor constant:-18],
         [root.topAnchor constraintEqualToAnchor:content.topAnchor constant:16], [root.bottomAnchor constraintLessThanOrEqualToAnchor:content.bottomAnchor constant:-18],
-        [moduleColumns.widthAnchor constraintEqualToAnchor:root.widthAnchor], [orderColumns.widthAnchor constraintEqualToAnchor:root.widthAnchor], [dataBox.widthAnchor constraintEqualToAnchor:root.widthAnchor], [bottom.widthAnchor constraintEqualToAnchor:root.widthAnchor]
+        [moduleColumns.widthAnchor constraintEqualToAnchor:root.widthAnchor], [orderColumns.widthAnchor constraintEqualToAnchor:root.widthAnchor], [weeklyAlertBox.widthAnchor constraintEqualToAnchor:root.widthAnchor], [dataBox.widthAnchor constraintEqualToAnchor:root.widthAnchor], [bottom.widthAnchor constraintEqualToAnchor:root.widthAnchor]
     ]];
     [content layoutSubtreeIfNeeded];
     CGFloat documentHeight = MAX(820, root.fittingSize.height + 34);
@@ -1669,12 +1937,15 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
     [homeModules addItem:[self item:@"每周额度" action:@selector(toggleHomeWeekly:) state:self.homeShowWeekly]];
     [homeModules addItem:[self item:@"订阅类型" action:@selector(toggleHomePlan:) state:self.homeShowPlan]];
     [homeModules addItem:[self item:@"账户Token统计" action:@selector(toggleHomeUsage:) state:self.homeShowUsage]];
+    [homeModules addItem:[self item:@"5小时/24小时/每周Token对比" action:@selector(toggleHomeTokenWindows:) state:self.homeShowTokenWindows]];
     [homeModules addItem:[self item:@"Token用量与费用" action:@selector(toggleHomeLocalCost:) state:self.homeShowLocalCost]];
     [homeModules addItem:[self item:@"额度趋势预测" action:@selector(toggleHomeQuotaForecast:) state:self.homeShowQuotaForecast]];
     [homeModules addItem:[self item:@"OpenAI服务状态" action:@selector(toggleHomeServiceStatus:) state:self.homeShowServiceStatus]];
+    [homeModules addItem:[self item:@"完整额度列表与恢复次数" action:@selector(toggleHomeQuotaDetails:) state:self.homeShowQuotaDetails]];
     [homeModules addItem:[self item:@"模型专属额度" action:@selector(toggleHomeModelQuota:) state:self.homeShowModelQuota]];
     [homeModules addItem:[self item:@"最长单次任务时长" action:@selector(toggleHomeLongestTurn:) state:self.homeShowLongestTurn]];
     [homeModules addItem:[self item:@"历史最长连续天数" action:@selector(toggleHomeLongestStreak:) state:self.homeShowLongestStreak]];
+    [homeModules addItem:[self item:@"历史单日峰值Token" action:@selector(toggleHomePeakDailyTokens:) state:self.homeShowPeakDailyTokens]];
     [homeModules addItem:NSMenuItem.separatorItem];
     [homeModules addItem:[self item:@"瓶颈判断" action:@selector(toggleHomeDiagnosis:) state:self.homeShowDiagnosis]];
     [homeModules addItem:[self item:@"电脑核心状态" action:@selector(toggleHomeSystem:) state:self.homeShowSystem]];
@@ -1689,11 +1960,14 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
     [modules addItem:[self item:@"每周额度" action:@selector(toggleWeeklyQuota:) state:self.showWeeklyQuota]];
     [modules addItem:[self item:@"订阅类型" action:@selector(togglePlan:) state:self.showPlan]];
     [modules addItem:[self item:@"账户Token统计" action:@selector(toggleUsage:) state:self.showUsage]];
+    [modules addItem:[self item:@"5小时/24小时/每周Token对比" action:@selector(toggleTokenWindows:) state:self.showTokenWindows]];
     [modules addItem:[self item:@"Token用量与费用" action:@selector(toggleLocalCost:) state:self.showLocalCost]];
     [modules addItem:[self item:@"额度趋势预测" action:@selector(toggleQuotaForecast:) state:self.showQuotaForecast]];
     [modules addItem:[self item:@"OpenAI服务状态" action:@selector(toggleServiceStatus:) state:self.showServiceStatus]];
+    [modules addItem:[self item:@"完整额度列表与恢复次数" action:@selector(toggleQuotaDetails:) state:self.showQuotaDetails]];
     [modules addItem:[self item:@"最长单次任务时长" action:@selector(toggleLongestTurn:) state:self.showLongestTurn]];
     [modules addItem:[self item:@"历史最长连续天数" action:@selector(toggleLongestStreak:) state:self.showLongestStreak]];
+    [modules addItem:[self item:@"历史单日峰值Token" action:@selector(togglePeakDailyTokens:) state:self.showPeakDailyTokens]];
     [modules addItem:[self item:@"电脑核心状态" action:@selector(toggleSystem:) state:self.showSystem]];
     [modules addItem:[self item:@"Codex性能占用" action:@selector(toggleAttribution:) state:self.showAttribution]];
     [modules addItem:[self item:@"10分钟CPU趋势" action:@selector(toggleTrend:) state:self.showTrend]];
@@ -1740,7 +2014,7 @@ static void CountSettingsControls(NSView *view, NSInteger *checkboxCount, NSInte
             (*checkboxCount)++;
             if ([button.title isEqualToString:@"5小时额度"] && button.state == NSControlStateValueOff) (*hiddenFiveHourCount)++;
             if ([button.title isEqualToString:@"订阅类型"] && button.state == NSControlStateValueOff) (*hiddenPlanCount)++;
-            if (([button.title isEqualToString:@"最长单次任务时长"] || [button.title isEqualToString:@"历史最长连续天数"]) && button.state == NSControlStateValueOff) (*optionalHistoryOffCount)++;
+            if (([button.title isEqualToString:@"最长单次任务时长"] || [button.title isEqualToString:@"历史最长连续天数"] || [button.title isEqualToString:@"历史单日峰值Token"]) && button.state == NSControlStateValueOff) (*optionalHistoryOffCount)++;
         } else if ([button.title isEqualToString:@"恢复标准大小"]) (*resetButtonCount)++;
     }
     for (NSView *subview in view.subviews) CountSettingsControls(subview, checkboxCount, hiddenFiveHourCount, hiddenPlanCount, optionalHistoryOffCount, resetButtonCount);
@@ -1761,7 +2035,7 @@ static int RunUIDiagnostic(void) {
     NSView *settings = [delegate settingsContentView];
     NSInteger checkboxCount = 0, hiddenFiveHourCount = 0, hiddenPlanCount = 0, optionalHistoryOffCount = 0, resetButtonCount = 0;
     CountSettingsControls(settings, &checkboxCount, &hiddenFiveHourCount, &hiddenPlanCount, &optionalHistoryOffCount, &resetButtonCount);
-    BOOL settingsPass = checkboxCount == 38 && hiddenFiveHourCount == 2 && hiddenPlanCount == 2 && optionalHistoryOffCount == 4 && resetButtonCount == 1 && delegate.settingsOrderControllers.count == 2 && delegate.settingsOrderControllers[0].items.count == 8 && delegate.settingsOrderControllers[1].items.count == 4;
+    BOOL settingsPass = checkboxCount == 47 && hiddenFiveHourCount == 2 && hiddenPlanCount == 2 && optionalHistoryOffCount == 6 && resetButtonCount == 1 && delegate.settingsOrderControllers.count == 2 && delegate.settingsOrderControllers[0].items.count == 10 && delegate.settingsOrderControllers[1].items.count == 4;
     BOOL scalePass = fabs([delegate panelSize].width - 485.9) < 0.01 && ([delegate panelStyleMask] & NSWindowStyleMaskResizable) != 0;
     delegate.windowScale = 0.75; scalePass = scalePass && fabs([delegate panelSize].width - 322.5) < 0.01;
     delegate.windowScale = 1.0; scalePass = scalePass && fabs([delegate panelSize].width - 430.0) < 0.1;
@@ -1894,6 +2168,7 @@ static int RunUIDiagnostic(void) {
     [delegate startServiceStatusIfNeeded];
     BOOL hiddenServiceStatusPass = delegate.serviceStatusProvider == nil && delegate.serviceStatusTimer == nil && delegate.lastServiceStatusFetchAt == 0;
     printf("settings_visibility_test=%s\n", settingsPass ? "pass" : "fail");
+    if (!settingsPass) printf("settings_visibility_details=checkboxes:%ld five_hour_off:%ld plan_off:%ld optional_history_off:%ld reset_buttons:%ld codex_order:%ld computer_order:%ld\n", (long)checkboxCount, (long)hiddenFiveHourCount, (long)hiddenPlanCount, (long)optionalHistoryOffCount, (long)resetButtonCount, (long)delegate.settingsOrderControllers[0].items.count, (long)delegate.settingsOrderControllers[1].items.count);
     printf("home_module_order_test=%s\n", orderPass ? "pass" : "fail");
     printf("home_full_layout_test=%s\n", homeLayoutPass ? "pass" : "fail");
     printf("long_text_card_layout_test=%s\n", longTextLayoutPass ? "pass" : "fail");
@@ -1934,7 +2209,15 @@ static int RunCodexDiagnostic(void) {
     printf("five_hour_available=%s\n", s.fiveHourAvailable ? "true" : "false");
     if (s.fiveHourAvailable) printf("five_hour_remaining=%.0f\n", s.fiveHourRemainingPercent);
     printf("weekly_available=%s\n", s.weeklyAvailable ? "true" : "false");
-    if (s.weeklyAvailable) printf("weekly_remaining=%.0f\n", s.weeklyRemainingPercent);
+    if (s.weeklyAvailable) {
+        printf("weekly_remaining=%.0f\n", s.weeklyRemainingPercent);
+        printf("weekly_data_state=%s\n", s.weeklyDataState.UTF8String ?: "unknown");
+        printf("weekly_window_minutes=%.0f\n", s.weeklyWindowDurationMins);
+    }
+    printf("quota_bucket_count=%ld\n", (long)s.rateLimitBuckets.count);
+    printf("reset_credits_available=%s\n", s.rateLimitResetCreditsAvailable ? "true" : "false");
+    if (s.rateLimitResetCreditsAvailable) printf("reset_credits_count=%ld\n", (long)s.rateLimitResetCreditsCount);
+    if (s.rateLimitReachedType.length > 0) printf("rate_limit_reached_type=%s\n", s.rateLimitReachedType.UTF8String);
     printf("account_available=%s\n", s.accountAvailable ? "true" : "false");
     if (s.accountErrorText.length > 0) printf("account_error=%s\n", s.accountErrorText.UTF8String);
     if (s.accountAvailable) printf("plan_type=%s\n", s.planType.UTF8String ?: "unknown");
@@ -1947,6 +2230,8 @@ static int RunCodexDiagnostic(void) {
         printf("thirty_day_tokens=%lld\n", s.thirtyDayTokens);
         printf("month_to_date_tokens=%lld\n", s.monthToDateTokens);
         printf("month_forecast_tokens=%lld\n", s.monthForecastTokens);
+        printf("peak_daily_tokens_available=%s\n", s.peakDailyTokensAvailable ? "true" : "false");
+        if (s.peakDailyTokensAvailable) printf("peak_daily_tokens=%lld\n", s.peakDailyTokens);
         printf("longest_turn_available=%s\n", s.longestRunningTurnAvailable ? "true" : "false");
         if (s.longestRunningTurnAvailable) printf("longest_turn_seconds=%ld\n", (long)s.longestRunningTurnSec);
         printf("longest_streak_available=%s\n", s.longestStreakAvailable ? "true" : "false");
@@ -2160,6 +2445,33 @@ static int RunLogicDiagnostic(void) {
     ];
     NSDictionary *quotaForecast = CodexQuotaForecastFromSamples(quotaSamples, @"f", @"fr", 40, quotaReset, [NSDate dateWithTimeIntervalSince1970:quotaNowValue]);
     BOOL quotaForecastPass = [quotaForecast[@"available"] boolValue] && [quotaForecast[@"headline"] isEqualToString:@"可能提前用完"];
+    NSDate *weeklyAlertNow = [NSDate dateWithTimeIntervalSince1970:quotaNowValue];
+    NSTimeInterval naturalDayStart = [NSCalendar.currentCalendar startOfDayForDate:weeklyAlertNow].timeIntervalSince1970;
+    NSArray *weeklyConsumptionSamples = @[
+        @{ @"t": @(quotaNowValue - 24 * 3600), @"w": @85, @"wr": @(quotaReset) },
+        @{ @"t": @(naturalDayStart - 60), @"w": @90, @"wr": @(quotaReset) },
+        @{ @"t": @(naturalDayStart + 60), @"w": @80, @"wr": @(quotaReset) }
+    ];
+    NSDictionary *rollingConsumption = CodexWeeklyConsumptionFromSamples(weeklyConsumptionSamples, 70, quotaReset, @"rolling24h", weeklyAlertNow);
+    NSDictionary *naturalConsumption = CodexWeeklyConsumptionFromSamples(weeklyConsumptionSamples, 70, quotaReset, @"naturalDay", weeklyAlertNow);
+    NSDictionary *insufficientConsumption = CodexWeeklyConsumptionFromSamples(@[], 70, quotaReset, @"rolling24h", weeklyAlertNow);
+    BOOL weeklyConsumptionPass = [rollingConsumption[@"available"] boolValue] && fabs([rollingConsumption[@"consumedPercent"] doubleValue] - 15.0) < 0.001 &&
+                                 [naturalConsumption[@"available"] boolValue] && fabs([naturalConsumption[@"consumedPercent"] doubleValue] - 10.0) < 0.001 &&
+                                 ![insufficientConsumption[@"available"] boolValue];
+    NSArray *tokenWindowBuckets = @[
+        @{ @"t": @(quotaNowValue - 4 * 3600), @"tokens": @100LL },
+        @{ @"t": @(quotaNowValue - 3600), @"tokens": @200LL },
+        @{ @"t": @(quotaNowValue - 30 * 3600), @"tokens": @400LL }
+    ];
+    NSDictionary *completeTokenWindow = CodexTokenWindowSummary(tokenWindowBuckets, quotaNowValue - 5 * 3600, quotaNowValue + 1, quotaNowValue - 6 * 3600);
+    NSDictionary *partialTokenWindow = CodexTokenWindowSummary(tokenWindowBuckets, quotaNowValue - 24 * 3600, quotaNowValue + 1, quotaNowValue - 2 * 3600);
+    BOOL tokenWindowPass = [completeTokenWindow[@"available"] boolValue] && [completeTokenWindow[@"complete"] boolValue] && [completeTokenWindow[@"tokens"] longLongValue] == 300 && [partialTokenWindow[@"available"] boolValue] && ![partialTokenWindow[@"complete"] boolValue] && [partialTokenWindow[@"tokens"] longLongValue] == 300;
+    BOOL weeklyAlertPass = HUDWeeklyAlertEligible(YES, YES, @"live", quotaReset, quotaNowValue, YES, 15.0, 15.0) &&
+                           !HUDWeeklyAlertEligible(YES, YES, @"previous", quotaReset, quotaNowValue, YES, 20.0, 15.0) &&
+                           !HUDWeeklyAlertEligible(YES, YES, @"live", quotaReset, quotaNowValue, NO, 20.0, 15.0) &&
+                           !HUDWeeklyAlertEligible(NO, YES, @"live", quotaReset, quotaNowValue, YES, 20.0, 15.0) &&
+                           [HUDWeeklyAlertCycleKey(quotaReset) isEqualToString:HUDWeeklyAlertCycleKey(quotaReset)] &&
+                           ![HUDWeeklyAlertCycleKey(quotaReset) isEqualToString:HUDWeeklyAlertCycleKey(quotaReset + 7 * 24 * 3600)];
     NSData *serviceNormalData = [@"{\"status\":{\"indicator\":\"none\"},\"components\":[{\"name\":\"Codex in ChatGPT Desktop\",\"status\":\"operational\"}]}" dataUsingEncoding:NSUTF8StringEncoding];
     NSData *serviceDegradedData = [@"{\"status\":{\"indicator\":\"minor\"},\"components\":[{\"name\":\"Codex in ChatGPT Desktop\",\"status\":\"degraded_performance\"}]}" dataUsingEncoding:NSUTF8StringEncoding];
     NSDictionary *serviceNormal = HUDOpenAIServiceStatusFromJSONData(serviceNormalData);
@@ -2193,11 +2505,32 @@ static int RunLogicDiagnostic(void) {
     NSDictionary *compactedEntry = [[compactedCache[@"files"] allValues] firstObject];
     NSString *compactedFileKey = [[compactedCache[@"files"] allKeys] firstObject];
     NSDictionary *compactedEvent = [compactedEntry[@"events"] firstObject];
-    BOOL cacheCompactionPass = [compactedCache[@"version"] integerValue] == 4 && compactedFileKey.length == 64 && [compactedEntry[@"events"] count] == 1 && compactedEntry[@"state"][@"occurrences"] == nil && fabs([compactedEvent[@"x"] doubleValue] - 0.484) < 0.000001;
+    BOOL cacheCompactionPass = [compactedCache[@"version"] integerValue] == 5 && compactedFileKey.length == 64 && [compactedEntry[@"events"] count] == 1 && compactedEntry[@"state"][@"occurrences"] == nil && [compactedEvent[@"t"] doubleValue] > 0 && fabs([compactedEvent[@"x"] doubleValue] - 0.484) < 0.000001;
     BOOL incrementalScanPass = ![baselineScan[@"available"] boolValue] && [firstScan[@"thirtyDayTokens"] longLongValue] == 0 && [secondScan[@"thirtyDayTokens"] longLongValue] == 210000 && fabs([secondScan[@"thirtyDayCost"] doubleValue] - 0.484) < 0.000001 && [secondScan[@"eventCount"] integerValue] == 1 && ![partialLineScan[@"scanIncomplete"] boolValue] && [partialLineScan[@"thirtyDayTokens"] longLongValue] == 210000;
+    NSMutableDictionary *legacyCache = compactedCacheData ? [NSJSONSerialization JSONObjectWithData:compactedCacheData options:NSJSONReadingMutableContainers error:nil] : nil;
+    legacyCache[@"version"] = @4;
+    [legacyCache removeObjectForKey:@"tokenBucketsStartedAt"];
+    for (NSMutableDictionary *entry in [legacyCache[@"files"] allValues]) {
+        for (NSMutableDictionary *event in entry[@"events"]) [event removeObjectForKey:@"t"];
+    }
+    NSData *legacyData = legacyCache ? [NSJSONSerialization dataWithJSONObject:legacyCache options:0 error:nil] : nil;
+    [legacyData writeToURL:scanCache atomically:YES];
+    NSString *thirdTokenLine = @"{\"timestamp\":\"2026-02-02T02:43:00Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"last_token_usage\":{\"input_tokens\":100000,\"cached_input_tokens\":0,\"output_tokens\":10000}}}}";
+    scanHandle = [NSFileHandle fileHandleForWritingToURL:scanFile error:nil];
+    [scanHandle seekToEndOfFile];
+    [scanHandle writeData:[[NSString stringWithFormat:@"\n%@\n", thirdTokenLine] dataUsingEncoding:NSUTF8StringEncoding]];
+    [scanHandle closeFile];
+    NSDictionary *migratedScan = CodexScanCostHistoryAtHome(scanRoot, scanCache, scanStart, costNow);
+    NSDictionary *migratedCache = [NSJSONSerialization JSONObjectWithData:[NSData dataWithContentsOfURL:scanCache] options:0 error:nil];
+    long long migratedWindowTokens = 0;
+    for (NSDictionary *bucket in migratedScan[@"tokenBuckets"] ?: @[]) migratedWindowTokens += [bucket[@"tokens"] longLongValue];
+    BOOL cacheMigrationPass = [migratedCache[@"version"] integerValue] == 5 &&
+                              [migratedScan[@"thirtyDayTokens"] longLongValue] == 320000 &&
+                              [migratedScan[@"tokenBucketsStartedAt"] doubleValue] == costNow.timeIntervalSince1970 &&
+                              migratedWindowTokens == 110000;
     [NSFileManager.defaultManager removeItemAtURL:scanRoot error:nil];
     BOOL calendarPass = currentPass && delayedPass && emptyPass;
-    BOOL pass = calendarPass && cpuTimebasePass && memoryFormulaPass && activityPass && persistedCwdPass && migrationFallbackPass && costParserPass && costPricingPass && costDedupPass && costWatermarkPass && quotaForecastPass && serviceStatusPass && incrementalScanPass && cacheCompactionPass;
+    BOOL pass = calendarPass && cpuTimebasePass && memoryFormulaPass && activityPass && persistedCwdPass && migrationFallbackPass && costParserPass && costPricingPass && costDedupPass && costWatermarkPass && quotaForecastPass && weeklyConsumptionPass && tokenWindowPass && weeklyAlertPass && serviceStatusPass && incrementalScanPass && cacheCompactionPass && cacheMigrationPass;
     printf("calendar_usage_test=%s\n", calendarPass ? "pass" : "fail");
     printf("cpu_timebase_test=%s\n", cpuTimebasePass ? "pass" : "fail");
     printf("memory_used_formula_test=%s\n", memoryFormulaPass ? "pass" : "fail");
@@ -2209,9 +2542,13 @@ static int RunLogicDiagnostic(void) {
     printf("codex_cost_dedup_test=%s\n", costDedupPass ? "pass" : "fail");
     printf("codex_cost_watermark_test=%s\n", costWatermarkPass ? "pass" : "fail");
     printf("codex_quota_forecast_test=%s\n", quotaForecastPass ? "pass" : "fail");
+    printf("codex_weekly_consumption_test=%s\n", weeklyConsumptionPass ? "pass" : "fail");
+    printf("codex_token_window_test=%s\n", tokenWindowPass ? "pass" : "fail");
+    printf("codex_weekly_alert_test=%s\n", weeklyAlertPass ? "pass" : "fail");
     printf("openai_service_status_parser_test=%s\n", serviceStatusPass ? "pass" : "fail");
     printf("codex_cost_incremental_scan_test=%s\n", incrementalScanPass ? "pass" : "fail");
     printf("codex_cost_cache_compaction_test=%s\n", cacheCompactionPass ? "pass" : "fail");
+    printf("codex_cost_cache_v4_migration_test=%s\n", cacheMigrationPass ? "pass" : "fail");
     return pass ? 0 : 4;
 }
 
@@ -2220,7 +2557,7 @@ static int RunUISnapshot(void) {
     AppDelegate *delegate = [AppDelegate new];
     delegate.homeShowFiveHour = YES; delegate.homeShowWeekly = YES; delegate.homeShowUsage = YES; delegate.homeShowTaskActivity = YES;
     delegate.showFiveHourQuota = YES; delegate.showWeeklyQuota = YES; delegate.showUsage = YES; delegate.showTaskActivity = YES; delegate.showRecentTasks = YES;
-    delegate.homeShowLocalCost = NO; delegate.homeShowQuotaForecast = NO; delegate.homeShowServiceStatus = NO; delegate.showLocalCost = YES; delegate.showQuotaForecast = YES; delegate.showServiceStatus = YES;
+    delegate.homeShowLocalCost = NO; delegate.homeShowTokenWindows = NO; delegate.homeShowQuotaForecast = NO; delegate.homeShowServiceStatus = NO; delegate.showLocalCost = YES; delegate.showTokenWindows = YES; delegate.showQuotaForecast = YES; delegate.showServiceStatus = NO;
     delegate.homeCodexModuleOrder = HUDDefaultHomeCodexOrder(); delegate.homeComputerModuleOrder = HUDDefaultHomeComputerOrder();
     NSView *view = [delegate settingsContentView]; view.frame = NSMakeRect(0, 0, 840, 720); [view layoutSubtreeIfNeeded];
     NSBitmapImageRep *bitmap = [view bitmapImageRepForCachingDisplayInRect:view.bounds];
@@ -2229,8 +2566,8 @@ static int RunUISnapshot(void) {
     NSData *png = [bitmap representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
     NSString *path = @"/private/tmp/codex-monitor-hud-settings.png";
     BOOL written = [png writeToFile:path atomically:YES];
-    HUDView *hud = [[HUDView alloc] initWithFrame:NSMakeRect(0, 0, 430, 618)]; hud.appearance = [NSAppearance appearanceNamed:NSAppearanceNameVibrantDark];
-    [hud setPage:1]; [hud setCompact:YES]; [hud setTaskActivityVisible:YES]; [hud setRecentTasksVisible:YES]; [hud setLongestTurnVisible:NO]; [hud setLongestStreakVisible:NO]; [hud setModelQuotaVisible:NO]; [hud setLocalCostVisible:YES]; [hud setQuotaForecastVisible:YES]; [hud setServiceStatusVisible:YES];
+    HUDView *hud = [[HUDView alloc] initWithFrame:NSMakeRect(0, 0, 430, 684)]; hud.appearance = [NSAppearance appearanceNamed:NSAppearanceNameVibrantDark];
+    [hud setPage:1]; [hud setCompact:YES]; [hud setTaskActivityVisible:YES]; [hud setRecentTasksVisible:YES]; [hud setLongestTurnVisible:NO]; [hud setLongestStreakVisible:NO]; [hud setPeakDailyTokensVisible:NO]; [hud setModelQuotaVisible:NO]; [hud setTokenWindowsVisible:YES]; [hud setLocalCostVisible:YES]; [hud setQuotaForecastVisible:YES]; [hud setServiceStatusVisible:NO]; [hud setQuotaDetailsVisible:NO];
     hud.codexStatusLabel.stringValue = @"● Pro · Codex数据正常";
     hud.taskActivityCard.valueLabel.stringValue = @"2个活跃 · 最长8分钟"; hud.taskActivityCard.subtitleLabel.stringValue = @"任务活动为本机趋势推测";
     [hud.recentTasksCard updateRows:@[@"1  电脑监控工具 · 刚刚", @"2  GitHub发布准备 · 12分钟前", @"3  Mac选购研究 · 1小时前"] footer:@"官方任务历史 · 不代表正在运行"];
@@ -2238,9 +2575,11 @@ static int RunUISnapshot(void) {
     [hud.weeklyCard showAvailable:YES remaining:14 reset:@"3天后恢复" accent:NSColor.systemGreenColor];
     hud.planCard.valueLabel.stringValue = @"Pro"; hud.planCard.subtitleLabel.stringValue = @"不显示邮箱 · 刚刚";
     hud.usageCard.valueLabel.stringValue = @"8/5 4.8B"; hud.usageCard.subtitleLabel.stringValue = @"今日数据未返回 · 7天7.6B";
-    hud.localCostCard.valueLabel.stringValue = @"30天 4.56B · $3,374.59"; hud.localCostCard.subtitleLabel.stringValue = @"今日 2.90B · 7天 3.86B · 本月预计 $11,480.57（估算）";
+    hud.fiveHourTokensCard.valueLabel.stringValue = @"860K"; hud.fiveHourTokensCard.subtitleLabel.stringValue = @"占当前周2.6% · 官方额度已用32%";
+    hud.rollingDayTokensCard.valueLabel.stringValue = @"4.92M"; hud.rollingDayTokensCard.subtitleLabel.stringValue = @"占当前周14.6% · 滚动24小时";
+    hud.weeklyTokensCard.valueLabel.stringValue = @"33.7M"; hud.weeklyTokensCard.subtitleLabel.stringValue = @"当前周基准100% · 官方额度已用58%";
+    hud.localCostCard.valueLabel.stringValue = @"安装后近30天 4.56B · $3,374.59"; hud.localCostCard.subtitleLabel.stringValue = @"今日 2.90B · 近7天 3.86B · 本月趋势 $11,480.57（估算）";
     hud.quotaForecastCard.valueLabel.stringValue = @"每周 可撑到重置"; hud.quotaForecastCard.subtitleLabel.stringValue = @"预计重置时剩余12% · 中可信";
-    hud.serviceStatusCard.valueLabel.stringValue = @"Codex服务正常"; hud.serviceStatusCard.subtitleLabel.stringValue = @"OpenAI整体正常 · 刚刚";
     hud.codexFreshnessLabel.stringValue = @"额度 刚刚 · 用量 刚刚 · 本机Token 刚刚";
     [hud layoutSubtreeIfNeeded];
     NSBitmapImageRep *hudBitmap = [hud bitmapImageRepForCachingDisplayInRect:hud.bounds]; [hud cacheDisplayInRect:hud.bounds toBitmapImageRep:hudBitmap];

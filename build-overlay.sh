@@ -16,6 +16,7 @@ sign_identity="${CODE_SIGN_IDENTITY:--}"
   -mmacosx-version-min=15.0 \
   -arch arm64 -arch x86_64 \
   -framework Cocoa \
+  -framework UserNotifications \
   "$source_dir/overlay/CodexMonitorHUD.m" \
   "$source_dir/overlay/HUDView.m" \
   "$source_dir/overlay/UpdateManager.m" \

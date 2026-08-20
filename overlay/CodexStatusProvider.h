@@ -13,9 +13,17 @@ FOUNDATION_EXPORT NSDictionary<NSString *, id> *CodexScanRecentActivityAtRoot(NS
 @property(nonatomic) BOOL fiveHourAvailable;
 @property(nonatomic) double fiveHourRemainingPercent;
 @property(nonatomic) NSTimeInterval fiveHourResetAt;
+@property(nonatomic) double fiveHourWindowDurationMins;
+@property(nonatomic, copy) NSString *fiveHourDataState;
 @property(nonatomic) BOOL weeklyAvailable;
 @property(nonatomic) double weeklyRemainingPercent;
 @property(nonatomic) NSTimeInterval weeklyResetAt;
+@property(nonatomic) double weeklyWindowDurationMins;
+@property(nonatomic, copy) NSString *weeklyDataState;
+@property(nonatomic, copy) NSString *rateLimitReachedType;
+@property(nonatomic) BOOL rateLimitResetCreditsAvailable;
+@property(nonatomic) NSInteger rateLimitResetCreditsCount;
+@property(nonatomic, copy) NSArray<NSDictionary<NSString *, id> *> *rateLimitBuckets;
 @property(nonatomic) BOOL accountAvailable;
 @property(nonatomic, copy) NSString *planType;
 @property(nonatomic) NSTimeInterval accountUpdatedAt;
@@ -33,6 +41,8 @@ FOUNDATION_EXPORT NSDictionary<NSString *, id> *CodexScanRecentActivityAtRoot(NS
 @property(nonatomic, copy) NSString *latestUsageDate;
 @property(nonatomic) long long latestUsageTokens;
 @property(nonatomic) long long lifetimeTokens;
+@property(nonatomic) BOOL peakDailyTokensAvailable;
+@property(nonatomic) long long peakDailyTokens;
 @property(nonatomic) NSInteger currentStreakDays;
 @property(nonatomic) BOOL longestRunningTurnAvailable;
 @property(nonatomic) NSInteger longestRunningTurnSec;
@@ -64,6 +74,8 @@ FOUNDATION_EXPORT NSDictionary<NSString *, id> *CodexScanRecentActivityAtRoot(NS
 @property(nonatomic, copy) NSString *localCostErrorText;
 @property(nonatomic) BOOL localCostScanIncomplete;
 @property(nonatomic) NSTimeInterval localCostTrackingStartedAt;
+@property(nonatomic) NSTimeInterval localTokenBucketsStartedAt;
+@property(nonatomic, copy) NSArray<NSDictionary<NSString *, id> *> *localTokenBuckets;
 @property(nonatomic) long long localTodayTokens;
 @property(nonatomic) long long localSevenDayTokens;
 @property(nonatomic) long long localThirtyDayTokens;
@@ -81,6 +93,10 @@ FOUNDATION_EXPORT NSDictionary<NSString *, id> *CodexScanRecentActivityAtRoot(NS
 @property(nonatomic) BOOL weeklyForecastAvailable;
 @property(nonatomic, copy) NSString *weeklyForecastHeadline;
 @property(nonatomic, copy) NSString *weeklyForecastDetail;
+@property(nonatomic) BOOL weeklyRolling24hConsumptionAvailable;
+@property(nonatomic) double weeklyRolling24hConsumedPercent;
+@property(nonatomic) BOOL weeklyNaturalDayConsumptionAvailable;
+@property(nonatomic) double weeklyNaturalDayConsumedPercent;
 @property(nonatomic) NSTimeInterval updatedAt;
 @property(nonatomic, copy) NSString *statusText;
 @end

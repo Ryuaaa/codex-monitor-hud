@@ -175,6 +175,49 @@
 }
 @end
 
+@interface HUDQuotaDetailsCard ()
+@property(nonatomic, strong) NSStackView *rowsStack;
+@property(nonatomic, strong) NSTextField *footerLabel;
+@end
+
+@implementation HUDQuotaDetailsCard
+- (instancetype)init {
+    self = [super initWithFrame:NSZeroRect];
+    if (!self) return nil;
+    self.boxType = NSBoxCustom; self.titlePosition = NSNoTitle;
+    self.fillColor = [NSColor colorWithWhite:1 alpha:0.032]; self.borderColor = [NSColor colorWithWhite:1 alpha:0.075];
+    self.borderWidth = 1; self.cornerRadius = 9; self.contentViewMargins = NSMakeSize(9, 7);
+    NSTextField *title = [NSTextField labelWithString:@"完整额度列表"];
+    title.font = [NSFont systemFontOfSize:10.5 weight:NSFontWeightMedium]; title.textColor = NSColor.tertiaryLabelColor;
+    _rowsStack = [NSStackView stackViewWithViews:@[]];
+    _rowsStack.orientation = NSUserInterfaceLayoutOrientationVertical; _rowsStack.alignment = NSLayoutAttributeLeading; _rowsStack.spacing = 3;
+    _footerLabel = [NSTextField labelWithString:@"官方接口 · 高级显示"];
+    _footerLabel.font = [NSFont systemFontOfSize:9.5]; _footerLabel.textColor = NSColor.tertiaryLabelColor;
+    NSStackView *stack = [NSStackView stackViewWithViews:@[title, _rowsStack, _footerLabel]];
+    stack.orientation = NSUserInterfaceLayoutOrientationVertical; stack.alignment = NSLayoutAttributeLeading; stack.spacing = 3;
+    stack.translatesAutoresizingMaskIntoConstraints = NO; [self.contentView addSubview:stack];
+    [NSLayoutConstraint activateConstraints:@[
+        [stack.leadingAnchor constraintEqualToAnchor:self.contentView.leadingAnchor], [stack.trailingAnchor constraintEqualToAnchor:self.contentView.trailingAnchor],
+        [stack.topAnchor constraintEqualToAnchor:self.contentView.topAnchor], [stack.bottomAnchor constraintEqualToAnchor:self.contentView.bottomAnchor],
+        [_rowsStack.widthAnchor constraintEqualToAnchor:stack.widthAnchor]
+    ]];
+    [self updateRows:@[] footer:nil];
+    return self;
+}
+- (void)updateRows:(NSArray<NSString *> *)rows footer:(NSString *)footer {
+    for (NSView *view in [self.rowsStack.arrangedSubviews copy]) { [self.rowsStack removeArrangedSubview:view]; [view removeFromSuperview]; }
+    NSArray<NSString *> *safeRows = rows.count > 0 ? rows : @[@"当前没有可显示的额度项"];
+    for (NSString *text in safeRows) {
+        NSTextField *row = [NSTextField labelWithString:text ?: @""];
+        row.font = [NSFont monospacedDigitSystemFontOfSize:10.5 weight:NSFontWeightMedium]; row.textColor = NSColor.labelColor;
+        row.lineBreakMode = NSLineBreakByTruncatingMiddle; row.maximumNumberOfLines = 1;
+        [row setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
+        [self.rowsStack addArrangedSubview:row];
+    }
+    self.footerLabel.stringValue = footer.length > 0 ? footer : @"官方接口 · 高级显示";
+}
+@end
+
 @implementation HUDSparklineView
 - (instancetype)initWithFrame:(NSRect)frameRect { self = [super initWithFrame:frameRect]; if (self) { _values = @[]; _accentColor = NSColor.systemGreenColor; } return self; }
 - (NSSize)intrinsicContentSize { return NSMakeSize(68, 22); }
@@ -303,14 +346,25 @@
     _codexInsightsRow = [NSStackView stackViewWithViews:@[_planCard, _usageCard, _modelQuotaCard]];
     _codexInsightsRow.orientation = NSUserInterfaceLayoutOrientationHorizontal; _codexInsightsRow.distribution = NSStackViewDistributionFillEqually; _codexInsightsRow.spacing = 7;
     _localCostCard = [[HUDMetricCard alloc] initWithTitle:@"Token用量与费用" value:@"正在读取" subtitle:@"今日 -- · 7天 -- · 本月预计 --"];
+    _fiveHourTokensCard = [[HUDMetricCard alloc] initWithTitle:@"5小时 Token" value:@"--" subtitle:@"本地统计 · 等待数据"];
+    _rollingDayTokensCard = [[HUDMetricCard alloc] initWithTitle:@"24小时 Token" value:@"--" subtitle:@"本地统计 · 等待数据"];
+    _weeklyTokensCard = [[HUDMetricCard alloc] initWithTitle:@"本周Token" value:@"--" subtitle:@"本地统计 · 基准100%"];
+    _tokenWindowRow = [NSStackView stackViewWithViews:@[_fiveHourTokensCard, _rollingDayTokensCard, _weeklyTokensCard]];
+    _tokenWindowRow.orientation = NSUserInterfaceLayoutOrientationHorizontal; _tokenWindowRow.distribution = NSStackViewDistributionFillEqually; _tokenWindowRow.spacing = 7;
+    for (HUDMetricCard *card in @[_fiveHourTokensCard, _rollingDayTokensCard, _weeklyTokensCard]) {
+        card.subtitleLabel.maximumNumberOfLines = 2; card.subtitleLabel.lineBreakMode = NSLineBreakByWordWrapping;
+        card.subtitleLabel.font = [NSFont systemFontOfSize:9];
+    }
     _quotaForecastCard = [[HUDMetricCard alloc] initWithTitle:@"额度趋势预测" value:@"正在积累历史" subtitle:@"至少需要15分钟数据"];
     _serviceStatusCard = [[HUDMetricCard alloc] initWithTitle:@"OpenAI服务状态" value:@"正在检查" subtitle:@"官方状态页 · 低频刷新"];
+    _quotaDetailsCard = [HUDQuotaDetailsCard new];
     _longestTurnCard = [[HUDMetricCard alloc] initWithTitle:@"最长单次任务" value:@"当前未返回" subtitle:@"账户历史记录"];
     _longestStreakCard = [[HUDMetricCard alloc] initWithTitle:@"最长连续使用" value:@"当前未返回" subtitle:@"账户历史记录"];
-    _usageHistoryRow = [NSStackView stackViewWithViews:@[_longestTurnCard, _longestStreakCard]];
+    _peakDailyTokensCard = [[HUDMetricCard alloc] initWithTitle:@"历史单日峰值Token" value:@"当前未返回" subtitle:@"账户历史记录"];
+    _usageHistoryRow = [NSStackView stackViewWithViews:@[_longestTurnCard, _longestStreakCard, _peakDailyTokensCard]];
     _usageHistoryRow.orientation = NSUserInterfaceLayoutOrientationHorizontal; _usageHistoryRow.distribution = NSStackViewDistributionFillEqually; _usageHistoryRow.spacing = 7;
     _codexFreshnessLabel = [self label:@"来源  Codex本机接口" size:10.5 color:NSColor.tertiaryLabelColor];
-    _codexStack = [NSStackView stackViewWithViews:@[_codexStatusLabel, _taskActivityCard, _recentTasksCard, _quotaRow, _codexInsightsRow, _localCostCard, _quotaForecastCard, _serviceStatusCard, _usageHistoryRow, _codexFreshnessLabel]];
+    _codexStack = [NSStackView stackViewWithViews:@[_codexStatusLabel, _taskActivityCard, _recentTasksCard, _quotaRow, _codexInsightsRow, _tokenWindowRow, _localCostCard, _quotaForecastCard, _serviceStatusCard, _quotaDetailsCard, _usageHistoryRow, _codexFreshnessLabel]];
     _codexStack.orientation = NSUserInterfaceLayoutOrientationVertical;
     _codexStack.alignment = NSLayoutAttributeLeading;
     _codexStack.spacing = 7;
@@ -329,11 +383,22 @@
     _homeInsightsRow = [NSStackView stackViewWithViews:@[_homePlanCard, _homeUsageCard, _homeModelQuotaCard]];
     _homeInsightsRow.orientation = NSUserInterfaceLayoutOrientationHorizontal; _homeInsightsRow.distribution = NSStackViewDistributionFillEqually; _homeInsightsRow.spacing = 7;
     _homeLocalCostCard = [[HUDMetricCard alloc] initWithTitle:@"Token用量与费用" value:@"正在读取" subtitle:@"今日 -- · 7天 -- · 本月预计 --"];
+    _homeFiveHourTokensCard = [[HUDMetricCard alloc] initWithTitle:@"5小时 Token" value:@"--" subtitle:@"本地统计 · 等待数据"];
+    _homeRollingDayTokensCard = [[HUDMetricCard alloc] initWithTitle:@"24小时 Token" value:@"--" subtitle:@"本地统计 · 等待数据"];
+    _homeWeeklyTokensCard = [[HUDMetricCard alloc] initWithTitle:@"本周Token" value:@"--" subtitle:@"本地统计 · 基准100%"];
+    _homeTokenWindowRow = [NSStackView stackViewWithViews:@[_homeFiveHourTokensCard, _homeRollingDayTokensCard, _homeWeeklyTokensCard]];
+    _homeTokenWindowRow.orientation = NSUserInterfaceLayoutOrientationHorizontal; _homeTokenWindowRow.distribution = NSStackViewDistributionFillEqually; _homeTokenWindowRow.spacing = 7;
+    for (HUDMetricCard *card in @[_homeFiveHourTokensCard, _homeRollingDayTokensCard, _homeWeeklyTokensCard]) {
+        card.subtitleLabel.maximumNumberOfLines = 2; card.subtitleLabel.lineBreakMode = NSLineBreakByWordWrapping;
+        card.subtitleLabel.font = [NSFont systemFontOfSize:9];
+    }
     _homeQuotaForecastCard = [[HUDMetricCard alloc] initWithTitle:@"额度趋势预测" value:@"正在积累历史" subtitle:@"至少需要15分钟数据"];
     _homeServiceStatusCard = [[HUDMetricCard alloc] initWithTitle:@"OpenAI服务状态" value:@"正在检查" subtitle:@"官方状态页 · 低频刷新"];
+    _homeQuotaDetailsCard = [HUDQuotaDetailsCard new];
     _homeLongestTurnCard = [[HUDMetricCard alloc] initWithTitle:@"最长单次任务" value:@"当前未返回" subtitle:@"账户历史记录"];
     _homeLongestStreakCard = [[HUDMetricCard alloc] initWithTitle:@"最长连续使用" value:@"当前未返回" subtitle:@"账户历史记录"];
-    _homeUsageHistoryRow = [NSStackView stackViewWithViews:@[_homeLongestTurnCard, _homeLongestStreakCard]];
+    _homePeakDailyTokensCard = [[HUDMetricCard alloc] initWithTitle:@"历史单日峰值Token" value:@"当前未返回" subtitle:@"账户历史记录"];
+    _homeUsageHistoryRow = [NSStackView stackViewWithViews:@[_homeLongestTurnCard, _homeLongestStreakCard, _homePeakDailyTokensCard]];
     _homeUsageHistoryRow.orientation = NSUserInterfaceLayoutOrientationHorizontal; _homeUsageHistoryRow.distribution = NSStackViewDistributionFillEqually; _homeUsageHistoryRow.spacing = 7;
     _homeComputerStatusLabel = [self label:@"● 正在读取电脑状态" size:13 color:NSColor.systemGreenColor];
     _homeComputerStatusLabel.font = [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold];
@@ -349,8 +414,11 @@
     _homeTrendRow = [NSStackView stackViewWithViews:@[_homeTrendTitleLabel, _homeSparkline, _homeTrendLabel]];
     _homeTrendRow.orientation = NSUserInterfaceLayoutOrientationHorizontal; _homeTrendRow.alignment = NSLayoutAttributeCenterY; _homeTrendRow.spacing = 8;
     _homeFreshnessLabel = [self label:@"电脑5秒起 · Codex智能刷新" size:10.5 color:NSColor.tertiaryLabelColor];
-    _homeStack = [NSStackView stackViewWithViews:@[_homeCodexStatusLabel, _homeTaskActivityCard, _homeRecentTasksCard, _homeQuotaRow, _homeInsightsRow, _homeLocalCostCard, _homeQuotaForecastCard, _homeServiceStatusCard, _homeUsageHistoryRow, _homeComputerStatusLabel, _homeComputerCardsRow, _homeAttributionLabel, _homeMemoryAppsCard, _homeTrendRow, _homeFreshnessLabel]];
+    _homeStack = [NSStackView stackViewWithViews:@[_homeCodexStatusLabel, _homeTaskActivityCard, _homeRecentTasksCard, _homeQuotaRow, _homeInsightsRow, _homeTokenWindowRow, _homeLocalCostCard, _homeQuotaForecastCard, _homeServiceStatusCard, _homeQuotaDetailsCard, _homeUsageHistoryRow, _homeComputerStatusLabel, _homeComputerCardsRow, _homeAttributionLabel, _homeMemoryAppsCard, _homeTrendRow, _homeFreshnessLabel]];
     _homeStack.orientation = NSUserInterfaceLayoutOrientationVertical; _homeStack.alignment = NSLayoutAttributeLeading; _homeStack.spacing = 7;
+    _tokenWindowRow.hidden = YES; _homeTokenWindowRow.hidden = YES;
+    _quotaDetailsCard.hidden = YES; _homeQuotaDetailsCard.hidden = YES;
+    _peakDailyTokensCard.hidden = YES; _homePeakDailyTokensCard.hidden = YES;
 
     _computerStatusLabel = [self label:@"● 正在读取电脑状态" size:13 color:NSColor.systemGreenColor];
     _computerStatusLabel.font = [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold];
@@ -411,16 +479,20 @@
         [_recentTasksCard.widthAnchor constraintEqualToAnchor:_codexStack.widthAnchor],
         [_codexInsightsRow.widthAnchor constraintEqualToAnchor:_codexStack.widthAnchor],
         [_localCostCard.widthAnchor constraintEqualToAnchor:_codexStack.widthAnchor],
+        [_tokenWindowRow.widthAnchor constraintEqualToAnchor:_codexStack.widthAnchor],
         [_quotaForecastCard.widthAnchor constraintEqualToAnchor:_codexStack.widthAnchor],
         [_serviceStatusCard.widthAnchor constraintEqualToAnchor:_codexStack.widthAnchor],
+        [_quotaDetailsCard.widthAnchor constraintEqualToAnchor:_codexStack.widthAnchor],
         [_usageHistoryRow.widthAnchor constraintEqualToAnchor:_codexStack.widthAnchor],
         [_homeQuotaRow.widthAnchor constraintEqualToAnchor:_homeStack.widthAnchor],
         [_homeTaskActivityCard.widthAnchor constraintEqualToAnchor:_homeStack.widthAnchor],
         [_homeRecentTasksCard.widthAnchor constraintEqualToAnchor:_homeStack.widthAnchor],
         [_homeInsightsRow.widthAnchor constraintEqualToAnchor:_homeStack.widthAnchor],
         [_homeLocalCostCard.widthAnchor constraintEqualToAnchor:_homeStack.widthAnchor],
+        [_homeTokenWindowRow.widthAnchor constraintEqualToAnchor:_homeStack.widthAnchor],
         [_homeQuotaForecastCard.widthAnchor constraintEqualToAnchor:_homeStack.widthAnchor],
         [_homeServiceStatusCard.widthAnchor constraintEqualToAnchor:_homeStack.widthAnchor],
+        [_homeQuotaDetailsCard.widthAnchor constraintEqualToAnchor:_homeStack.widthAnchor],
         [_homeUsageHistoryRow.widthAnchor constraintEqualToAnchor:_homeStack.widthAnchor],
         [_homeComputerCardsRow.widthAnchor constraintEqualToAnchor:_homeStack.widthAnchor],
         [_homeMemoryAppsCard.widthAnchor constraintEqualToAnchor:_homeStack.widthAnchor],
@@ -493,28 +565,31 @@
 - (void)setCompact:(BOOL)compact { self.compactMode = compact; self.detailStack.hidden = compact || self.collapsed; }
 - (void)refreshQuotaRowVisibility { self.quotaRow.hidden = self.fiveHourCard.hidden && self.weeklyCard.hidden; }
 - (void)refreshCodexInsightsRow { self.codexInsightsRow.hidden = self.planCard.hidden && self.usageCard.hidden && self.modelQuotaCard.hidden; }
-- (void)refreshUsageHistoryRow { self.usageHistoryRow.hidden = self.longestTurnCard.hidden && self.longestStreakCard.hidden; }
+- (void)refreshUsageHistoryRow { self.usageHistoryRow.hidden = self.longestTurnCard.hidden && self.longestStreakCard.hidden && self.peakDailyTokensCard.hidden; }
 - (void)setFiveHourQuotaVisible:(BOOL)visible { self.fiveHourCard.hidden = !visible; [self refreshQuotaRowVisibility]; }
 - (void)setWeeklyQuotaVisible:(BOOL)visible { self.weeklyCard.hidden = !visible; [self refreshQuotaRowVisibility]; }
 - (void)setPlanVisible:(BOOL)visible { self.planCard.hidden = !visible; [self refreshCodexInsightsRow]; }
 - (void)setUsageVisible:(BOOL)visible { self.usageCard.hidden = !visible; [self refreshCodexInsightsRow]; }
 - (void)setModelQuotaVisible:(BOOL)visible { self.modelQuotaCard.hidden = !visible; [self refreshCodexInsightsRow]; }
 - (void)setLocalCostVisible:(BOOL)visible { self.localCostCard.hidden = !visible; }
+- (void)setTokenWindowsVisible:(BOOL)visible { self.tokenWindowRow.hidden = !visible; }
 - (void)setQuotaForecastVisible:(BOOL)visible { self.quotaForecastCard.hidden = !visible; }
 - (void)setServiceStatusVisible:(BOOL)visible { self.serviceStatusCard.hidden = !visible; }
+- (void)setQuotaDetailsVisible:(BOOL)visible { self.quotaDetailsCard.hidden = !visible; }
 - (void)setTaskActivityVisible:(BOOL)visible { self.taskActivityCard.hidden = !visible; }
 - (void)setRecentTasksVisible:(BOOL)visible { self.recentTasksCard.hidden = !visible; }
 - (void)setLongestTurnVisible:(BOOL)visible { self.longestTurnCard.hidden = !visible; [self refreshUsageHistoryRow]; }
 - (void)setLongestStreakVisible:(BOOL)visible { self.longestStreakCard.hidden = !visible; [self refreshUsageHistoryRow]; }
+- (void)setPeakDailyTokensVisible:(BOOL)visible { self.peakDailyTokensCard.hidden = !visible; [self refreshUsageHistoryRow]; }
 - (void)setSystemVisible:(BOOL)visible { self.healthCardsRow.hidden = !visible; self.healthLabel.hidden = !visible; }
 - (void)setAttributionVisible:(BOOL)visible { self.attributionLabel.hidden = !visible; }
 - (void)setTrendVisible:(BOOL)visible { self.trendRow.hidden = !visible; }
 - (void)setMemoryAppsVisible:(BOOL)visible { self.memoryAppsCard.hidden = !visible; }
-- (void)refreshHomeCodexSection { self.homeCodexStatusLabel.hidden = self.homeTaskActivityCard.hidden && self.homeRecentTasksCard.hidden && self.homeQuotaRow.hidden && self.homeInsightsRow.hidden && self.homeLocalCostCard.hidden && self.homeQuotaForecastCard.hidden && self.homeServiceStatusCard.hidden && self.homeUsageHistoryRow.hidden; }
+- (void)refreshHomeCodexSection { self.homeCodexStatusLabel.hidden = self.homeTaskActivityCard.hidden && self.homeRecentTasksCard.hidden && self.homeQuotaRow.hidden && self.homeInsightsRow.hidden && self.homeTokenWindowRow.hidden && self.homeLocalCostCard.hidden && self.homeQuotaForecastCard.hidden && self.homeServiceStatusCard.hidden && self.homeQuotaDetailsCard.hidden && self.homeUsageHistoryRow.hidden; }
 - (void)refreshHomeComputerSection { self.homeComputerStatusLabel.hidden = self.homeComputerCardsRow.hidden && self.homeAttributionLabel.hidden && self.homeMemoryAppsCard.hidden && self.homeTrendRow.hidden; }
 - (void)refreshHomeQuotaRow { self.homeQuotaRow.hidden = self.homeFiveHourCard.hidden && self.homeWeeklyCard.hidden; [self refreshHomeCodexSection]; }
 - (void)refreshHomeInsightsRow { self.homeInsightsRow.hidden = self.homePlanCard.hidden && self.homeUsageCard.hidden && self.homeModelQuotaCard.hidden; [self refreshHomeCodexSection]; }
-- (void)refreshHomeUsageHistoryRow { self.homeUsageHistoryRow.hidden = self.homeLongestTurnCard.hidden && self.homeLongestStreakCard.hidden; [self refreshHomeCodexSection]; }
+- (void)refreshHomeUsageHistoryRow { self.homeUsageHistoryRow.hidden = self.homeLongestTurnCard.hidden && self.homeLongestStreakCard.hidden && self.homePeakDailyTokensCard.hidden; [self refreshHomeCodexSection]; }
 - (void)refreshHomeComputerCardsRow { self.homeComputerCardsRow.hidden = self.homeBottleneckCard.hidden && self.homeSystemCard.hidden; [self refreshHomeComputerSection]; }
 - (void)setHomeFiveHourVisible:(BOOL)visible { self.homeFiveHourCard.hidden = !visible; [self refreshHomeQuotaRow]; }
 - (void)setHomeWeeklyVisible:(BOOL)visible { self.homeWeeklyCard.hidden = !visible; [self refreshHomeQuotaRow]; }
@@ -522,12 +597,15 @@
 - (void)setHomeUsageVisible:(BOOL)visible { self.homeUsageCard.hidden = !visible; [self refreshHomeInsightsRow]; }
 - (void)setHomeModelQuotaVisible:(BOOL)visible { self.homeModelQuotaCard.hidden = !visible; [self refreshHomeInsightsRow]; }
 - (void)setHomeLocalCostVisible:(BOOL)visible { self.homeLocalCostCard.hidden = !visible; [self refreshHomeCodexSection]; }
+- (void)setHomeTokenWindowsVisible:(BOOL)visible { self.homeTokenWindowRow.hidden = !visible; [self refreshHomeCodexSection]; }
 - (void)setHomeQuotaForecastVisible:(BOOL)visible { self.homeQuotaForecastCard.hidden = !visible; [self refreshHomeCodexSection]; }
 - (void)setHomeServiceStatusVisible:(BOOL)visible { self.homeServiceStatusCard.hidden = !visible; [self refreshHomeCodexSection]; }
+- (void)setHomeQuotaDetailsVisible:(BOOL)visible { self.homeQuotaDetailsCard.hidden = !visible; [self refreshHomeCodexSection]; }
 - (void)setHomeTaskActivityVisible:(BOOL)visible { self.homeTaskActivityCard.hidden = !visible; [self refreshHomeCodexSection]; }
 - (void)setHomeRecentTasksVisible:(BOOL)visible { self.homeRecentTasksCard.hidden = !visible; [self refreshHomeCodexSection]; }
 - (void)setHomeLongestTurnVisible:(BOOL)visible { self.homeLongestTurnCard.hidden = !visible; [self refreshHomeUsageHistoryRow]; }
 - (void)setHomeLongestStreakVisible:(BOOL)visible { self.homeLongestStreakCard.hidden = !visible; [self refreshHomeUsageHistoryRow]; }
+- (void)setHomePeakDailyTokensVisible:(BOOL)visible { self.homePeakDailyTokensCard.hidden = !visible; [self refreshHomeUsageHistoryRow]; }
 - (void)setHomeDiagnosisVisible:(BOOL)visible { self.homeBottleneckCard.hidden = !visible; [self refreshHomeComputerCardsRow]; }
 - (void)setHomeSystemVisible:(BOOL)visible { self.homeSystemCard.hidden = !visible; [self refreshHomeComputerCardsRow]; }
 - (void)setHomeAttributionVisible:(BOOL)visible { self.homeAttributionLabel.hidden = !visible; [self refreshHomeComputerSection]; }
@@ -536,8 +614,8 @@
 - (void)applyHomeCodexOrder:(NSArray<NSString *> *)codexOrder computerOrder:(NSArray<NSString *> *)computerOrder {
     NSDictionary<NSString *, NSView *> *codexViews = @{
         @"activity": self.homeTaskActivityCard, @"recent": self.homeRecentTasksCard, @"quota": self.homeQuotaRow,
-        @"insights": self.homeInsightsRow, @"cost": self.homeLocalCostCard,
-        @"forecast": self.homeQuotaForecastCard, @"service": self.homeServiceStatusCard, @"history": self.homeUsageHistoryRow
+        @"insights": self.homeInsightsRow, @"tokenWindows": self.homeTokenWindowRow, @"cost": self.homeLocalCostCard,
+        @"forecast": self.homeQuotaForecastCard, @"service": self.homeServiceStatusCard, @"quotaDetails": self.homeQuotaDetailsCard, @"history": self.homeUsageHistoryRow
     };
     NSDictionary<NSString *, NSView *> *computerViews = @{
         @"summary": self.homeComputerCardsRow, @"attribution": self.homeAttributionLabel,

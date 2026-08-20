@@ -6,8 +6,10 @@ static NSInteger const CodexCostHistoryDays = 30;
 static unsigned long long const CodexCostScanBudgetBytes = 64ULL * 1024ULL * 1024ULL;
 static NSUInteger const CodexCostMaxRetainedLineBytes = 512 * 1024;
 static unsigned long long const CodexCostCacheMaximumBytes = 8ULL * 1024ULL * 1024ULL;
-static NSInteger const CodexCostCacheVersion = 4;
+static NSInteger const CodexCostCacheVersion = 5;
+static NSInteger const CodexCostMigratableCacheVersion = 4;
 static NSInteger const CodexCostTrackingMarkerVersion = 1;
+static NSTimeInterval const CodexCostTokenBucketSeconds = 5.0 * 60.0;
 static NSString *const CodexCostPricingVersion = @"OpenAI 2026-08-08";
 
 static NSDate *CodexCostParseTimestamp(id value) {
@@ -221,6 +223,7 @@ static void CodexParseCostLine(NSString *line,
     [events addObject:@{
         @"k": fingerprint,
         @"d": [dayFormatter stringFromDate:timestamp],
+        @"t": @(timestamp.timeIntervalSince1970),
         @"m": model.length > 0 ? model : @"unknown",
         @"i": counted[@"i"], @"c": counted[@"c"], @"w": counted[@"w"], @"o": counted[@"o"]
     }];
@@ -244,11 +247,16 @@ static NSArray<NSDictionary<NSString *, id> *> *CodexCompactedCostEvents(NSArray
         NSString *day = [event[@"d"] isKindOfClass:NSString.class] ? event[@"d"] : nil;
         NSString *model = [event[@"m"] isKindOfClass:NSString.class] ? event[@"m"] : @"unknown";
         if (day.length == 0) continue;
-        NSString *groupKey = [NSString stringWithFormat:@"%@\n%@", day, model];
+        NSNumber *timestamp = [event[@"t"] isKindOfClass:NSNumber.class] ? event[@"t"] : nil;
+        NSTimeInterval bucketStart = timestamp ? floor(timestamp.doubleValue / CodexCostTokenBucketSeconds) * CodexCostTokenBucketSeconds : 0;
+        NSString *groupKey = timestamp
+            ? [NSString stringWithFormat:@"%.0f\n%@", bucketStart, model]
+            : [NSString stringWithFormat:@"legacy\n%@\n%@", day, model];
         NSMutableDictionary<NSString *, id> *row = rows[groupKey];
         if (!row) {
             NSString *fingerprint = [NSString stringWithFormat:@"compact-%016llx-%016llx", CodexStableHash(sourceKey ?: @""), CodexStableHash(groupKey)];
             row = [@{ @"k": fingerprint, @"d": day, @"m": model, @"i": @0LL, @"c": @0LL, @"w": @0LL, @"o": @0LL, @"x": @0.0, @"p": @0LL } mutableCopy];
+            if (timestamp) row[@"t"] = @(bucketStart);
             rows[groupKey] = row;
         }
         for (NSString *tokenKey in @[@"i", @"c", @"w", @"o"]) {
@@ -269,6 +277,9 @@ static NSArray<NSDictionary<NSString *, id> *> *CodexCompactedCostEvents(NSArray
         }
     }
     return [rows.allValues sortedArrayUsingComparator:^NSComparisonResult(NSDictionary *left, NSDictionary *right) {
+        NSNumber *leftTime = [left[@"t"] isKindOfClass:NSNumber.class] ? left[@"t"] : nil;
+        NSNumber *rightTime = [right[@"t"] isKindOfClass:NSNumber.class] ? right[@"t"] : nil;
+        if (leftTime && rightTime && ![leftTime isEqualToNumber:rightTime]) return [leftTime compare:rightTime];
         NSComparisonResult dayResult = [left[@"d"] compare:right[@"d"]];
         return dayResult != NSOrderedSame ? dayResult : [left[@"m"] compare:right[@"m"]];
     }];
@@ -457,6 +468,7 @@ static NSDictionary *CodexCreateCostBaseline(NSArray<NSURL *> *files,
     BOOL wroteCache = CodexWriteJSONObject(@{
         @"version": @(CodexCostCacheVersion),
         @"startedAt": @(start.timeIntervalSince1970),
+        @"tokenBucketsStartedAt": @(start.timeIntervalSince1970),
         @"updatedAt": @(start.timeIntervalSince1970),
         @"files": baselineFiles
     }, cacheURL);
@@ -472,6 +484,7 @@ static NSDictionary *CodexCreateCostBaseline(NSArray<NSURL *> *files,
     return @{
         @"available": @NO, @"scanIncomplete": @NO,
         @"trackingStartedAt": @(start.timeIntervalSince1970),
+        @"tokenBucketsStartedAt": @(start.timeIntervalSince1970),
         @"updatedAt": @(start.timeIntervalSince1970),
         @"error": @"已从现在开始记录安装后的Token与费用",
         @"pricingVersion": CodexCostPricingVersion
@@ -489,6 +502,7 @@ static NSDictionary<NSString *, id> *CodexAggregateCostEventsFromTrackingStart(N
     NSDateFormatter *formatter = CodexCostDayFormatter();
     NSMutableDictionary<NSString *, NSMutableDictionary *> *daily = [NSMutableDictionary dictionary];
     NSMutableDictionary<NSString *, NSNumber *> *modelTokens = [NSMutableDictionary dictionary];
+    NSMutableDictionary<NSNumber *, NSNumber *> *tokenBuckets = [NSMutableDictionary dictionary];
     NSMutableSet<NSString *> *seen = [NSMutableSet set];
     long long totalTokens = 0, pricedTokens = 0;
     for (NSDictionary *event in events ?: @[]) {
@@ -515,6 +529,11 @@ static NSDictionary<NSString *, id> *CodexAggregateCostEventsFromTrackingStart(N
         modelTokens[model] = @([modelTokens[model] longLongValue] + tokens);
         totalTokens += tokens;
         pricedTokens += eventPricedTokens;
+        NSNumber *bucketTime = [event[@"t"] isKindOfClass:NSNumber.class] ? event[@"t"] : nil;
+        if (bucketTime && bucketTime.doubleValue > 0) {
+            NSNumber *key = @(floor(bucketTime.doubleValue / CodexCostTokenBucketSeconds) * CodexCostTokenBucketSeconds);
+            tokenBuckets[key] = @([tokenBuckets[key] longLongValue] + tokens);
+        }
     }
     long long todayTokens = 0, sevenTokens = 0, thirtyTokens = 0;
     double todayCost = 0, sevenCost = 0, thirtyCost = 0, monthCost = 0;
@@ -554,13 +573,49 @@ static NSDictionary<NSString *, id> *CodexAggregateCostEventsFromTrackingStart(N
         if (value.longLongValue > topTokens) { topTokens = value.longLongValue; topModel = key; }
     }];
     double coverage = totalTokens > 0 ? (double)pricedTokens / (double)totalTokens * 100.0 : 0;
+    NSMutableArray<NSDictionary<NSString *, id> *> *sortedTokenBuckets = [NSMutableArray array];
+    for (NSNumber *timestamp in [tokenBuckets.allKeys sortedArrayUsingSelector:@selector(compare:)]) {
+        [sortedTokenBuckets addObject:@{ @"t": timestamp, @"tokens": tokenBuckets[timestamp] }];
+    }
     return @{
         @"available": @(totalTokens > 0), @"scanIncomplete": @(scanIncomplete),
         @"todayTokens": @(todayTokens), @"sevenDayTokens": @(sevenTokens), @"thirtyDayTokens": @(thirtyTokens),
         @"todayCost": @(todayCost), @"sevenDayCost": @(sevenCost), @"thirtyDayCost": @(thirtyCost),
         @"monthCost": @(monthCost), @"monthForecastCost": @(monthForecast),
         @"pricedTokenPercent": @(coverage), @"topModel": topModel, @"dailyTrend": trend,
+        @"tokenBuckets": sortedTokenBuckets,
         @"pricingVersion": CodexCostPricingVersion, @"eventCount": @(seen.count)
+    };
+}
+
+NSDictionary<NSString *, id> *CodexTokenWindowSummary(NSArray<NSDictionary<NSString *, id> *> *buckets,
+                                                        NSTimeInterval windowStart,
+                                                        NSTimeInterval windowEnd,
+                                                        NSTimeInterval trackingStartedAt) {
+    if (windowStart <= 0 || windowEnd <= windowStart) return @{ @"available": @NO, @"complete": @NO, @"tokens": @0LL };
+    long long tokens = 0;
+    BOOL sawBucket = NO;
+    NSTimeInterval firstBucket = DBL_MAX;
+    NSTimeInterval alignedStart = floor(windowStart / CodexCostTokenBucketSeconds) * CodexCostTokenBucketSeconds;
+    for (NSDictionary<NSString *, id> *bucket in buckets ?: @[]) {
+        NSNumber *timestamp = [bucket[@"t"] isKindOfClass:NSNumber.class] ? bucket[@"t"] : nil;
+        NSNumber *count = [bucket[@"tokens"] isKindOfClass:NSNumber.class] ? bucket[@"tokens"] : nil;
+        if (!timestamp || !count) continue;
+        NSTimeInterval value = timestamp.doubleValue;
+        if (value < alignedStart || value >= windowEnd) continue;
+        tokens += MAX(0LL, count.longLongValue);
+        firstBucket = MIN(firstBucket, value);
+        sawBucket = YES;
+    }
+    BOOL coverageKnown = trackingStartedAt > 0;
+    BOOL complete = coverageKnown && trackingStartedAt <= windowStart + CodexCostTokenBucketSeconds;
+    return @{
+        @"available": @(coverageKnown || sawBucket),
+        @"complete": @(complete),
+        @"tokens": @(tokens),
+        @"windowStart": @(windowStart),
+        @"windowEnd": @(windowEnd),
+        @"firstBucket": @(sawBucket ? firstBucket : 0)
     };
 }
 
@@ -573,14 +628,18 @@ NSDictionary<NSString *, id> *CodexScanCostHistoryAtHome(NSURL *codexHome, NSURL
     NSDate *trackingStartedAt = CodexLoadTrackingStart(trackingStartURL, referenceNow);
     NSDictionary *cache = CodexLoadCostCache(cacheURL);
     NSTimeInterval cachedStart = [cache[@"startedAt"] doubleValue];
-    BOOL validCache = trackingStartedAt && [cache[@"version"] integerValue] == CodexCostCacheVersion &&
+    NSInteger cacheVersion = [cache[@"version"] integerValue];
+    BOOL supportedCacheVersion = cacheVersion == CodexCostCacheVersion || cacheVersion == CodexCostMigratableCacheVersion;
+    BOOL validCache = trackingStartedAt && supportedCacheVersion &&
                       [cache[@"files"] isKindOfClass:NSDictionary.class] && cachedStart > 0 &&
                       cachedStart <= referenceNow.timeIntervalSince1970 + 60.0 &&
                       fabs(cachedStart - trackingStartedAt.timeIntervalSince1970) < 1.0;
     if (validCache) trackingStartedAt = [NSDate dateWithTimeIntervalSince1970:cachedStart];
+    NSTimeInterval tokenBucketsStartedAt = cacheVersion == CodexCostCacheVersion ? [cache[@"tokenBucketsStartedAt"] doubleValue] : referenceNow.timeIntervalSince1970;
+    if (tokenBucketsStartedAt <= 0 || tokenBucketsStartedAt > referenceNow.timeIntervalSince1970 + 60.0) tokenBucketsStartedAt = referenceNow.timeIntervalSince1970;
     NSArray<NSURL *> *files = CodexCostCandidateFiles(codexHome, referenceNow, trackingStartedAt ?: referenceNow);
     if (!validCache) return CodexCreateCostBaseline(files, cacheURL, trackingStartURL, referenceNow);
-    if (files.count == 0) return @{ @"available": @NO, @"trackingStartedAt": @(trackingStartedAt.timeIntervalSince1970), @"error": @"安装后暂未找到本机会话Token记录", @"pricingVersion": CodexCostPricingVersion };
+    if (files.count == 0) return @{ @"available": @NO, @"trackingStartedAt": @(trackingStartedAt.timeIntervalSince1970), @"tokenBucketsStartedAt": @(tokenBucketsStartedAt), @"error": @"安装后暂未找到本机会话Token记录", @"pricingVersion": CodexCostPricingVersion };
     NSDictionary *cachedFiles = cache[@"files"];
     NSMutableDictionary *newFiles = [NSMutableDictionary dictionary];
     NSCalendar *calendar = [NSCalendar calendarWithIdentifier:NSCalendarIdentifierGregorian];
@@ -636,9 +695,10 @@ NSDictionary<NSString *, id> *CodexScanCostHistoryAtHome(NSURL *codexHome, NSURL
         newFiles[fileKey] = entry;
         if (!complete && !reachedEnd) incomplete = YES;
     }
-    if (!CodexWriteJSONObject(@{ @"version": @(CodexCostCacheVersion), @"startedAt": @(trackingStartedAt.timeIntervalSince1970), @"updatedAt": @(referenceNow.timeIntervalSince1970), @"files": newFiles }, cacheURL)) {
+    if (!CodexWriteJSONObject(@{ @"version": @(CodexCostCacheVersion), @"startedAt": @(trackingStartedAt.timeIntervalSince1970), @"tokenBucketsStartedAt": @(tokenBucketsStartedAt), @"updatedAt": @(referenceNow.timeIntervalSince1970), @"files": newFiles }, cacheURL)) {
         return @{ @"available": @NO, @"scanIncomplete": @NO,
                   @"trackingStartedAt": @(trackingStartedAt.timeIntervalSince1970),
+                  @"tokenBucketsStartedAt": @(tokenBucketsStartedAt),
                   @"updatedAt": @(referenceNow.timeIntervalSince1970),
                   @"error": @"安装后Token缓存保存失败",
                   @"pricingVersion": CodexCostPricingVersion };
@@ -647,6 +707,7 @@ NSDictionary<NSString *, id> *CodexScanCostHistoryAtHome(NSURL *codexHome, NSURL
     for (NSDictionary *entry in newFiles.allValues) if ([entry[@"events"] isKindOfClass:NSArray.class]) [allEvents addObjectsFromArray:entry[@"events"]];
     NSMutableDictionary *aggregate = [CodexAggregateCostEventsFromTrackingStart(allEvents, referenceNow, incomplete, trackingStartedAt) mutableCopy];
     aggregate[@"trackingStartedAt"] = @(trackingStartedAt.timeIntervalSince1970);
+    aggregate[@"tokenBucketsStartedAt"] = @(tokenBucketsStartedAt);
     aggregate[@"updatedAt"] = @(referenceNow.timeIntervalSince1970);
     if (![aggregate[@"available"] boolValue]) aggregate[@"error"] = incomplete ? @"正在补齐本机Token历史" : @"本机记录暂时没有Token数据";
     return aggregate;
@@ -696,6 +757,44 @@ NSDictionary<NSString *, id> *CodexQuotaForecastFromSamples(NSArray<NSDictionary
     return @{ @"available": @YES, @"headline": @"可能提前用完", @"detail": [NSString stringWithFormat:@"%@ · %@可信", timeText, confidence], @"confidence": confidence, @"projectedRemaining": @(projected), @"exhaustAt": @(exhaustAt) };
 }
 
+NSDictionary<NSString *, id> *CodexWeeklyConsumptionFromSamples(NSArray<NSDictionary<NSString *, id> *> *samples,
+                                                                  double currentRemaining,
+                                                                  NSTimeInterval currentResetAt,
+                                                                  NSString *mode,
+                                                                  NSDate *now) {
+    NSDate *referenceNow = now ?: NSDate.date;
+    NSTimeInterval nowValue = referenceNow.timeIntervalSince1970;
+    if (currentResetAt <= nowValue) return @{ @"available": @NO, @"detail": @"额度窗口已经重置" };
+    BOOL naturalDay = [mode isEqualToString:@"naturalDay"];
+    NSDate *periodDate = naturalDay ? [NSCalendar.currentCalendar startOfDayForDate:referenceNow] : [referenceNow dateByAddingTimeInterval:-24.0 * 3600.0];
+    NSTimeInterval periodStart = periodDate.timeIntervalSince1970;
+    NSDictionary *baseline = nil;
+    NSTimeInterval bestDistance = DBL_MAX;
+    for (NSDictionary *sample in samples ?: @[]) {
+        NSNumber *timestamp = [sample[@"t"] isKindOfClass:NSNumber.class] ? sample[@"t"] : nil;
+        NSNumber *remaining = [sample[@"w"] isKindOfClass:NSNumber.class] ? sample[@"w"] : nil;
+        NSNumber *reset = [sample[@"wr"] isKindOfClass:NSNumber.class] ? sample[@"wr"] : nil;
+        if (!timestamp || !remaining || !reset || fabs(reset.doubleValue - currentResetAt) > 300.0) continue;
+        if (timestamp.doubleValue > nowValue + 60.0) continue;
+        if (naturalDay && timestamp.doubleValue < periodStart) continue;
+        NSTimeInterval distance = fabs(timestamp.doubleValue - periodStart);
+        if (distance < bestDistance) { bestDistance = distance; baseline = sample; }
+    }
+    if (!baseline || bestDistance > 30.0 * 60.0) {
+        return @{ @"available": @NO, @"detail": naturalDay ? @"缺少接近今天零点的数据" : @"尚未积累完整24小时数据", @"periodStart": @(periodStart) };
+    }
+    double baselineRemaining = [baseline[@"w"] doubleValue];
+    double consumed = MAX(0.0, MIN(100.0, baselineRemaining - currentRemaining));
+    return @{
+        @"available": @YES,
+        @"mode": naturalDay ? @"naturalDay" : @"rolling24h",
+        @"consumedPercent": @(consumed),
+        @"baselineRemaining": @(baselineRemaining),
+        @"baselineAt": baseline[@"t"],
+        @"periodStart": @(periodStart)
+    };
+}
+
 NSDictionary<NSString *, id> *CodexUpdateQuotaForecastHistory(NSURL *historyURL, NSDictionary<NSString *, id> *sample, NSDate *now) {
     NSDate *referenceNow = now ?: NSDate.date;
     NSDictionary *stored = CodexLoadDictionary(historyURL);
@@ -718,6 +817,10 @@ NSDictionary<NSString *, id> *CodexUpdateQuotaForecastHistory(NSURL *historyURL,
     NSNumber *weekly = [sample[@"w"] isKindOfClass:NSNumber.class] ? sample[@"w"] : nil;
     NSNumber *weeklyReset = [sample[@"wr"] isKindOfClass:NSNumber.class] ? sample[@"wr"] : nil;
     if (five && fiveReset) result[@"fiveHour"] = CodexQuotaForecastFromSamples(samples, @"f", @"fr", five.doubleValue, fiveReset.doubleValue, referenceNow);
-    if (weekly && weeklyReset) result[@"weekly"] = CodexQuotaForecastFromSamples(samples, @"w", @"wr", weekly.doubleValue, weeklyReset.doubleValue, referenceNow);
+    if (weekly && weeklyReset) {
+        result[@"weekly"] = CodexQuotaForecastFromSamples(samples, @"w", @"wr", weekly.doubleValue, weeklyReset.doubleValue, referenceNow);
+        result[@"weeklyRolling24h"] = CodexWeeklyConsumptionFromSamples(samples, weekly.doubleValue, weeklyReset.doubleValue, @"rolling24h", referenceNow);
+        result[@"weeklyNaturalDay"] = CodexWeeklyConsumptionFromSamples(samples, weekly.doubleValue, weeklyReset.doubleValue, @"naturalDay", referenceNow);
+    }
     return result;
 }
