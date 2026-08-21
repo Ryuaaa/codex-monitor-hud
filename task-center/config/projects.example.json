@@ -1,0 +1,7 @@
+[
+  {
+    "id": "prj_example",
+    "name": "示例项目",
+    "workdirs": ["/absolute/path/to/project"]
+  }
+]

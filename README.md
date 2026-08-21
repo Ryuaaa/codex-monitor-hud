@@ -1,5 +1,7 @@
 # Codex 电脑轻量监测器
 
+> 同仓库的第二个独立应用“Codex Monitor 任务中心”正在 `task-center/` 开发。它按需启动、关闭后退出，P1 只读，不会链接到或改变本 HUD 的常驻运行层。架构与验收记录见 `docs/task-center/`。
+
 > macOS正式版：1.1.0，使用Developer ID签名并通过Apple公证。Windows x64的1.1.0未签名预览版已通过GitHub Windows虚拟机的编译、完整测试、安装、卸载和旧版升级验证；正式安装包仍在等待SignPath.io与SignPath Foundation可信签名。
 
 这是一个常驻在电脑屏幕角落的原生三页面悬浮窗：主页可自由组合Codex和电脑模块，Codex页显示账户额度、订阅与Token用量，电脑性能页用来快速判断电脑是否吃紧、是否主要由 Codex 引起、瓶颈在 CPU 还是内存。macOS版使用AppKit，Windows版使用Win32 + C++17；两者都不嵌入网页浏览器引擎。

@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main-capability",
+  "description": "任务中心主窗口最小权限",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}
