@@ -20,3 +20,23 @@ macOS 默认只读正式任务目录。其他位置或 Windows 本地验证可�
 浏览器开发预览只使用合成夹具，避免真实任务正文进入开发服务器。Tauri 生产构建才调用 Rust 只读适配器。
 
 架构、字段矩阵、隐私边界和验收方案位于 `../docs/task-center/`。
+
+## 平台静态检查
+
+在 macOS 上可以检查 Windows 条件编译，但这不等于 Windows 构建或运行验证：
+
+```bash
+rustup target add --toolchain 1.88.0 x86_64-pc-windows-msvc
+cargo +1.88.0 check --locked --manifest-path src-tauri/Cargo.toml \
+  --target x86_64-pc-windows-msvc --all-targets
+```
+
+macOS 资源基线探针使用系统 `proc_pid_rusage`，直接读取目标 PID 的 CPU、常驻内存、物理占用、唤醒和累计能耗差值：
+
+```bash
+xcrun clang -Wall -Wextra -Werror -O2 tools/process_resource_probe.c \
+  -o /private/tmp/task-center-process-resource-probe
+/private/tmp/task-center-process-resource-probe 10 61 HUD_PID [TASK_CENTER_PID WEBKIT_PID ...]
+```
+
+`10 61` 表示每 10 秒采样一次、覆盖 10 分钟。首行是预热样本，不参与速率统计。

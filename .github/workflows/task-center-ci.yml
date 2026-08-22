@@ -35,17 +35,17 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "22.23.0"
           cache: npm
           cache-dependency-path: task-center/package-lock.json
 
-      - name: Set up stable Rust
+      - name: Set up locked Rust
         shell: bash
         run: |
-          rustup toolchain install stable --profile minimal
-          rustup default stable
+          rustup toolchain install 1.88.0 --profile minimal
+          rustup default 1.88.0
 
       - name: Install locked frontend dependencies
         working-directory: task-center

@@ -43,4 +43,23 @@ describe("任务中心核心流程", () => {
     fireEvent.keyDown(window, { key: "Escape" });
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
+
+  it("元数据接口失败时显示降级信息且不读取正文", async () => {
+    const mock = provider();
+    vi.mocked(mock.loadMetadata).mockRejectedValue(new Error("provider unavailable"));
+    render(<App provider={mock} />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("任务元数据暂时不可用");
+    expect(mock.loadBody).not.toHaveBeenCalled();
+    expect(mock.loadEvents).not.toHaveBeenCalled();
+  });
+
+  it("单个任务详情失败不会移除其他任务", async () => {
+    const mock = provider();
+    vi.mocked(mock.loadBody).mockRejectedValue(new Error("bad file"));
+    render(<App provider={mock} />);
+    const card = await screen.findByRole("button", { name: /统一个人 AI 规则与能力边界/ });
+    fireEvent.click(card);
+    expect(await screen.findByRole("alert")).toHaveTextContent("该任务详情读取失败");
+    expect(screen.getByText("完成 Mac 键盘决策级研究")).toBeInTheDocument();
+  });
 });

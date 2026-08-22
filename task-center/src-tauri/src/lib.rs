@@ -1,12 +1,12 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tauri::Manager;
 use std::{
     env,
     fs::{self, File},
     io::{BufRead, BufReader, Read},
     path::{Path, PathBuf},
 };
+use tauri::Manager;
 
 const MAX_FRONTMATTER_BYTES: usize = 128 * 1024;
 const MAX_BODY_BYTES: u64 = 2 * 1024 * 1024;
@@ -55,8 +55,12 @@ fn default_task_root() -> PathBuf {
 }
 
 fn ensure_child(root: &Path, candidate: &Path) -> Result<PathBuf, String> {
-    let root = root.canonicalize().map_err(|_| "任务根目录不可用".to_string())?;
-    let candidate = candidate.canonicalize().map_err(|_| "任务文件不可用".to_string())?;
+    let root = root
+        .canonicalize()
+        .map_err(|_| "任务根目录不可用".to_string())?;
+    let candidate = candidate
+        .canonicalize()
+        .map_err(|_| "任务文件不可用".to_string())?;
     if !candidate.starts_with(&root) {
         return Err("拒绝读取任务根目录之外的路径".to_string());
     }
@@ -65,7 +69,9 @@ fn ensure_child(root: &Path, candidate: &Path) -> Result<PathBuf, String> {
 
 fn safe_file(root: &Path, file_token: &str, extension: &str) -> Result<PathBuf, String> {
     let token_path = Path::new(file_token);
-    if token_path.components().count() != 1 || token_path.extension().and_then(|v| v.to_str()) != Some(extension) {
+    if token_path.components().count() != 1
+        || token_path.extension().and_then(|v| v.to_str()) != Some(extension)
+    {
         return Err("无效的文件令牌".to_string());
     }
     ensure_child(root, &root.join(token_path))
@@ -75,14 +81,18 @@ fn read_frontmatter(path: &Path) -> Result<String, String> {
     let file = File::open(path).map_err(|_| "无法打开任务元数据".to_string())?;
     let mut reader = BufReader::new(file);
     let mut line = String::new();
-    reader.read_line(&mut line).map_err(|_| "无法读取任务元数据".to_string())?;
+    reader
+        .read_line(&mut line)
+        .map_err(|_| "无法读取任务元数据".to_string())?;
     if line.trim_end() != "---" {
         return Err("缺少 frontmatter 起始标记".to_string());
     }
     let mut result = String::new();
     loop {
         line.clear();
-        let bytes = reader.read_line(&mut line).map_err(|_| "无法读取任务元数据".to_string())?;
+        let bytes = reader
+            .read_line(&mut line)
+            .map_err(|_| "无法读取任务元数据".to_string())?;
         if bytes == 0 {
             return Err("缺少 frontmatter 结束标记".to_string());
         }
@@ -96,8 +106,27 @@ fn read_frontmatter(path: &Path) -> Result<String, String> {
     }
 }
 
+fn frontmatter_scalar<'a>(frontmatter: &'a str, key: &str) -> Option<&'a str> {
+    frontmatter.lines().find_map(|line| {
+        let (candidate, value) = line.split_once(':')?;
+        if candidate.trim() != key {
+            return None;
+        }
+        Some(value.trim().trim_matches(['"', '\'']))
+    })
+}
+
+fn frontmatter_allows_read(frontmatter: &str) -> bool {
+    let privacy = frontmatter_scalar(frontmatter, "privacy");
+    let access = frontmatter_scalar(frontmatter, "codex_access");
+    privacy == Some("general")
+        && !matches!(access, None | Some("forbidden") | Some("explicit_only"))
+}
+
 fn scan_metadata(root: &Path) -> Result<Vec<RawTaskSource>, String> {
-    let canonical_root = root.canonicalize().map_err(|_| "正式任务目录不可用".to_string())?;
+    let canonical_root = root
+        .canonicalize()
+        .map_err(|_| "正式任务目录不可用".to_string())?;
     let mut entries: Vec<_> = fs::read_dir(&canonical_root)
         .map_err(|_| "无法列出正式任务目录".to_string())?
         .filter_map(Result::ok)
@@ -112,28 +141,37 @@ fn scan_metadata(root: &Path) -> Result<Vec<RawTaskSource>, String> {
             }
             let path = match ensure_child(&canonical_root, &entry.path()) {
                 Ok(path) => path,
-                Err(error) => return Some(RawTaskSource { file_token, frontmatter: String::new(), error: Some(error) }),
+                Err(error) => {
+                    return Some(RawTaskSource {
+                        file_token,
+                        frontmatter: String::new(),
+                        error: Some(error),
+                    })
+                }
             };
             match read_frontmatter(&path) {
-                Ok(frontmatter) => Some(RawTaskSource { file_token, frontmatter, error: None }),
-                Err(error) => Some(RawTaskSource { file_token, frontmatter: String::new(), error: Some(error) }),
+                Ok(frontmatter) if frontmatter_allows_read(&frontmatter) => Some(RawTaskSource {
+                    file_token,
+                    frontmatter,
+                    error: None,
+                }),
+                Ok(_) => Some(RawTaskSource {
+                    file_token,
+                    frontmatter: String::new(),
+                    error: Some("任务受隐私或访问规则限制".to_string()),
+                }),
+                Err(error) => Some(RawTaskSource {
+                    file_token,
+                    frontmatter: String::new(),
+                    error: Some(error),
+                }),
             }
         })
         .collect())
 }
 
-fn frontmatter_scalar<'a>(frontmatter: &'a str, key: &str) -> Option<&'a str> {
-    frontmatter.lines().find_map(|line| {
-        let (candidate, value) = line.split_once(':')?;
-        if candidate.trim() != key { return None; }
-        Some(value.trim().trim_matches(['"', '\'']))
-    })
-}
-
 fn frontmatter_allows_body(frontmatter: &str) -> bool {
-    let privacy = frontmatter_scalar(frontmatter, "privacy");
-    let access = frontmatter_scalar(frontmatter, "codex_access");
-    privacy == Some("general") && !matches!(access, None | Some("forbidden") | Some("explicit_only"))
+    frontmatter_allows_read(frontmatter)
 }
 
 fn read_body(root: &Path, file_token: &str) -> Result<String, String> {
@@ -150,13 +188,22 @@ fn read_body(root: &Path, file_token: &str) -> Result<String, String> {
     File::open(path)
         .and_then(|mut file| file.read_to_string(&mut content))
         .map_err(|_| "正文读取失败".to_string())?;
-    let mut markers = content.match_indices("---");
-    let first = markers.next().ok_or_else(|| "正文边界无效".to_string())?;
-    let second = markers.next().ok_or_else(|| "正文边界无效".to_string())?;
-    if first.0 != 0 {
+    let mut offset = 0;
+    let mut lines = content.split_inclusive('\n');
+    let first = lines.next().ok_or_else(|| "正文边界无效".to_string())?;
+    if first.trim_end_matches(['\r', '\n']) != "---" {
         return Err("正文边界无效".to_string());
     }
-    Ok(content[(second.0 + 3)..].trim_start_matches(['\r', '\n']).to_string())
+    offset += first.len();
+    for line in lines {
+        offset += line.len();
+        if line.trim_end_matches(['\r', '\n']) == "---" {
+            return Ok(content[offset..]
+                .trim_start_matches(['\r', '\n'])
+                .to_string());
+        }
+    }
+    Err("正文边界无效".to_string())
 }
 
 fn events_root(task_root: &Path) -> PathBuf {
@@ -167,7 +214,9 @@ fn read_events(root: &Path, task_id: &str) -> Result<Vec<TaskEvent>, String> {
     if !task_id.starts_with("tsk_") || task_id.len() > 128 {
         return Err("无效的任务编号".to_string());
     }
-    let root = root.canonicalize().map_err(|_| "事件目录不可用".to_string())?;
+    let root = root
+        .canonicalize()
+        .map_err(|_| "事件目录不可用".to_string())?;
     let mut files: Vec<_> = fs::read_dir(&root)
         .map_err(|_| "无法列出事件目录".to_string())?
         .filter_map(Result::ok)
@@ -177,22 +226,46 @@ fn read_events(root: &Path, task_id: &str) -> Result<Vec<TaskEvent>, String> {
     let mut result = Vec::new();
     for entry in files {
         let path = ensure_child(&root, &entry.path())?;
-        let file = match File::open(path) { Ok(file) => file, Err(_) => continue };
+        let file = match File::open(path) {
+            Ok(file) => file,
+            Err(_) => continue,
+        };
         for line in BufReader::new(file).lines().map_while(Result::ok) {
-            let value: Value = match serde_json::from_str(&line) { Ok(value) => value, Err(_) => continue };
-            if value.get("task_id").and_then(Value::as_str) != Some(task_id) || value.get("privacy").and_then(Value::as_str).unwrap_or("pending_classification") != "general" {
+            let value: Value = match serde_json::from_str(&line) {
+                Ok(value) => value,
+                Err(_) => continue,
+            };
+            if value.get("task_id").and_then(Value::as_str) != Some(task_id)
+                || value
+                    .get("privacy")
+                    .and_then(Value::as_str)
+                    .unwrap_or("pending_classification")
+                    != "general"
+            {
                 continue;
             }
-            let Some(id) = value.get("id").and_then(Value::as_str) else { continue };
-            let Some(event_type) = value.get("event_type").and_then(Value::as_str) else { continue };
-            let Some(occurred_at) = value.get("occurred_at").and_then(Value::as_str) else { continue };
+            let Some(id) = value.get("id").and_then(Value::as_str) else {
+                continue;
+            };
+            let Some(event_type) = value.get("event_type").and_then(Value::as_str) else {
+                continue;
+            };
+            let Some(occurred_at) = value.get("occurred_at").and_then(Value::as_str) else {
+                continue;
+            };
             result.push(TaskEvent {
                 id: id.to_string(),
                 task_id: task_id.to_string(),
                 event_type: event_type.to_string(),
                 occurred_at: occurred_at.to_string(),
-                previous_task_status: value.get("previous_task_status").and_then(Value::as_str).map(str::to_string),
-                new_task_status: value.get("new_task_status").and_then(Value::as_str).map(str::to_string),
+                previous_task_status: value
+                    .get("previous_task_status")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                new_task_status: value
+                    .get("new_task_status")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
             });
         }
     }
@@ -207,17 +280,34 @@ fn project_config_path() -> Option<PathBuf> {
     env::var_os("HOME")
         .or_else(|| env::var_os("USERPROFILE"))
         .map(PathBuf::from)
-        .map(|home| home.join(".codex-monitor").join("task-center-projects.json"))
+        .map(|home| {
+            home.join(".codex-monitor")
+                .join("task-center-projects.json")
+        })
 }
 
 fn read_project_mappings(path: Option<&Path>) -> Result<Vec<ProjectMapping>, String> {
-    let Some(path) = path else { return Ok(Vec::new()) };
-    if !path.exists() { return Ok(Vec::new()) }
+    let Some(path) = path else {
+        return Ok(Vec::new());
+    };
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
     let metadata = fs::metadata(path).map_err(|_| "项目映射配置不可用".to_string())?;
-    if metadata.len() > 256 * 1024 { return Err("项目映射配置过大".to_string()) }
-    let mappings: Vec<ProjectMapping> = serde_json::from_reader(File::open(path).map_err(|_| "项目映射配置不可用".to_string())?)
-        .map_err(|_| "项目映射配置格式错误".to_string())?;
-    if mappings.iter().any(|item| item.id.trim().is_empty() || item.name.trim().is_empty() || item.workdirs.iter().any(|path| !Path::new(path).is_absolute())) {
+    if metadata.len() > 256 * 1024 {
+        return Err("项目映射配置过大".to_string());
+    }
+    let mappings: Vec<ProjectMapping> =
+        serde_json::from_reader(File::open(path).map_err(|_| "项目映射配置不可用".to_string())?)
+            .map_err(|_| "项目映射配置格式错误".to_string())?;
+    if mappings.iter().any(|item| {
+        item.id.trim().is_empty()
+            || item.name.trim().is_empty()
+            || item
+                .workdirs
+                .iter()
+                .any(|path| !Path::new(path).is_absolute())
+    }) {
         return Err("项目映射必须包含编号、名称和绝对工作目录".to_string());
     }
     Ok(mappings)
@@ -247,7 +337,8 @@ pub fn read_only_diagnostic() -> i32 {
     let root = default_task_root();
     match scan_metadata(&root) {
         Ok(tasks) => {
-            let mappings = read_project_mappings(project_config_path().as_deref()).unwrap_or_default();
+            let mappings =
+                read_project_mappings(project_config_path().as_deref()).unwrap_or_default();
             println!(
                 "{}",
                 serde_json::json!({
@@ -295,7 +386,11 @@ mod tests {
     fn frontmatter_scan_stops_before_body() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("tsk_test.md");
-        fs::write(&path, "---\ntask_id: tsk_test\nprivacy: general\n---\nSECRET_BODY_MARKER").unwrap();
+        fs::write(
+            &path,
+            "---\ntask_id: tsk_test\nprivacy: general\ncodex_access: proposal_only\n---\nSECRET_BODY_MARKER",
+        )
+        .unwrap();
         let rows = scan_metadata(dir.path()).unwrap();
         assert_eq!(rows.len(), 1);
         assert!(!rows[0].frontmatter.contains("SECRET_BODY_MARKER"));
@@ -303,10 +398,25 @@ mod tests {
     }
 
     #[test]
+    fn restricted_frontmatter_never_crosses_the_rust_boundary() {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("tsk_private.md"),
+            "---\ntask_id: tsk_private\nprivacy: private\ncodex_access: explicit_only\nprivate_note: DO_NOT_EXPOSE\n---\nSECRET",
+        ).unwrap();
+        let rows = scan_metadata(dir.path()).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].frontmatter.is_empty());
+        assert!(!format!("{:?}", rows[0]).contains("DO_NOT_EXPOSE"));
+        assert!(rows[0].error.is_some());
+    }
+
+    #[test]
     fn rejects_traversal_and_symlink_escape() {
         let dir = tempdir().unwrap();
         assert!(safe_file(dir.path(), "../outside.md", "md").is_err());
-        #[cfg(unix)] {
+        #[cfg(unix)]
+        {
             std::os::unix::fs::symlink("/etc/hosts", dir.path().join("tsk_escape.md")).unwrap();
             assert!(safe_file(dir.path(), "tsk_escape.md", "md").is_err());
         }
@@ -332,10 +442,27 @@ mod tests {
     #[test]
     fn body_permission_is_enforced_in_rust_layer() {
         let dir = tempdir().unwrap();
-        fs::write(dir.path().join("tsk_private.md"), "---\ntask_id: tsk_private\nprivacy: general\ncodex_access: explicit_only\n---\nSECRET").unwrap();
+        fs::write(
+            dir.path().join("tsk_private.md"),
+            "---\ntask_id: tsk_private\nprivacy: general\ncodex_access: explicit_only\n---\nSECRET",
+        )
+        .unwrap();
         assert!(read_body(dir.path(), "tsk_private.md").is_err());
         fs::write(dir.path().join("tsk_general.md"), "---\ntask_id: tsk_general\nprivacy: general\ncodex_access: proposal_only\n---\nVISIBLE").unwrap();
         assert_eq!(read_body(dir.path(), "tsk_general.md").unwrap(), "VISIBLE");
+    }
+
+    #[test]
+    fn body_delimiter_must_be_its_own_line() {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("tsk_delimiter.md"),
+            "---\ntask_id: tsk_delimiter\nprivacy: general\ncodex_access: proposal_only\ntitle: contains---dashes\n---\nVISIBLE---BODY",
+        ).unwrap();
+        assert_eq!(
+            read_body(dir.path(), "tsk_delimiter.md").unwrap(),
+            "VISIBLE---BODY"
+        );
     }
 
     #[test]
