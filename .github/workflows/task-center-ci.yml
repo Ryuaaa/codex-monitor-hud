@@ -62,3 +62,21 @@ jobs:
       - name: Build platform application binary
         working-directory: task-center
         run: npm run tauri build -- --no-bundle
+
+      - name: Validate Windows native lifecycle
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          ./task-center/tools/windows-lifecycle.ps1 `
+            -Executable ./task-center/src-tauri/target/release/codex-monitor-task-center.exe `
+            -OutputDirectory ./task-center-ci-artifact `
+            -Cycles 20
+
+      - name: Upload Windows evidence artifact
+        if: runner.os == 'Windows' && always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: task-center-windows-x64-${{ github.run_attempt }}
+          path: task-center-ci-artifact/
+          if-no-files-found: warn
+          retention-days: 14
