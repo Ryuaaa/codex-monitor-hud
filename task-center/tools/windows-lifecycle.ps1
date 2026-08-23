@@ -205,6 +205,11 @@ try {
             sha256 = $hash
         }
         webView2Runtime = $runtime
+        webView2Execution = [ordered]@{
+            observedInEveryCycle = ($cycleReports.Count -eq $Cycles -and @($cycleReports | Where-Object { $_.webView2ProcessCount -lt 1 }).Count -eq 0)
+            registryVersionAvailable = [bool]$runtime.version
+            limitation = "Process creation proves the installed WebView2 runtime can execute; a missing registry value does not identify its installed version."
+        }
         lifecycle = [ordered]@{
             requestedCycles = $Cycles
             passedCycles = $cycleReports.Count
@@ -236,7 +241,11 @@ try {
     }
     $report | ConvertTo-Json -Depth 8 | Set-Content -Encoding utf8 -Path (Join-Path $outputPath "windows-lifecycle-report.json")
     Copy-Item -Force $executablePath (Join-Path $outputPath ([System.IO.Path]::GetFileName($executablePath)))
-    "$hash  $([System.IO.Path]::GetFileName($executablePath))" | Set-Content -Encoding ascii -Path (Join-Path $outputPath "SHA256SUMS.txt")
+    [System.IO.File]::WriteAllText(
+        (Join-Path $outputPath "SHA256SUMS.txt"),
+        "$hash  $([System.IO.Path]::GetFileName($executablePath))`n",
+        [System.Text.Encoding]::ASCII
+    )
     Get-ChildItem -File $outputPath | Sort-Object Name | Select-Object Name, Length |
         ConvertTo-Json | Set-Content -Encoding utf8 -Path (Join-Path $outputPath "artifact-files.json")
     Write-Host "Windows lifecycle validation passed: $Cycles native close cycles, force termination, no listeners or residual Task Center/WebView2 processes."

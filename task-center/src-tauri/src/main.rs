@@ -1,3 +1,8 @@
+#![cfg_attr(
+    all(not(debug_assertions), target_os = "windows"),
+    windows_subsystem = "windows"
+)]
+
 fn main() {
     if std::env::args().any(|arg| arg == "--read-only-diagnostic") {
         std::process::exit(codex_monitor_task_center_lib::read_only_diagnostic());

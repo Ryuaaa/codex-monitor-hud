@@ -71,13 +71,25 @@ jobs:
           $exe = (Resolve-Path ./task-center/src-tauri/target/release/codex-monitor-task-center.exe).Path
           Copy-Item -Force $exe $output.FullName
           $hash = (Get-FileHash -Algorithm SHA256 -Path $exe).Hash.ToLowerInvariant()
-          "$hash  codex-monitor-task-center.exe" | Set-Content -Encoding ascii -Path ($output.FullName + "/SHA256SUMS.txt")
+          [System.IO.File]::WriteAllText(
+            ($output.FullName + "/SHA256SUMS.txt"),
+            "$hash  codex-monitor-task-center.exe`n",
+            [System.Text.Encoding]::ASCII
+          )
           $version = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($exe)
+          $bytes = [System.IO.File]::ReadAllBytes($exe)
+          $peOffset = [System.BitConverter]::ToInt32($bytes, 0x3c)
+          $subsystem = [System.BitConverter]::ToUInt16($bytes, $peOffset + 24 + 68)
+          if ($subsystem -ne 2) {
+            throw "Expected Windows GUI subsystem (2), found $subsystem."
+          }
           [ordered]@{
             fileVersion = $version.FileVersion
             productVersion = $version.ProductVersion
             bytes = (Get-Item $exe).Length
             sha256 = $hash
+            peSubsystem = $subsystem
+            peSubsystemName = "Windows GUI"
           } | ConvertTo-Json | Set-Content -Encoding utf8 -Path ($output.FullName + "/windows-build-identity.json")
 
       - name: Validate Windows native lifecycle
