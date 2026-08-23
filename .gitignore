@@ -3,6 +3,8 @@
 *.csv
 *.app
 data/
+!task-center/src/data/
+!task-center/src/data/*.ts
 native-history/
 .collect.lock/
 build/
