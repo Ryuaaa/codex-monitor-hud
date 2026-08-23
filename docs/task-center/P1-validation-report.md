@@ -2,29 +2,31 @@
 
 ## 当前结论
 
-P0 契约与 P1 只读 MVP 已在隔离工作树形成。macOS arm64 生产包完成真实窗口、20 次原生打开—关闭、三轮资源基线、Retina 2.0 倍缩放、最小窗口、强制终止和 WebContent 异常隔离验证。P1 仍不能标记“双平台全部验收”：当前机器没有 Windows/Wine；Windows 条件编译推进到 Tauri 应用资源构建脚本后因缺少 `llvm-rc` 停止，尚无 Windows 原生构建、运行或生命周期证据。
+P0 契约与 P1 只读 MVP 已在隔离工作树形成。macOS arm64 生产包完成真实窗口、20 次原生打开—关闭、三轮资源基线、Retina 2.0 倍缩放、最小窗口、强制终止和 WebContent 异常隔离验证。Windows 已在真实 GitHub 托管 runner 完成前端、Rust、Tauri GUI `.exe` 构建，以及精确主窗口 `WM_CLOSE` 的 20 次生命周期、WebView2 启动/回收、监听端口、残留进程与强制终止自动化验证。
+
+P1 仍不能标记“双平台桌面全部验收”：Windows runner 没有人工桌面视觉验收，也不能替代真实 Windows 上的 200% 缩放/最小窗口、资源三轮基线、HUD 共存隔离和 WebView2 崩溃隔离。
 
 ## 要求逐项状态
 
 | 要求 | macOS | Windows | 证据/缺口 |
 |---|---|---|---|
-| 独立 Tauri + React 应用、独立进程 | 已验证 | 仅静态验证 | macOS `.app`/DMG 与 arm64 二进制成功；Windows 共享源码和 CI 尚未在 Windows 执行 |
-| 多项目/工作目录映射 | 已验证 | 仅静态验证 | 显式只读 JSON 配置 + 领域回退；组件测试覆盖项目切换 |
-| 全项目总览、看板、列表 | 已验证 | 仅静态验证 | 组件测试、真实窗口与 1440/800 两档渲染 |
-| 搜索、状态筛选、紧凑显示 | 已验证 | 仅静态验证 | 组件测试覆盖搜索/视图切换；真实辅助功能树可访问 |
-| 详情正文按需读取 | 已验证 | 仅静态验证 | 首页调用测试；Rust 权限二次校验；2 MiB 上限 |
-| 正式事件时间线 | 已验证 | 仅静态验证 | JSONL 逐行读取，坏行隔离测试 |
-| 逾期/即将到期/需要关注 | 已验证 | 仅静态验证 | 时间边界与可解释关键词单测 |
-| Codex 对话绑定与安全入口 | 已验证降级 | 仅静态验证 | 展示绑定；无稳定官方第三方打开方式时按钮禁用 |
-| 四种 Codex 运行语义 | 已验证 | 仅静态验证 | 四固定样例单测；P1 未伪装成全桌面实例监控 |
+| 独立 Tauri + React 应用、独立进程 | 已验证 | 已验证 | macOS `.app`/DMG 与 arm64 二进制；Windows GUI `.exe` 与独立 PID/WebView2 进程 |
+| 多项目/工作目录映射 | 已验证 | 已验证（自动化） | 两平台组件测试通过；显式只读 JSON 配置 + 领域回退 |
+| 全项目总览、看板、列表 | 已验证 | 已验证（自动化） | 两平台组件测试；Windows 尚缺人工桌面视觉验收 |
+| 搜索、状态筛选、紧凑显示 | 已验证 | 已验证（自动化） | 两平台组件测试覆盖搜索/视图切换；Windows 尚缺真实键盘体验 |
+| 详情正文按需读取 | 已验证 | 已验证（自动化） | 两平台首页调用测试与 Rust 权限二次校验；2 MiB 上限 |
+| 正式事件时间线 | 已验证 | 已验证（自动化） | 两平台 Rust JSONL 逐行读取、坏行隔离测试 |
+| 逾期/即将到期/需要关注 | 已验证 | 已验证（自动化） | 两平台时间边界与可解释关键词单测 |
+| Codex 对话绑定与安全入口 | 已验证降级 | 已验证降级（自动化） | 展示绑定；无稳定官方第三方打开方式时按钮禁用 |
+| 四种 Codex 运行语义 | 已验证 | 已验证（自动化） | 两平台四固定样例单测；P1 未伪装成全桌面实例监控 |
 | 中文优先、未来可国际化 | 仅静态验证 | 仅静态验证 | 中文语义清楚；尚未接完整翻译资源系统 |
 | 键盘、焦点、缩放、窗口适配 | 已验证 | 仅静态验证 | 原生语义控件、焦点样式、Esc；Retina 2.0 倍；1728×998 最大与 760×522 下限实测无重叠，超出看板按设计滚动 |
 | 从未打开无新增服务 | 已验证 | 未验证 | 任务中心未运行时无对应 PID；未安装服务/计划任务/托盘 |
-| 关闭后全部退出 | 已验证 | 未验证 | 20/20 次真实原生关闭；资源三轮主进程与本轮 WebKit PID 均在 2 秒检查前退出 |
-| 无监听端口/Node 运行时 | 已验证 | 未验证 | 生产包监听 0、直接子进程 0；现有 Node PID 属于预先存在的 Dashi Taskboard，不由本应用创建 |
-| 强制结束不影响 HUD | 已验证 | 未验证 | `SIGKILL` 任务中心后 HUD 原 PID `37549` 不变 |
+| 关闭后全部退出 | 已验证 | 已验证 | macOS 20/20；Windows 精确可见主窗 `WM_CLOSE` 20/20，主进程和本轮 WebView2 均归零 |
+| 无监听端口/Node 运行时 | 已验证 | 已验证 | 两平台生产进程监听 0；Windows 前后 Node PID 均为空，任务中心/WebView2 无残留 |
+| 强制结束不影响 HUD | 已验证 | 未验证 | macOS HUD 原 PID 不变；Windows 仅证明独立哨兵存活，不冒充 HUD 共存证据 |
 | 坏任务/接口失败不影响 HUD | 已验证 | 未验证 | Rust 单文件/坏 JSONL 隔离、React Provider/详情失败测试；HUD 无依赖 |
-| WebView 异常不影响 HUD | 已验证 | 未验证 | 定向结束本轮 WebContent 后 WebKit 重建内容进程、界面恢复；HUD PID 不变；随后结束主进程时关联 WebKit 退出 |
+| WebView 异常不影响 HUD | 已验证 | 未验证 | macOS 已定向注入；Windows 只验证正常/强制退出后的 WebView2 回收，未安全注入 WebView2 崩溃 |
 | HUD 资源基线回归 | 已验证 | 未验证 | 三轮 × 三状态 × 每状态 10 分钟；CPU/唤醒分布回到重叠区间，内存/能耗小幅漂移不可归因于任务中心；详见资源报告 |
 
 ## 已运行检查
@@ -38,25 +40,30 @@ P0 契约与 P1 只读 MVP 已在隔离工作树形成。macOS arm64 生产包�
 - 三轮资源基线：九个窗口均 60 个有效样本、0 缺样；详见 `resource-baseline-2026-08-23.md`。
 - 故障隔离：强制结束主进程和定向结束 WebContent 两种故障下 HUD 原 PID 均不变。
 - 视觉：Retina backing scale `2.0`；最大窗口与 760×522 原生最小边界实际验证，没有核心控件覆盖。
+- Windows CI：GitHub Actions run `32608128722` 两个 job 全绿；Windows 前端 10/10、Rust 8/8、Tauri GUI `.exe`、20/20 精确主窗关闭、WebView2 回收、无监听/残留和强制终止隔离通过。
+- Windows 产物：版本 `1.1.0`，PE `Windows GUI`，大小 `9,148,416` 字节，SHA-256 `57d009ff10d32cf7fbbdf561a286da7142513ef4af39f411c1fb1a8970b9448e`；下载后跨平台校验通过。
 
 ## Windows 当前证据
 
-- 已安装并锁定 Rust `1.88.0` 的 `x86_64-pc-windows-msvc` 标准库目标。
-- `cargo check --target x86_64-pc-windows-msvc --all-targets` 已编译 Windows、WebView2、Wry/Tauri 条件依赖，随后在本应用 Tauri 构建脚本因宿主机缺少 `llvm-rc` 失败。
-- 尝试通过 Homebrew 安装 LLVM，但 Homebrew API/GitHub 连接失败；LLVM 未安装，也没有留下半成品 core tap。
-- 没有把上述结果写成“Windows 构建通过”。GitHub Actions 的 Windows job 已定义但未推送、未运行；Windows `.exe`、WebView2 启动、20 次退出、故障隔离均未验证。
+- 真实 runner、job、产物与证据边界见 `windows-ci-evidence-2026-08-23.md`。
+- CI 首先发现 `data/` 忽略规则导致任务中心 Provider/夹具未提交；加任务中心白名单后，两平台测试恢复。
+- 初版生命周期测试错误依赖 `.NET Process.MainWindowHandle`，控制台子系统下可能命中附带控制台，形成假阳性。最终构建改为 PE GUI 子系统，并枚举 PID 的可见顶层窗，仅对标题 `Codex Monitor 任务中心`、类名 `Tauri Window` 的精确 HWND 发送 `WM_CLOSE`。
+- 最终 run `32608128722` Windows 与 macOS job 均成功；Windows 20/20 生命周期报告中的标题、类名、退出码、监听和 WebView2 残留均符合门槛。
+- Windows WebView2 进程每轮实际出现并回收，但 runner 注册表未返回运行时版本；不声称已验证具体 WebView2 版本。
 
 ## 本轮修复
 
 - 权限过滤前移到 Rust：受限或缺少明确访问许可的任务只返回隔离错误，完整 frontmatter 不再传入 WebView。
 - 正文分隔符改为只接受独立行 `---`，避免 frontmatter 值或正文内短横线被误判。
 - 增加 Provider/单详情失败组件测试和 macOS `proc_pid_rusage` 可复用资源探针。
-- Rust 工具链锁定为 `1.88.0`，GitHub `setup-node` 固定到 v4.4.0 的完整提交 SHA。
+- Rust 工具链锁定为 `1.88.0`；GitHub `setup-node` 与 `upload-artifact` 固定到使用 Node 24 运行时的官方完整提交 SHA。
+- 修复任务中心数据层被仓库通用 `data/` 规则误忽略的问题，并由干净 runner 证明提交内容完整。
+- Windows release 标记为 GUI 子系统；生命周期测试按 PID、可见性、标题和窗口类精确选择主窗，消除控制台/内部窗口假阳性。
 
 ## 未执行
 
-- 未推送、未发布、未修改 GitHub Release 或更新通道。
+- 仅按用户新增授权推送 `codex/task-center-p1`；未合并、未创建 Release、未发布或修改更新通道。
 - 未写入、移动、重命名或规范化正式任务 Markdown/JSONL。
 - 未修改 HUD 源码、入口、发布内容或原工作树中的用户文件。
-- 未在 Windows runner/真机上构建或运行。
+- 未在人工可观察的真实桌面 Windows 上做视觉、缩放、资源、HUD 共存和 WebView2 崩溃验收。
 - 未进入 P2 写入能力。

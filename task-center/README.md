@@ -21,9 +21,11 @@ macOS 默认只读正式任务目录。其他位置或 Windows 本地验证可�
 
 架构、字段矩阵、隐私边界和验收方案位于 `../docs/task-center/`。
 
-## 平台静态检查
+## 平台验证
 
-在 macOS 上可以检查 Windows 条件编译，但这不等于 Windows 构建或运行验证：
+GitHub Actions 在 `macos-latest` 与 `windows-latest` 分别运行前端测试、Rust 测试和 Tauri 原生构建。Windows job 还验证 GUI 子系统、精确可见主窗口的 20 次 `WM_CLOSE`、WebView2 回收、监听端口、Node/进程残留和强制终止隔离；详细证据见 `../docs/task-center/windows-ci-evidence-2026-08-23.md`。
+
+以下 macOS 交叉检查只用于提前发现条件编译问题，不等于 Windows 原生 CI 或桌面验收：
 
 ```bash
 rustup target add --toolchain 1.88.0 x86_64-pc-windows-msvc
