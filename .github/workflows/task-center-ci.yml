@@ -63,6 +63,23 @@ jobs:
         working-directory: task-center
         run: npm run tauri build -- --no-bundle
 
+      - name: Record Windows build identity
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $output = New-Item -ItemType Directory -Force -Path ./task-center-ci-artifact
+          $exe = (Resolve-Path ./task-center/src-tauri/target/release/codex-monitor-task-center.exe).Path
+          Copy-Item -Force $exe $output.FullName
+          $hash = (Get-FileHash -Algorithm SHA256 -Path $exe).Hash.ToLowerInvariant()
+          "$hash  codex-monitor-task-center.exe" | Set-Content -Encoding ascii -Path ($output.FullName + "/SHA256SUMS.txt")
+          $version = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($exe)
+          [ordered]@{
+            fileVersion = $version.FileVersion
+            productVersion = $version.ProductVersion
+            bytes = (Get-Item $exe).Length
+            sha256 = $hash
+          } | ConvertTo-Json | Set-Content -Encoding utf8 -Path ($output.FullName + "/windows-build-identity.json")
+
       - name: Validate Windows native lifecycle
         if: runner.os == 'Windows'
         shell: pwsh
@@ -74,7 +91,7 @@ jobs:
 
       - name: Upload Windows evidence artifact
         if: runner.os == 'Windows' && always()
-        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: task-center-windows-x64-${{ github.run_attempt }}
           path: task-center-ci-artifact/
