@@ -4,12 +4,10 @@ on:
   push:
     paths:
       - "task-center/**"
-      - "docs/task-center/**"
       - ".github/workflows/task-center-ci.yml"
   pull_request:
     paths:
       - "task-center/**"
-      - "docs/task-center/**"
       - ".github/workflows/task-center-ci.yml"
   workflow_dispatch:
 

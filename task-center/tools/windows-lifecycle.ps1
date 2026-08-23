@@ -145,7 +145,7 @@ function Wait-ForProcessesGone([int[]]$ProcessIds, [int]$TimeoutSeconds = 15) {
     return $remaining
 }
 
-function Get-ListeningEndpoints([int[]]$ProcessIds) {
+function Get-BoundEndpoints([int[]]$ProcessIds) {
     if ($ProcessIds.Count -eq 0) {
         return @()
     }
@@ -154,9 +154,35 @@ function Get-ListeningEndpoints([int[]]$ProcessIds) {
             Where-Object { $ProcessIds -contains $_.OwningProcess } |
             ForEach-Object {
                 [ordered]@{
+                    protocol = "TCP"
                     address = $_.LocalAddress
                     port = $_.LocalPort
                     pid = $_.OwningProcess
+                }
+            }
+        Get-NetUDPEndpoint -ErrorAction SilentlyContinue |
+            Where-Object { $ProcessIds -contains $_.OwningProcess } |
+            ForEach-Object {
+                [ordered]@{
+                    protocol = "UDP"
+                    address = $_.LocalAddress
+                    port = $_.LocalPort
+                    pid = $_.OwningProcess
+                }
+            }
+    )
+}
+
+function Get-TaskCenterServices {
+    return @(
+        Get-CimInstance Win32_Service -ErrorAction SilentlyContinue |
+            Where-Object { $_.PathName -match "(?i)codex-monitor-task-center" } |
+            ForEach-Object {
+                [ordered]@{
+                    name = $_.Name
+                    state = $_.State
+                    startMode = $_.StartMode
+                    pathName = $_.PathName
                 }
             }
     )
@@ -182,6 +208,7 @@ function Get-WebView2RuntimeVersion {
 
 $baselineWebView = @(Get-ProcessIds "msedgewebview2")
 $baselineNode = @(Get-ProcessIds "node")
+$baselineServices = @(Get-TaskCenterServices)
 $runtime = Get-WebView2RuntimeVersion
 $cycleReports = @()
 
@@ -191,9 +218,9 @@ try {
         $process = Start-Process -FilePath $executablePath -PassThru
         $window = Wait-ForWindow $process
         $webViewIds = @(Wait-ForNewWebView $webViewBefore)
-        $listeners = @(Get-ListeningEndpoints (@($process.Id) + $webViewIds))
-        if ($listeners.Count -ne 0) {
-            throw "Cycle $cycle created a listening TCP endpoint."
+        $boundEndpoints = @(Get-BoundEndpoints (@($process.Id) + $webViewIds))
+        if ($boundEndpoints.Count -ne 0) {
+            throw "Cycle $cycle created a bound TCP or UDP endpoint."
         }
         if (-not [TaskCenterNativeWindow]::PostMessage([IntPtr]$window.handle, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero)) {
             throw "Cycle $cycle could not post WM_CLOSE to the verified Task Center window."
@@ -214,7 +241,7 @@ try {
             closeRequestAccepted = $true
             exitCode = $process.ExitCode
             webView2ProcessCount = $webViewIds.Count
-            listeningEndpointCount = $listeners.Count
+            boundEndpointCount = $boundEndpoints.Count
             residualWebView2ProcessCount = $remainingWebView.Count
         }
     }
@@ -246,6 +273,10 @@ try {
     }
 
     $nodeAfter = @(Get-ProcessIds "node")
+    $servicesAfter = @(Get-TaskCenterServices)
+    if ($servicesAfter.Count -ne $baselineServices.Count) {
+        throw "Task Center service inventory changed during lifecycle validation."
+    }
     $fileVersion = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($executablePath)
     $hash = (Get-FileHash -Algorithm SHA256 -Path $executablePath).Hash.ToLowerInvariant()
     $report = [ordered]@{
@@ -277,7 +308,7 @@ try {
             cycles = $cycleReports
         }
         network = [ordered]@{
-            taskCenterOrWebViewListeningEndpoints = 0
+            taskCenterOrWebViewBoundTcpOrUdpEndpoints = 0
         }
         residualProcesses = [ordered]@{
             taskCenter = $taskCenterNamedResidual.Count
@@ -285,6 +316,11 @@ try {
             baselineNodeProcessIds = $baselineNode
             finalNodeProcessIds = $nodeAfter
             nodeSpawnedByTaskCenterObserved = $false
+        }
+        services = [ordered]@{
+            baselineMatchingServices = $baselineServices
+            finalMatchingServices = $servicesAfter
+            serviceInventoryChanged = $false
         }
         forceTermination = [ordered]@{
             windowHandle = $forcedWindow.handle
