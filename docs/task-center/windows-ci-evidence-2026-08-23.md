@@ -3,11 +3,11 @@
 ## 可复查对象
 
 - 分支：`codex/task-center-p1`
-- 提交：`2b37ee648d9e3697cf6cb6909177c47a5949ef3c`
-- GitHub Actions run：[`32608128722`](https://github.com/Ryuaaa/codex-monitor-hud/actions/runs/32608128722)
-- Windows job：`97116483188`，结论 `success`
-- macOS job：`97116483368`，结论 `success`
-- Windows artifact：`task-center-windows-x64-1`，artifact ID `9484812251`（CI 临时证据，保留 14 天；长期结论以本文件和 Actions 日志为准）
+- 提交：`ed4c6b7f22fd787e9b9a1ec632a325d25a6ff3d0`
+- GitHub Actions run：[`32609138427`](https://github.com/Ryuaaa/codex-monitor-hud/actions/runs/32609138427)
+- Windows job：`97119107838`，结论 `success`
+- macOS job：`97119107922`，结论 `success`
+- Windows artifact：`task-center-windows-x64-1`，artifact ID `9485095146`（CI 临时证据，保留 14 天；长期结论以本文件和 Actions 日志为准）
 
 ## Windows runner 已验证
 
@@ -17,11 +17,12 @@ Runner 为 GitHub 托管 Windows `10.0.26100.0`、AMD64，镜像 `win25-vs2026`�
 - 前端领域/组件测试 10/10 通过，Rust 只读边界测试 8/8 通过。
 - Tauri release `.exe` 原生构建成功；文件版本和产品版本均为 `1.1.0`。
 - PE 子系统值为 `2`（`Windows GUI`），不是会附带终端窗的控制台程序。
-- 产物大小 `9,148,416` 字节，SHA-256：`57d009ff10d32cf7fbbdf561a286da7142513ef4af39f411c1fb1a8970b9448e`。
+- 产物大小 `9,148,416` 字节，SHA-256：`908c9bbd965471616afe7e619919189a775f7138a5b7fa621cc17b901df85c51`。
 - 下载后在 macOS 独立执行 `shasum -a 256 -c SHA256SUMS.txt`，结果为 `OK`；`file` 识别为 `PE32+ executable (GUI) x86-64, for MS Windows`。
 - 20/20 次启动均枚举到唯一的可见顶层窗口，标题为 `Codex Monitor 任务中心`，窗口类为 `Tauri Window`；向该精确 HWND 发送 `WM_CLOSE` 后，主进程均以退出码 0 在 10 秒内退出。
 - 每轮均观察到新 WebView2 进程，证明 runner 上已安装运行时且应用确实使用它启动；每轮关闭后本轮 WebView2 PID 均归零。
-- 任务中心及本轮 WebView2 未观察到监听 TCP 端口；结束后任务中心 PID、新 WebView2 PID 均为 0，未观察到任务中心启动 Node。
+- 任务中心及本轮 WebView2 的 TCP 监听和 UDP 绑定端点均为 0；结束后任务中心 PID、新 WebView2 PID 均为 0，前后 Node PID 均为空。
+- 匹配 `codex-monitor-task-center` 路径的 Windows 服务在测试前后均为空，服务清单未改变。
 - 强制终止任务中心后，其 WebView2 PID 归零，独立 PowerShell 哨兵进程继续存活。
 - 同一提交的 macOS runner 同时通过前端、Rust 和 Tauri 应用二进制构建，未发现本轮 Windows 修复导致的共享代码回归。
 

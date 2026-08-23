@@ -40,15 +40,15 @@ P1 仍不能标记“双平台桌面全部验收”：Windows runner 没有人�
 - 三轮资源基线：九个窗口均 60 个有效样本、0 缺样；详见 `resource-baseline-2026-08-23.md`。
 - 故障隔离：强制结束主进程和定向结束 WebContent 两种故障下 HUD 原 PID 均不变。
 - 视觉：Retina backing scale `2.0`；最大窗口与 760×522 原生最小边界实际验证，没有核心控件覆盖。
-- Windows CI：GitHub Actions run `32608128722` 两个 job 全绿；Windows 前端 10/10、Rust 8/8、Tauri GUI `.exe`、20/20 精确主窗关闭、WebView2 回收、无监听/残留和强制终止隔离通过。
-- Windows 产物：版本 `1.1.0`，PE `Windows GUI`，大小 `9,148,416` 字节，SHA-256 `57d009ff10d32cf7fbbdf561a286da7142513ef4af39f411c1fb1a8970b9448e`；下载后跨平台校验通过。
+- Windows CI：GitHub Actions run `32609138427` 两个 job 全绿；Windows 前端 10/10、Rust 8/8、Tauri GUI `.exe`、20/20 精确主窗关闭、WebView2 回收、TCP/UDP 端点、Node/服务/进程残留和强制终止隔离通过。
+- Windows 产物：版本 `1.1.0`，PE `Windows GUI`，大小 `9,148,416` 字节，SHA-256 `908c9bbd965471616afe7e619919189a775f7138a5b7fa621cc17b901df85c51`；下载后跨平台校验通过。
 
 ## Windows 当前证据
 
 - 真实 runner、job、产物与证据边界见 `windows-ci-evidence-2026-08-23.md`。
 - CI 首先发现 `data/` 忽略规则导致任务中心 Provider/夹具未提交；加任务中心白名单后，两平台测试恢复。
 - 初版生命周期测试错误依赖 `.NET Process.MainWindowHandle`，控制台子系统下可能命中附带控制台，形成假阳性。最终构建改为 PE GUI 子系统，并枚举 PID 的可见顶层窗，仅对标题 `Codex Monitor 任务中心`、类名 `Tauri Window` 的精确 HWND 发送 `WM_CLOSE`。
-- 最终 run `32608128722` Windows 与 macOS job 均成功；Windows 20/20 生命周期报告中的标题、类名、退出码、监听和 WebView2 残留均符合门槛。
+- 最终 run `32609138427` Windows 与 macOS job 均成功；Windows 20/20 生命周期报告中的标题、类名、退出码、TCP/UDP 端点、Node/服务/进程和 WebView2 残留均符合门槛。
 - Windows WebView2 进程每轮实际出现并回收，但 runner 注册表未返回运行时版本；不声称已验证具体 WebView2 版本。
 
 ## 本轮修复
