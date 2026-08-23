@@ -30,6 +30,34 @@ Synthetic CI body. This is not formal task data.
 "@ | Set-Content -Encoding utf8 -Path (Join-Path $taskRoot "tsk_windows_ci.md")
 $env:CODEX_TASK_CENTER_TASK_ROOT = $taskRoot
 
+Add-Type @"
+using System;
+using System.Text;
+using System.Runtime.InteropServices;
+
+public static class TaskCenterNativeWindow {
+    public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    public static extern bool EnumWindows(EnumWindowsProc callback, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+
+    [DllImport("user32.dll")]
+    public static extern bool IsWindowVisible(IntPtr hWnd);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    public static extern int GetWindowText(IntPtr hWnd, StringBuilder text, int count);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    public static extern int GetClassName(IntPtr hWnd, StringBuilder text, int count);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern bool PostMessage(IntPtr hWnd, uint message, IntPtr wParam, IntPtr lParam);
+}
+"@
+
 function Get-ProcessIds([string]$Name) {
     return @(
         Get-Process -Name $Name -ErrorAction SilentlyContinue |
@@ -41,6 +69,30 @@ function Get-NewProcessIds([string]$Name, [int[]]$Baseline) {
     return @(Get-ProcessIds $Name | Where-Object { $Baseline -notcontains $_ })
 }
 
+function Get-ProcessWindows([int]$ProcessId) {
+    $windows = [System.Collections.ArrayList]::new()
+    $callback = [TaskCenterNativeWindow+EnumWindowsProc]{
+        param([IntPtr]$handle, [IntPtr]$unused)
+        $owner = [uint32]0
+        [TaskCenterNativeWindow]::GetWindowThreadProcessId($handle, [ref]$owner) | Out-Null
+        if ($owner -eq $ProcessId) {
+            $title = [System.Text.StringBuilder]::new(512)
+            $className = [System.Text.StringBuilder]::new(256)
+            [TaskCenterNativeWindow]::GetWindowText($handle, $title, $title.Capacity) | Out-Null
+            [TaskCenterNativeWindow]::GetClassName($handle, $className, $className.Capacity) | Out-Null
+            $windows.Add([ordered]@{
+                handle = $handle.ToInt64()
+                title = $title.ToString()
+                className = $className.ToString()
+                visible = [TaskCenterNativeWindow]::IsWindowVisible($handle)
+            }) | Out-Null
+        }
+        return $true
+    }
+    [TaskCenterNativeWindow]::EnumWindows($callback, [IntPtr]::Zero) | Out-Null
+    return @($windows)
+}
+
 function Wait-ForWindow([System.Diagnostics.Process]$Process, [int]$TimeoutSeconds = 30) {
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
     while ((Get-Date) -lt $deadline) {
@@ -48,12 +100,18 @@ function Wait-ForWindow([System.Diagnostics.Process]$Process, [int]$TimeoutSecon
         if ($Process.HasExited) {
             throw "Task Center exited before its native window became available (exit $($Process.ExitCode))."
         }
-        if ($Process.MainWindowHandle -ne [IntPtr]::Zero) {
-            return $Process.MainWindowHandle.ToInt64()
+        $windows = @(Get-ProcessWindows $Process.Id)
+        $target = @($windows | Where-Object { $_.visible -and $_.title -eq "Codex Monitor 任务中心" })
+        if ($target.Count -eq 1) {
+            return $target[0]
+        }
+        if ($target.Count -gt 1) {
+            throw "Task Center exposed more than one visible main window."
         }
         Start-Sleep -Milliseconds 250
     }
-    throw "Task Center did not expose a native window handle within $TimeoutSeconds seconds."
+    $observed = @(Get-ProcessWindows $Process.Id | ConvertTo-Json -Compress)
+    throw "Task Center did not expose the expected visible titled window within $TimeoutSeconds seconds. Observed: $observed"
 }
 
 function Wait-ForNewWebView([int[]]$Baseline, [int]$TimeoutSeconds = 30) {
@@ -131,14 +189,14 @@ try {
     for ($cycle = 1; $cycle -le $Cycles; $cycle++) {
         $webViewBefore = @(Get-ProcessIds "msedgewebview2")
         $process = Start-Process -FilePath $executablePath -PassThru
-        $windowHandle = Wait-ForWindow $process
+        $window = Wait-ForWindow $process
         $webViewIds = @(Wait-ForNewWebView $webViewBefore)
         $listeners = @(Get-ListeningEndpoints (@($process.Id) + $webViewIds))
         if ($listeners.Count -ne 0) {
             throw "Cycle $cycle created a listening TCP endpoint."
         }
-        if (-not $process.CloseMainWindow()) {
-            throw "Cycle $cycle could not send the native close-window request."
+        if (-not [TaskCenterNativeWindow]::PostMessage([IntPtr]$window.handle, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero)) {
+            throw "Cycle $cycle could not post WM_CLOSE to the verified Task Center window."
         }
         if (-not (Wait-ForExit $process)) {
             Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
@@ -150,7 +208,9 @@ try {
         }
         $cycleReports += [ordered]@{
             cycle = $cycle
-            windowHandle = $windowHandle
+            windowHandle = $window.handle
+            windowTitle = $window.title
+            windowClass = $window.className
             closeRequestAccepted = $true
             exitCode = $process.ExitCode
             webView2ProcessCount = $webViewIds.Count
@@ -162,7 +222,7 @@ try {
     $forceWebViewBefore = @(Get-ProcessIds "msedgewebview2")
     $sentinel = Start-Process -FilePath "powershell.exe" -ArgumentList "-NoProfile", "-Command", "Start-Sleep -Seconds 60" -PassThru
     $forced = Start-Process -FilePath $executablePath -PassThru
-    $forcedHandle = Wait-ForWindow $forced
+    $forcedWindow = Wait-ForWindow $forced
     $forcedWebViewIds = @(Wait-ForNewWebView $forceWebViewBefore)
     Stop-Process -Id $forced.Id -Force
     if (-not (Wait-ForExit $forced)) {
@@ -213,7 +273,7 @@ try {
         lifecycle = [ordered]@{
             requestedCycles = $Cycles
             passedCycles = $cycleReports.Count
-            nativeCloseMethod = "Process.CloseMainWindow (WM_CLOSE)"
+            nativeCloseMethod = "PostMessage WM_CLOSE to the visible titled top-level Task Center HWND"
             cycles = $cycleReports
         }
         network = [ordered]@{
@@ -227,7 +287,9 @@ try {
             nodeSpawnedByTaskCenterObserved = $false
         }
         forceTermination = [ordered]@{
-            windowHandle = $forcedHandle
+            windowHandle = $forcedWindow.handle
+            windowTitle = $forcedWindow.title
+            windowClass = $forcedWindow.className
             taskCenterExited = $true
             residualWebView2 = $forcedResidual.Count
             independentSentinelSurvived = $sentinelSurvived

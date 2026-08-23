@@ -6,7 +6,6 @@ use std::{
     io::{BufRead, BufReader, Read},
     path::{Path, PathBuf},
 };
-#[cfg(not(target_os = "windows"))]
 use tauri::Manager;
 
 const MAX_FRONTMATTER_BYTES: usize = 128 * 1024;
@@ -370,13 +369,6 @@ pub fn run() {
         ])
         .on_window_event(|window, event| {
             if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
-                // Windows can keep the event loop alive when AppHandle::exit is
-                // requested from inside WM_CLOSE handling. This app has no tray,
-                // sidecars, services, or pending writes, so terminate the isolated
-                // process deterministically when its only window is closed.
-                #[cfg(target_os = "windows")]
-                std::process::exit(0);
-                #[cfg(not(target_os = "windows"))]
                 window.app_handle().exit(0);
             }
         })
