@@ -2381,9 +2381,12 @@ verification_status: human_confirmed\n\
         .unwrap_err();
         assert_eq!(error.code, "read_only");
 
-        let mut permissions = fs::metadata(&path).unwrap().permissions();
-        permissions.set_readonly(false);
-        fs::set_permissions(&path, permissions).unwrap();
+        #[cfg(windows)]
+        {
+            let mut permissions = fs::metadata(&path).unwrap().permissions();
+            permissions.set_readonly(false);
+            fs::set_permissions(&path, permissions).unwrap();
+        }
     }
 
     fn new_task_draft() -> NewTaskDraft {
