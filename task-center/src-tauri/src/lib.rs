@@ -2364,14 +2364,14 @@ verification_status: human_confirmed\n\
         assert!(!events.exists());
     }
 
-    #[cfg(unix)]
     #[test]
     fn read_only_task_is_rejected_before_preview() {
-        use std::os::unix::fs::PermissionsExt;
         let dir = tempdir().unwrap();
         let path = dir.path().join("tsk_write_test.md");
         fs::write(&path, writable_task("medium")).unwrap();
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o444)).unwrap();
+        let mut permissions = fs::metadata(&path).unwrap().permissions();
+        permissions.set_readonly(true);
+        fs::set_permissions(&path, permissions).unwrap();
         let error = preview_task_field_edit_at(
             dir.path(),
             "tsk_write_test.md",
@@ -2380,6 +2380,10 @@ verification_status: human_confirmed\n\
         )
         .unwrap_err();
         assert_eq!(error.code, "read_only");
+
+        let mut permissions = fs::metadata(&path).unwrap().permissions();
+        permissions.set_readonly(false);
+        fs::set_permissions(&path, permissions).unwrap();
     }
 
     fn new_task_draft() -> NewTaskDraft {
