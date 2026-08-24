@@ -125,8 +125,18 @@ jobs:
           "@ | Set-Content -Encoding utf8 -Path $task
           $before = (Get-FileHash -Algorithm SHA256 $task).Hash
           $env:CODEX_TASK_CENTER_TASK_ROOT = $root.FullName
-          $diagnostic = & ./task-center/src-tauri/target/release/codex-monitor-task-center.exe --read-only-diagnostic
-          if ($LASTEXITCODE -ne 0) { throw "Read-only diagnostic failed: $diagnostic" }
+          $diagnosticOut = Join-Path $env:RUNNER_TEMP "task-center-zero-write-diagnostic.json"
+          $diagnosticErr = Join-Path $env:RUNNER_TEMP "task-center-zero-write-diagnostic.err"
+          $diagnosticProcess = Start-Process `
+            -FilePath ./task-center/src-tauri/target/release/codex-monitor-task-center.exe `
+            -ArgumentList "--read-only-diagnostic" `
+            -RedirectStandardOutput $diagnosticOut `
+            -RedirectStandardError $diagnosticErr `
+            -Wait -PassThru
+          $diagnostic = Get-Content -Raw $diagnosticOut
+          if ($diagnosticProcess.ExitCode -ne 0) {
+            throw "Read-only diagnostic failed: $(Get-Content -Raw $diagnosticErr)"
+          }
           $result = $diagnostic | ConvertFrom-Json
           if ($result.write_operations -ne 0 -or $result.body_bytes_read -ne 0) {
             throw "Diagnostic crossed the P1/P2 zero-write boundary: $diagnostic"
