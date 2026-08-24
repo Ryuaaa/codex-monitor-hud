@@ -20,11 +20,18 @@ New-Item -ItemType Directory -Force -Path $taskRoot, $eventsRoot | Out-Null
 @"
 ---
 task_id: tsk_windows_ci
+schema_version: 1
+record_type: task
+record_status: current
 title: Windows runner lifecycle fixture
-status: doing
-priority: normal
+task_status: doing
+domain: task_center_ci
+priority: medium
 privacy: general
 codex_access: proposal_only
+source_refs: ["synthetic-ci"]
+verification_status: synthetic_fixture
+related_ids: []
 ---
 Synthetic CI body. This is not formal task data.
 "@ | Set-Content -Encoding utf8 -Path (Join-Path $taskRoot "tsk_windows_ci.md")

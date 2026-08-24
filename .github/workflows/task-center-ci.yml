@@ -15,8 +15,8 @@ permissions:
   contents: read
 
 jobs:
-  read-only-mvp:
-    name: ${{ matrix.platform }} read-only build
+  task-center-p2:
+    name: ${{ matrix.platform }} P2 build and safety tests
     strategy:
       fail-fast: false
       matrix:
@@ -53,9 +53,13 @@ jobs:
         working-directory: task-center
         run: npm test
 
-      - name: Run Rust read-boundary tests
+      - name: Run Rust P1/P2 safety tests
         working-directory: task-center
         run: cargo test --locked --manifest-path src-tauri/Cargo.toml
+
+      - name: Run Rust strict static checks
+        working-directory: task-center
+        run: cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 
       - name: Build platform application binary
         working-directory: task-center
@@ -77,6 +81,10 @@ jobs:
           $version = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($exe)
           $bytes = [System.IO.File]::ReadAllBytes($exe)
           $peOffset = [System.BitConverter]::ToInt32($bytes, 0x3c)
+          $machine = [System.BitConverter]::ToUInt16($bytes, $peOffset + 4)
+          if ($machine -ne 0x8664) {
+            throw "Expected x86_64 PE machine (0x8664), found 0x$($machine.ToString('x4'))."
+          }
           $subsystem = [System.BitConverter]::ToUInt16($bytes, $peOffset + 24 + 68)
           if ($subsystem -ne 2) {
             throw "Expected Windows GUI subsystem (2), found $subsystem."
@@ -86,9 +94,45 @@ jobs:
             productVersion = $version.ProductVersion
             bytes = (Get-Item $exe).Length
             sha256 = $hash
+            peMachine = "0x$($machine.ToString('x4'))"
+            peArchitecture = "x86_64"
             peSubsystem = $subsystem
             peSubsystemName = "Windows GUI"
           } | ConvertTo-Json | Set-Content -Encoding utf8 -Path ($output.FullName + "/windows-build-identity.json")
+
+      - name: Prove read-only diagnostic writes zero fixture bytes
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $root = New-Item -ItemType Directory -Force -Path (Join-Path $env:RUNNER_TEMP "task-center-zero-write/任务")
+          $task = Join-Path $root.FullName "tsk_zero_write.md"
+          @"
+          ---
+          task_id: tsk_zero_write
+          record_status: current
+          task_status: todo
+          title: Synthetic zero-write proof
+          domain: task_center_ci
+          priority: medium
+          privacy: general
+          codex_access: proposal_only
+          source_refs: ["synthetic-ci"]
+          verification_status: synthetic_fixture
+          related_ids: []
+          ---
+          Synthetic body must not be read by the diagnostic.
+          "@ | Set-Content -Encoding utf8 -Path $task
+          $before = (Get-FileHash -Algorithm SHA256 $task).Hash
+          $env:CODEX_TASK_CENTER_TASK_ROOT = $root.FullName
+          $diagnostic = & ./task-center/src-tauri/target/release/codex-monitor-task-center.exe --read-only-diagnostic
+          if ($LASTEXITCODE -ne 0) { throw "Read-only diagnostic failed: $diagnostic" }
+          $result = $diagnostic | ConvertFrom-Json
+          if ($result.write_operations -ne 0 -or $result.body_bytes_read -ne 0) {
+            throw "Diagnostic crossed the P1/P2 zero-write boundary: $diagnostic"
+          }
+          $after = (Get-FileHash -Algorithm SHA256 $task).Hash
+          if ($before -ne $after) { throw "Diagnostic changed the synthetic task fixture." }
+          $result | ConvertTo-Json | Set-Content -Encoding utf8 ./task-center-ci-artifact/windows-zero-write-diagnostic.json
 
       - name: Validate Windows native lifecycle
         if: runner.os == 'Windows'
