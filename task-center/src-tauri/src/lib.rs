@@ -2365,6 +2365,7 @@ verification_status: human_confirmed\n\
     }
 
     #[test]
+    #[cfg_attr(windows, allow(clippy::permissions_set_readonly_false))]
     fn read_only_task_is_rejected_before_preview() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("tsk_write_test.md");
@@ -2383,6 +2384,7 @@ verification_status: human_confirmed\n\
 
         #[cfg(windows)]
         {
+            // On Windows this toggles a file attribute; it does not broaden Unix mode bits.
             let mut permissions = fs::metadata(&path).unwrap().permissions();
             permissions.set_readonly(false);
             fs::set_permissions(&path, permissions).unwrap();
