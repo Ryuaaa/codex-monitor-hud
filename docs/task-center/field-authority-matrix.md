@@ -26,3 +26,18 @@ P1 的统一规则：正式单任务 Markdown 负责当前状态，追加式 JSO
 
 `backlog/todo/in_progress/in_review/blocked/done/canceled` 不等于正式状态。P1 看板只按正式状态分组；“需要关注/阻塞”只能从正式字段中的可靠文字或逾期规则派生，并标为提示，不创建新的状态。
 
+## macOS P2 已实现写入范围
+
+P2 不改变上述权威位置。所有写入均由任务中心界面直接触发，经过预览、明确确认、期望哈希检查、同目录准备文件、原子替换、追加事件、写后回读；冲突停止，提交后失败恢复原任务与原事件。`updated_at` 当前不作隐含写入，准确变更时间由追加事件记录，避免预览之外的第二个字段变化。
+
+| 能力 | P2 写入映射 | 事件 | 失败边界 |
+|---|---|---|---|
+| 新建任务 | 正式最小字段；稳定 `tsk_` 编号；固定 `general`、`proposal_only`、人工确认、`task-center-ui` 来源 | `created` | 编号/文件冲突停止；事件失败移除新任务并恢复事件文件 |
+| 标题 | Markdown `title` | `title_changed` | 仅替换该字段；保留未知字段与正文 |
+| 当前状态 | 仅 `todo/doing/long_term/done/cancelled` | `status_changed`，含前后状态 | `blocked/in_review/backlog` 等拒绝写入，不建立第二套状态 |
+| 优先级 | 仅 `high/medium/low` | `priority_changed` | 未知枚举拒绝写入 |
+| 截止日期 | 空值或有效 `YYYY-MM-DD` | `deadline_changed` | 无效日期拒绝写入；P2 不写未经审核的时间扩展 |
+| 负责人 | Markdown `assignee` | `assignee_changed` | 纯文本长度与换行校验 |
+| 关联任务 | Markdown `related_ids` 中正式任务编号 | `relations_changed` | 拒绝自身、重复、非法编号；不写类型化依赖 |
+| 归档/恢复 | Markdown `record_status` 的 `archived/current` | `archived/restored` | 不移动或重命名文件，不从看板列推导额外状态 |
+| 评论、附件、重复、甘特图、AI、自动派发、工作流、Jira、云协作 | 不支持 | 无 | 界面明确提示“正式结构暂不支持”，不写缓存或私有数据库 |

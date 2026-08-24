@@ -4,9 +4,15 @@ import type {
   PriorityEditPreview,
   PriorityEditReceipt,
   PriorityEditRequest,
+  CreateTaskPreview,
+  CreateTaskReceipt,
+  NewTaskDraft,
   ProjectMapping,
   RawTaskSource,
   TaskEvent,
+  TaskFieldEditPreview,
+  TaskFieldEditReceipt,
+  TaskFieldEditRequest,
 } from "../domain/types";
 
 export interface TaskDataProvider {
@@ -16,6 +22,10 @@ export interface TaskDataProvider {
   loadProjectMappings(): Promise<ProjectMapping[]>;
   previewPriorityEdit(fileToken: string, newPriority: "high" | "medium" | "low"): Promise<PriorityEditPreview>;
   applyPriorityEdit(request: PriorityEditRequest): Promise<PriorityEditReceipt>;
+  previewTaskFieldEdit(fileToken: string, field: TaskFieldEditRequest["field"], newValue: unknown): Promise<TaskFieldEditPreview>;
+  applyTaskFieldEdit(request: TaskFieldEditRequest): Promise<TaskFieldEditReceipt>;
+  previewCreateTask(draft: NewTaskDraft): Promise<CreateTaskPreview>;
+  applyCreateTask(preview: CreateTaskPreview): Promise<CreateTaskReceipt>;
 }
 
 const isTauri = () => typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -47,5 +57,21 @@ export const taskDataProvider: TaskDataProvider = {
   async applyPriorityEdit(request) {
     if (!isTauri()) throw new Error("浏览器合成预览不执行文件写入");
     return invoke<PriorityEditReceipt>("apply_priority_edit", { request });
+  },
+  async previewTaskFieldEdit(fileToken, field, newValue) {
+    if (!isTauri()) throw new Error("浏览器合成预览不执行文件写入");
+    return invoke<TaskFieldEditPreview>("preview_task_field_edit", { fileToken, field, newValue });
+  },
+  async applyTaskFieldEdit(request) {
+    if (!isTauri()) throw new Error("浏览器合成预览不执行文件写入");
+    return invoke<TaskFieldEditReceipt>("apply_task_field_edit", { request });
+  },
+  async previewCreateTask(draft) {
+    if (!isTauri()) throw new Error("浏览器合成预览不执行文件写入");
+    return invoke<CreateTaskPreview>("preview_create_task", { draft });
+  },
+  async applyCreateTask(preview) {
+    if (!isTauri()) throw new Error("浏览器合成预览不执行文件写入");
+    return invoke<CreateTaskReceipt>("apply_create_task", { request: { preview, confirmed: true } });
   },
 };

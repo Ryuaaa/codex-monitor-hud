@@ -3,13 +3,19 @@ import { codexThreadIds, deriveAttention, parseTask } from "../domain/task";
 import type {
   PriorityEditPreview,
   PriorityEditReceipt,
+  CreateTaskPreview,
+  CreateTaskReceipt,
+  NewTaskDraft,
   ProjectMapping,
   TaskEvent,
   TaskLoadIssue,
   TaskPriority,
   TaskRecord,
   TaskStatus,
+  TaskFieldEditPreview,
+  TaskFieldEditReceipt,
   TaskWriteFailure,
+  WritableTaskField,
 } from "../domain/types";
 import { taskDataProvider, type TaskDataProvider } from "../data/provider";
 
@@ -33,6 +39,7 @@ export function App({ provider = taskDataProvider }: { provider?: TaskDataProvid
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<TaskStatus | "all">("all");
   const [compact, setCompact] = useState(false);
+  const [showArchived, setShowArchived] = useState(false);
   const [selected, setSelected] = useState<TaskRecord>();
   const [body, setBody] = useState<string>();
   const [events, setEvents] = useState<TaskEvent[]>([]);
@@ -43,6 +50,17 @@ export function App({ provider = taskDataProvider }: { provider?: TaskDataProvid
   const [writeReceipt, setWriteReceipt] = useState<PriorityEditReceipt>();
   const [writeFailure, setWriteFailure] = useState<TaskWriteFailure>();
   const [writing, setWriting] = useState(false);
+  const [fieldDraft, setFieldDraft] = useState<{ field: WritableTaskField; rawValue: string }>();
+  const [fieldPreview, setFieldPreview] = useState<TaskFieldEditPreview>();
+  const [fieldReceipt, setFieldReceipt] = useState<TaskFieldEditReceipt>();
+  const [createOpen, setCreateOpen] = useState(false);
+  const [createDraft, setCreateDraft] = useState<NewTaskDraft>({
+    title: "", domain: "task_hub", taskStatus: "todo", priority: "medium",
+    assignee: "本人", deadline: "", relatedIds: [],
+  });
+  const [createPreview, setCreatePreview] = useState<CreateTaskPreview>();
+  const [createReceipt, setCreateReceipt] = useState<CreateTaskReceipt>();
+  const [createFailure, setCreateFailure] = useState<TaskWriteFailure>();
 
   useEffect(() => {
     let live = true;
@@ -63,11 +81,12 @@ export function App({ provider = taskDataProvider }: { provider?: TaskDataProvid
     return tasks.filter((task) => {
       const projectMatch = selectedProject === "all" || task.projectId === selectedProject || task.domain === selectedProject;
       const statusMatch = statusFilter === "all" || task.status === statusFilter;
+      const archiveMatch = showArchived || task.recordStatus !== "archived";
       const searchMatch = !normalized || [task.title, task.domain, task.category, task.assignee, task.workflowStatus]
         .filter(Boolean).join(" ").toLowerCase().includes(normalized);
-      return projectMatch && statusMatch && searchMatch;
+      return projectMatch && statusMatch && archiveMatch && searchMatch;
     });
-  }, [tasks, query, selectedProject, statusFilter]);
+  }, [tasks, query, selectedProject, statusFilter, showArchived]);
 
   const projectOptions = useMemo(() => {
     const mapped = projects.map((project) => ({ id: project.id, name: project.name, workdirs: project.workdirs }));
@@ -104,6 +123,9 @@ export function App({ provider = taskDataProvider }: { provider?: TaskDataProvid
     setWriteReceipt(undefined);
     setWriteFailure(undefined);
     setWriting(false);
+    setFieldDraft(undefined);
+    setFieldPreview(undefined);
+    setFieldReceipt(undefined);
   }
 
   function normalizeWriteError(error: unknown): TaskWriteFailure {
@@ -111,6 +133,10 @@ export function App({ provider = taskDataProvider }: { provider?: TaskDataProvid
       return { code: String(error.code), message: String(error.message) };
     }
     return { code: "write_failed", message: "写入失败，原任务已保留。" };
+  }
+
+  function isConflict(failure: TaskWriteFailure): boolean {
+    return failure.code === "conflict" || failure.code === "event_conflict";
   }
 
   async function previewPriority() {
@@ -163,7 +189,125 @@ export function App({ provider = taskDataProvider }: { provider?: TaskDataProvid
       const failure = normalizeWriteError(error);
       setWriteFailure(failure);
       setWritePreview(undefined);
-      if (failure.code === "conflict") await refreshAfterConflict(selected.id);
+      if (isConflict(failure)) await refreshAfterConflict(selected.id);
+    } finally {
+      setWriting(false);
+    }
+  }
+
+  function initialFieldValue(task: TaskRecord, field: WritableTaskField): string {
+    if (field === "title") return task.title;
+    if (field === "task_status") return task.status;
+    if (field === "priority") return task.priority === "unknown" ? "medium" : task.priority;
+    if (field === "deadline") return task.deadline ?? "";
+    if (field === "assignee") return task.assignee ?? "";
+    if (field === "related_ids") return task.relatedIds.join(", ");
+    return task.recordStatus === "unknown" ? "current" : task.recordStatus;
+  }
+
+  function fieldValue(draft: { field: WritableTaskField; rawValue: string }): unknown {
+    if (draft.field === "related_ids") {
+      return draft.rawValue.split(",").map((value) => value.trim()).filter(Boolean);
+    }
+    return draft.rawValue.trim();
+  }
+
+  async function previewFieldEdit() {
+    if (!selected || !fieldDraft) return;
+    setWriting(true);
+    setWriteFailure(undefined);
+    setFieldReceipt(undefined);
+    try {
+      setFieldPreview(await provider.previewTaskFieldEdit(
+        selected.fileToken,
+        fieldDraft.field,
+        fieldValue(fieldDraft),
+      ));
+    } catch (error) {
+      setFieldPreview(undefined);
+      setWriteFailure(normalizeWriteError(error));
+    } finally {
+      setWriting(false);
+    }
+  }
+
+  function taskAfterFieldEdit(task: TaskRecord, receipt: TaskFieldEditReceipt): TaskRecord {
+    const value = receipt.newValue;
+    if (receipt.field === "title") return { ...task, title: String(value) };
+    if (receipt.field === "task_status") return { ...task, status: value as TaskStatus, rawStatus: String(value) };
+    if (receipt.field === "priority") return { ...task, priority: value as TaskPriority };
+    if (receipt.field === "deadline") return { ...task, deadline: String(value) || undefined };
+    if (receipt.field === "assignee") return { ...task, assignee: String(value) || undefined };
+    if (receipt.field === "related_ids") return { ...task, relatedIds: value as string[] };
+    return { ...task, recordStatus: value as TaskRecord["recordStatus"] };
+  }
+
+  async function confirmFieldEdit() {
+    if (!selected || !fieldDraft || !fieldPreview) return;
+    setWriting(true);
+    setWriteFailure(undefined);
+    try {
+      const receipt = await provider.applyTaskFieldEdit({
+        fileToken: selected.fileToken,
+        field: fieldDraft.field,
+        newValue: fieldValue(fieldDraft),
+        expectedHash: fieldPreview.expectedHash,
+        confirmed: true,
+      });
+      const nextTask = taskAfterFieldEdit(selected, receipt);
+      setTasks((current) => current.map((task) => task.id === nextTask.id ? nextTask : task));
+      setSelected(nextTask);
+      setEvents(await provider.loadEvents(nextTask.id));
+      setFieldReceipt(receipt);
+      setFieldPreview(undefined);
+      setFieldDraft(undefined);
+    } catch (error) {
+      const failure = normalizeWriteError(error);
+      setWriteFailure(failure);
+      setFieldPreview(undefined);
+      if (isConflict(failure)) await refreshAfterConflict(selected.id);
+    } finally {
+      setWriting(false);
+    }
+  }
+
+  function resetCreateFlow() {
+    setCreateOpen(false);
+    setCreatePreview(undefined);
+    setCreateReceipt(undefined);
+    setCreateFailure(undefined);
+    setCreateDraft({ title: "", domain: "task_hub", taskStatus: "todo", priority: "medium", assignee: "本人", deadline: "", relatedIds: [] });
+  }
+
+  async function previewCreate() {
+    setWriting(true);
+    setCreateFailure(undefined);
+    setCreateReceipt(undefined);
+    try {
+      setCreatePreview(await provider.previewCreateTask(createDraft));
+    } catch (error) {
+      setCreatePreview(undefined);
+      setCreateFailure(normalizeWriteError(error));
+    } finally {
+      setWriting(false);
+    }
+  }
+
+  async function confirmCreate() {
+    if (!createPreview) return;
+    setWriting(true);
+    setCreateFailure(undefined);
+    try {
+      const receipt = await provider.applyCreateTask(createPreview);
+      const sources = await provider.loadMetadata();
+      const parsed = sources.map(parseTask);
+      setTasks(parsed.flatMap((result) => (result.task ? [result.task] : [])));
+      setIssues(parsed.flatMap((result) => (result.issue ? [result.issue] : [])));
+      setCreateReceipt(receipt);
+      setCreatePreview(undefined);
+    } catch (error) {
+      setCreateFailure(normalizeWriteError(error));
+      setCreatePreview(undefined);
     } finally {
       setWriting(false);
     }
@@ -177,8 +321,10 @@ export function App({ provider = taskDataProvider }: { provider?: TaskDataProvid
           <h1>任务中心 <span>安全写入预览</span></h1>
         </div>
         <div className="top-actions" aria-label="视图设置">
+          <button className="create-entry" onClick={() => { resetCreateFlow(); setCreateOpen(true); }}>新建任务</button>
           <button className={view === "board" ? "active" : ""} onClick={() => setView("board")}>看板</button>
           <button className={view === "list" ? "active" : ""} onClick={() => setView("list")}>列表</button>
+          <button aria-pressed={showArchived} onClick={() => setShowArchived((value) => !value)}>归档</button>
           <button aria-pressed={compact} onClick={() => setCompact((value) => !value)}>紧凑</button>
         </div>
       </header>
@@ -233,7 +379,7 @@ export function App({ provider = taskDataProvider }: { provider?: TaskDataProvid
             <section className="list-view" aria-label="任务列表">
               <div className="list-head"><span>任务</span><span>状态</span><span>优先级</span><span>归属</span><span>更新</span></div>
               {filtered.map((task) => <button key={task.id} className="list-row" onClick={() => openTask(task)}>
-                <span><strong>{task.title}</strong><small>{task.id}</small></span>
+                <span><strong>{task.title}{task.recordStatus === "archived" ? "（已归档）" : ""}</strong><small>{task.id}</small></span>
                 <span>{statusLabels[task.status]}</span><span>{priorityLabels[task.priority]}</span><span>{task.domain}</span><span>{task.updatedAt ?? "—"}</span>
               </button>)}
             </section>
@@ -251,6 +397,9 @@ export function App({ provider = taskDataProvider }: { provider?: TaskDataProvid
         writeReceipt={writeReceipt}
         writeFailure={writeFailure}
         writing={writing}
+        fieldDraft={fieldDraft}
+        fieldPreview={fieldPreview}
+        fieldReceipt={fieldReceipt}
         onBeginPriority={() => {
           const initial = selected.priority === "unknown" ? "medium" : selected.priority;
           setPriorityDraft(initial as "high" | "medium" | "low");
@@ -266,7 +415,39 @@ export function App({ provider = taskDataProvider }: { provider?: TaskDataProvid
         onPreviewPriority={previewPriority}
         onConfirmPriority={confirmPriority}
         onCancelPriority={resetWriteFlow}
+        onBeginField={() => {
+          const field: WritableTaskField = "title";
+          setFieldDraft({ field, rawValue: initialFieldValue(selected, field) });
+          setFieldPreview(undefined);
+          setFieldReceipt(undefined);
+          setWriteReceipt(undefined);
+          setWriteFailure(undefined);
+        }}
+        onFieldChange={(field) => {
+          setFieldDraft({ field, rawValue: initialFieldValue(selected, field) });
+          setFieldPreview(undefined);
+          setWriteFailure(undefined);
+        }}
+        onFieldValue={(rawValue) => {
+          setFieldDraft((current) => current ? { ...current, rawValue } : current);
+          setFieldPreview(undefined);
+          setWriteFailure(undefined);
+        }}
+        onPreviewField={previewFieldEdit}
+        onConfirmField={confirmFieldEdit}
+        onCancelField={resetWriteFlow}
         onClose={() => { resetWriteFlow(); setSelected(undefined); }}
+      />}
+      {createOpen && <CreateTaskDialog
+        draft={createDraft}
+        preview={createPreview}
+        receipt={createReceipt}
+        failure={createFailure}
+        writing={writing}
+        onDraft={(draft) => { setCreateDraft(draft); setCreatePreview(undefined); setCreateFailure(undefined); }}
+        onPreview={previewCreate}
+        onConfirm={confirmCreate}
+        onClose={resetCreateFlow}
       />}
     </div>
   );
@@ -280,7 +461,7 @@ function TaskCard({ task, onOpen }: { task: TaskRecord; onOpen: () => void }) {
   const attention = deriveAttention(task);
   const threads = codexThreadIds(task);
   return <button className="task-card" onClick={onOpen}>
-    <div className="badges"><span className={`priority ${task.priority}`}>{priorityLabels[task.priority]}</span>{attention.map((hint) => <span className="attention" key={hint}>{hint}</span>)}</div>
+    <div className="badges"><span className={`priority ${task.priority}`}>{priorityLabels[task.priority]}</span>{task.recordStatus === "archived" && <span className="archived">已归档</span>}{attention.map((hint) => <span className="attention" key={hint}>{hint}</span>)}</div>
     <h3>{task.title}</h3>
     {task.workflowStatus && <p>{task.workflowStatus}</p>}
     <footer><span>{task.domain}</span><span>{threads.length ? `Codex × ${threads.length}` : task.assignee ?? "未分配"}</span></footer>
@@ -289,7 +470,9 @@ function TaskCard({ task, onOpen }: { task: TaskRecord; onOpen: () => void }) {
 
 function DetailPanel({
   task, body, events, loading, priorityDraft, writePreview, writeReceipt, writeFailure, writing,
-  onBeginPriority, onPriorityDraft, onPreviewPriority, onConfirmPriority, onCancelPriority, onClose,
+  fieldDraft, fieldPreview, fieldReceipt,
+  onBeginPriority, onPriorityDraft, onPreviewPriority, onConfirmPriority, onCancelPriority,
+  onBeginField, onFieldChange, onFieldValue, onPreviewField, onConfirmField, onCancelField, onClose,
 }: {
   task: TaskRecord;
   body?: string;
@@ -300,11 +483,20 @@ function DetailPanel({
   writeReceipt?: PriorityEditReceipt;
   writeFailure?: TaskWriteFailure;
   writing: boolean;
+  fieldDraft?: { field: WritableTaskField; rawValue: string };
+  fieldPreview?: TaskFieldEditPreview;
+  fieldReceipt?: TaskFieldEditReceipt;
   onBeginPriority: () => void;
   onPriorityDraft: (value: "high" | "medium" | "low") => void;
   onPreviewPriority: () => void;
   onConfirmPriority: () => void;
   onCancelPriority: () => void;
+  onBeginField: () => void;
+  onFieldChange: (field: WritableTaskField) => void;
+  onFieldValue: (value: string) => void;
+  onPreviewField: () => void;
+  onConfirmField: () => void;
+  onCancelField: () => void;
   onClose: () => void;
 }) {
   const threads = codexThreadIds(task);
@@ -318,8 +510,8 @@ function DetailPanel({
       <div className="detail-head"><div><p className="eyebrow">{task.id}</p><h2 id="detail-title">{task.title}</h2></div><button autoFocus aria-label="关闭详情" onClick={onClose}>×</button></div>
       <dl className="facts"><div><dt>状态</dt><dd>{statusLabels[task.status]}</dd></div><div><dt>优先级</dt><dd>{priorityLabels[task.priority]}</dd></div><div><dt>负责人</dt><dd>{task.assignee ?? "—"}</dd></div><div><dt>截止</dt><dd>{task.deadline ?? "—"}</dd></div></dl>
       <section className="safe-write" aria-label="安全编辑">
-        <div className="section-title"><h3>安全编辑</h3>{!priorityDraft && <button onClick={onBeginPriority}>编辑优先级</button>}</div>
-        <p className="write-boundary">仅写正式支持字段；评论、附件、重复任务、甘特图与工作流等暂不支持，也不会保存到缓存。</p>
+        <div className="section-title"><h3>安全编辑</h3>{!priorityDraft && !fieldDraft && <div className="edit-entry-actions"><button onClick={onBeginPriority}>快速改优先级</button><button onClick={onBeginField}>编辑其他字段</button></div>}</div>
+        <p className="write-boundary">仅写正式支持字段；评论、附件、重复任务、甘特图与工作流等“正式结构暂不支持”，也不会保存到缓存。</p>
         {priorityDraft && <div className="write-editor">
           <label><span>优先级草稿</span><select value={priorityDraft} onChange={(event) => onPriorityDraft(event.target.value as "high" | "medium" | "low")}>
             <option value="high">高</option><option value="medium">中</option><option value="low">低</option>
@@ -332,13 +524,118 @@ function DetailPanel({
           <p>确认时会再次检查文件版本；冲突不会覆盖他人修改。</p>
           <div className="write-actions"><button className="confirm-write" disabled={writing} onClick={onConfirmPriority}>{writing ? "正在安全写入…" : "确认写入"}</button><button className="secondary" disabled={writing} onClick={onCancelPriority}>取消</button></div>
         </div>}
-        {writeFailure && <div role="alert" className="write-failure"><strong>未写入</strong><span>{writeFailure.message}</span>{writeFailure.code === "conflict" && <small>已重新读取当前任务；你的优先级草稿仍保留。</small>}</div>}
+        {fieldDraft && <div className="write-editor">
+          <label><span>正式字段</span><select aria-label="正式字段" value={fieldDraft.field} onChange={(event) => onFieldChange(event.target.value as WritableTaskField)}>
+            <option value="title">标题</option><option value="task_status">任务状态</option><option value="priority">优先级</option><option value="deadline">截止日期</option><option value="assignee">负责人</option><option value="related_ids">关联任务</option><option value="record_status">归档/恢复</option>
+          </select></label>
+          <FieldValueInput draft={fieldDraft} onValue={onFieldValue} />
+          {!fieldPreview && <div className="write-actions"><button disabled={writing} onClick={onPreviewField}>生成写入预览</button><button className="secondary" disabled={writing} onClick={onCancelField}>取消</button></div>}
+        </div>}
+        {fieldPreview && <div className="write-preview" role="region" aria-label="字段修改预览">
+          <strong>确认字段修改</strong>
+          <dl><div><dt>修改前</dt><dd>{displayWriteValue(fieldPreview.beforeValue)}</dd></div><div><dt>修改后</dt><dd>{displayWriteValue(fieldPreview.afterValue)}</dd></div></dl>
+          <p>仅替换该正式字段；未知字段、正文和原有顺序保持不变。</p>
+          <div className="write-actions"><button className="confirm-write" disabled={writing} onClick={onConfirmField}>{writing ? "正在安全写入…" : "确认写入"}</button><button className="secondary" disabled={writing} onClick={onCancelField}>取消</button></div>
+        </div>}
+        {writeFailure && <div role="alert" className="write-failure"><strong>未写入</strong><span>{writeFailure.message}</span>{["conflict", "event_conflict"].includes(writeFailure.code) && <small>已重新读取当前任务；你的{fieldDraft ? "字段" : "优先级"}草稿仍保留。</small>}</div>}
         {writeReceipt && <div role="status" className="write-success"><strong>已写入并核对</strong><span>任务与事件均已回读一致。</span></div>}
+        {fieldReceipt && <div role="status" className="write-success"><strong>字段已写入并核对</strong><span>任务与事件均已回读一致。</span></div>}
       </section>
       {task.nextAction && <section><h3>下一步</h3><p>{task.nextAction}</p></section>}
       <section><h3>Codex 对话</h3>{threads.length ? threads.map((id) => <div className="thread" key={id}><span>{id}</span><span className="runtime unknown">外部任务 · 状态未知</span><button disabled title="尚无已验证的官方第三方打开方式">打开任务</button></div>) : <p className="muted-text">没有正式绑定记录。</p>}</section>
       <section><h3>正文 <span className="on-demand">按需读取</span></h3>{loading ? <p>正在读取…</p> : <pre className="body">{body ?? "正文不可用"}</pre>}</section>
       <section><h3>活动时间线</h3>{events.length ? <ol className="timeline">{events.map((event) => <li key={event.id}><time>{new Date(event.occurredAt).toLocaleString("zh-CN")}</time><strong>{event.eventType}</strong><span>{event.previousTaskStatus ?? "—"} → {event.newTaskStatus ?? "—"}</span></li>)}</ol> : <p className="muted-text">没有可显示的正式事件。</p>}</section>
+    </aside>
+  </div>;
+}
+
+function FieldValueInput({
+  draft,
+  onValue,
+}: {
+  draft: { field: WritableTaskField; rawValue: string };
+  onValue: (value: string) => void;
+}) {
+  if (draft.field === "task_status") {
+    return <label><span>字段值</span><select aria-label="字段值" value={draft.rawValue} onChange={(event) => onValue(event.target.value)}>
+      <option value="todo">待处理</option><option value="doing">进行中</option><option value="long_term">长期</option><option value="done">已完成</option><option value="cancelled">已取消</option>
+    </select></label>;
+  }
+  if (draft.field === "priority") {
+    return <label><span>字段值</span><select aria-label="字段值" value={draft.rawValue} onChange={(event) => onValue(event.target.value)}>
+      <option value="high">高</option><option value="medium">中</option><option value="low">低</option>
+    </select></label>;
+  }
+  if (draft.field === "record_status") {
+    return <label><span>字段值</span><select aria-label="字段值" value={draft.rawValue} onChange={(event) => onValue(event.target.value)}>
+      <option value="current">当前有效（恢复）</option><option value="archived">已归档</option>
+    </select></label>;
+  }
+  return <label><span>字段值</span><input
+    aria-label="字段值"
+    type={draft.field === "deadline" ? "date" : "text"}
+    value={draft.rawValue}
+    placeholder={draft.field === "related_ids" ? "多个任务编号用英文逗号分隔" : undefined}
+    onChange={(event) => onValue(event.target.value)}
+  /></label>;
+}
+
+function displayWriteValue(value: unknown): string {
+  if (Array.isArray(value)) return value.length ? value.join("、") : "（空）";
+  if (value === "" || value === null || value === undefined) return "（空）";
+  const labels: Record<string, string> = {
+    todo: "待处理", doing: "进行中", long_term: "长期", done: "已完成", cancelled: "已取消",
+    high: "高", medium: "中", low: "低", current: "当前有效", archived: "已归档",
+  };
+  return labels[String(value)] ?? String(value);
+}
+
+function CreateTaskDialog({
+  draft, preview, receipt, failure, writing, onDraft, onPreview, onConfirm, onClose,
+}: {
+  draft: NewTaskDraft;
+  preview?: CreateTaskPreview;
+  receipt?: CreateTaskReceipt;
+  failure?: TaskWriteFailure;
+  writing: boolean;
+  onDraft: (draft: NewTaskDraft) => void;
+  onPreview: () => void;
+  onConfirm: () => void;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    const closeOnEscape = (event: KeyboardEvent) => event.key === "Escape" && !writing && onClose();
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [onClose, writing]);
+  const update = <K extends keyof NewTaskDraft>(key: K, value: NewTaskDraft[K]) => onDraft({ ...draft, [key]: value });
+  return <div className="scrim create-scrim">
+    <aside className="create-dialog" role="dialog" aria-modal="true" aria-labelledby="create-title">
+      <div className="detail-head"><div><p className="eyebrow">P2 SAFE CREATE</p><h2 id="create-title">新建正式任务</h2></div><button aria-label="关闭新建任务" disabled={writing} onClick={onClose}>×</button></div>
+      <p className="write-boundary">只创建正式模板支持的最小字段；来源、通用隐私和人工确认状态固定写入，不建立第二套数据库。</p>
+      {!receipt && <div className="create-form">
+        <label><span>标题</span><input aria-label="新任务标题" value={draft.title} onChange={(event) => update("title", event.target.value)} /></label>
+        <label><span>归属领域</span><input aria-label="新任务归属领域" value={draft.domain} onChange={(event) => update("domain", event.target.value)} /></label>
+        <div className="create-grid"><label><span>任务状态</span><select aria-label="新任务状态" value={draft.taskStatus} onChange={(event) => update("taskStatus", event.target.value as NewTaskDraft["taskStatus"])}>
+          <option value="todo">待处理</option><option value="doing">进行中</option><option value="long_term">长期</option><option value="done">已完成</option><option value="cancelled">已取消</option>
+        </select></label><label><span>优先级</span><select aria-label="新任务优先级" value={draft.priority} onChange={(event) => update("priority", event.target.value as NewTaskDraft["priority"])}>
+          <option value="high">高</option><option value="medium">中</option><option value="low">低</option>
+        </select></label></div>
+        <div className="create-grid"><label><span>负责人</span><input aria-label="新任务负责人" value={draft.assignee} onChange={(event) => update("assignee", event.target.value)} /></label><label><span>截止日期</span><input aria-label="新任务截止日期" type="date" value={draft.deadline} onChange={(event) => update("deadline", event.target.value)} /></label></div>
+        <label><span>关联任务</span><input aria-label="新任务关联任务" value={draft.relatedIds.join(", ")} placeholder="多个任务编号用英文逗号分隔" onChange={(event) => update("relatedIds", event.target.value.split(",").map((value) => value.trim()).filter(Boolean))} /></label>
+      </div>}
+      {preview && <div className="write-preview create-preview" role="region" aria-label="新建任务预览">
+        <strong>确认新建内容</strong>
+        <dl><div><dt>任务编号</dt><dd>{preview.taskId}</dd></div><div><dt>标题</dt><dd>{preview.draft.title}</dd></div><div><dt>状态</dt><dd>{displayWriteValue(preview.draft.taskStatus)}</dd></div><div><dt>优先级</dt><dd>{displayWriteValue(preview.draft.priority)}</dd></div><div><dt>归属</dt><dd>{preview.draft.domain}</dd></div><div><dt>负责人</dt><dd>{preview.draft.assignee || "（空）"}</dd></div><div><dt>截止</dt><dd>{preview.draft.deadline || "（空）"}</dd></div><div><dt>关联任务</dt><dd>{preview.draft.relatedIds.length ? preview.draft.relatedIds.join("、") : "（空）"}</dd></div><div><dt>隐私 / 访问</dt><dd>general / proposal_only</dd></div><div><dt>来源 / 核验</dt><dd>task-center-ui / human_confirmed</dd></div></dl>
+        <p>确认后才会原子创建任务并追加 created 事件；若编号冲突或事件失败，不留下新任务。</p>
+      </div>}
+      {failure && <div role="alert" className="write-failure"><strong>未写入</strong><span>{failure.message}</span>{["conflict", "event_conflict"].includes(failure.code) && <small>当前新建草稿仍保留，请重新生成预览。</small>}</div>}
+      {receipt && <div role="status" className="write-success"><strong>新任务已创建并核对</strong><span>{receipt.taskId} · 任务与事件回读一致</span></div>}
+      <div className="write-actions dialog-actions">
+        {!preview && !receipt && <button disabled={writing || !draft.title.trim() || !draft.domain.trim()} onClick={onPreview}>生成新建预览</button>}
+        {preview && <button className="confirm-write" disabled={writing} onClick={onConfirm}>{writing ? "正在安全创建…" : "确认创建"}</button>}
+        <button className="secondary" disabled={writing} onClick={onClose}>{receipt ? "完成" : "取消"}</button>
+      </div>
     </aside>
   </div>;
 }

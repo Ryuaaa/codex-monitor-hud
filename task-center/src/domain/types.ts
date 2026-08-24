@@ -12,6 +12,7 @@ export interface TaskRecord {
   title: string;
   status: TaskStatus;
   rawStatus: string;
+  recordStatus: "current" | "archived" | "unknown";
   workflowStatus?: string;
   priority: TaskPriority;
   deadline?: string;
@@ -78,6 +79,65 @@ export interface PriorityEditReceipt {
 export interface TaskWriteFailure {
   code: string;
   message: string;
+}
+
+export type WritableTaskField = "title" | "task_status" | "priority" | "deadline" | "assignee" | "related_ids" | "record_status";
+
+export interface TaskFieldEditPreview {
+  fileToken: string;
+  taskId: string;
+  field: WritableTaskField;
+  beforeValue: unknown;
+  afterValue: unknown;
+  expectedHash: string;
+}
+
+export interface TaskFieldEditRequest {
+  fileToken: string;
+  field: WritableTaskField;
+  newValue: unknown;
+  expectedHash: string;
+  confirmed: boolean;
+}
+
+export interface TaskFieldEditReceipt {
+  fileToken: string;
+  taskId: string;
+  field: WritableTaskField;
+  previousValue: unknown;
+  newValue: unknown;
+  fileHash: string;
+  eventId: string;
+  eventFile: string;
+  verified: boolean;
+}
+
+export interface NewTaskDraft {
+  title: string;
+  domain: string;
+  taskStatus: "todo" | "doing" | "long_term" | "done" | "cancelled";
+  priority: "high" | "medium" | "low";
+  assignee: string;
+  deadline: string;
+  relatedIds: string[];
+}
+
+export interface CreateTaskPreview {
+  draft: NewTaskDraft;
+  taskId: string;
+  fileToken: string;
+  createdAt: string;
+  occurredAt: string;
+  expectedHash: string;
+}
+
+export interface CreateTaskReceipt {
+  taskId: string;
+  fileToken: string;
+  fileHash: string;
+  eventId: string;
+  eventFile: string;
+  verified: boolean;
 }
 
 export type RuntimeDisplayState =

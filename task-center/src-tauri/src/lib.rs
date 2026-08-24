@@ -9,7 +9,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 use tauri::Manager;
-use time::{format_description::well_known::Rfc3339, OffsetDateTime};
+use time::{format_description::well_known::Rfc3339, Date, Month, OffsetDateTime, UtcOffset};
 
 const MAX_FRONTMATTER_BYTES: usize = 128 * 1024;
 const MAX_BODY_BYTES: u64 = 2 * 1024 * 1024;
@@ -70,6 +70,108 @@ struct PriorityEditReceipt {
     task_id: String,
     previous_priority: String,
     new_priority: String,
+    file_hash: String,
+    event_id: String,
+    event_file: String,
+    verified: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AtomicWriteReceipt {
+    file_hash: String,
+    event_id: String,
+    event_file: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CommitFault {
+    None,
+    #[cfg(test)]
+    BeforeTaskCommitExternalChange,
+    #[cfg(test)]
+    BeforeEventCommitExternalChange,
+    AfterTaskCommit,
+    AfterEventCommit,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TaskFieldEditRequest {
+    file_token: String,
+    field: String,
+    new_value: Value,
+    expected_hash: String,
+    confirmed: bool,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+struct TaskFieldEditPreview {
+    file_token: String,
+    task_id: String,
+    field: String,
+    before_value: Value,
+    after_value: Value,
+    expected_hash: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+struct TaskFieldEditReceipt {
+    file_token: String,
+    task_id: String,
+    field: String,
+    previous_value: Value,
+    new_value: Value,
+    file_hash: String,
+    event_id: String,
+    event_file: String,
+    verified: bool,
+}
+
+#[derive(Debug, Clone)]
+struct PreparedFieldEdit {
+    yaml_value: String,
+    before_value: Value,
+    after_value: Value,
+    event_type: &'static str,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct NewTaskDraft {
+    title: String,
+    domain: String,
+    task_status: String,
+    priority: String,
+    assignee: String,
+    deadline: String,
+    related_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct CreateTaskPreview {
+    draft: NewTaskDraft,
+    task_id: String,
+    file_token: String,
+    created_at: String,
+    occurred_at: String,
+    expected_hash: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateTaskRequest {
+    preview: CreateTaskPreview,
+    confirmed: bool,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct CreateTaskReceipt {
+    task_id: String,
+    file_token: String,
     file_hash: String,
     event_id: String,
     event_file: String,
@@ -388,6 +490,8 @@ fn read_writable_task(root: &Path, file_token: &str) -> Result<(PathBuf, String)
         .map_err(|_| write_error("read_failed", "任务文件读取失败"))?;
     let frontmatter = read_frontmatter(&path)
         .map_err(|_| write_error("bad_frontmatter", "任务元数据格式无效，未执行写入"))?;
+    let _: Value = yaml_serde::from_str(&frontmatter)
+        .map_err(|_| write_error("invalid_frontmatter", "任务 YAML 格式无效，未执行写入"))?;
     if !frontmatter_allows_read(&frontmatter) {
         return Err(write_error("restricted", "受限隐私或访问规则禁止写入"));
     }
@@ -495,6 +599,308 @@ fn validate_priority(value: &str) -> Result<(), WriteError> {
     }
 }
 
+fn frontmatter_list(frontmatter: &str, key: &str) -> Result<Vec<String>, WriteError> {
+    let lines: Vec<&str> = frontmatter.lines().collect();
+    for (index, line) in lines.iter().enumerate() {
+        let Some((candidate, rest)) = line.split_once(':') else {
+            continue;
+        };
+        if candidate.trim() != key {
+            continue;
+        }
+        let inline = rest.trim();
+        if !inline.is_empty() {
+            if inline == "[]" {
+                return Ok(Vec::new());
+            }
+            return serde_json::from_str::<Vec<String>>(inline)
+                .map_err(|_| write_error("unsupported_format", "关系列表格式暂不支持安全写入"));
+        }
+        let mut values = Vec::new();
+        for child in lines.iter().skip(index + 1) {
+            let trimmed = child.trim_start();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if child.len() == trimmed.len() {
+                break;
+            }
+            let Some(value) = trimmed.strip_prefix("- ") else {
+                return Err(write_error(
+                    "unsupported_format",
+                    "关系列表格式暂不支持安全写入",
+                ));
+            };
+            values.push(value.trim().trim_matches(['"', '\'']).to_string());
+        }
+        return Ok(values);
+    }
+    Ok(Vec::new())
+}
+
+fn replace_frontmatter_entry(
+    content: &str,
+    key: &str,
+    yaml_value: &str,
+) -> Result<String, WriteError> {
+    let (start, end) = frontmatter_range(content)?;
+    let frontmatter = &content[start..end];
+    let lines: Vec<&str> = frontmatter.split_inclusive('\n').collect();
+    let mut output = String::with_capacity(content.len() + yaml_value.len());
+    output.push_str(&content[..start]);
+    let mut replaced = false;
+    let mut index = 0;
+    while index < lines.len() {
+        let line = lines[index];
+        let body = line.trim_end_matches(['\r', '\n']);
+        let ending = &line[body.len()..];
+        let is_target = body
+            .split_once(':')
+            .map(|(candidate, _)| candidate.trim() == key)
+            .unwrap_or(false);
+        if !is_target {
+            output.push_str(line);
+            index += 1;
+            continue;
+        }
+        if replaced {
+            return Err(write_error("duplicate_field", "任务字段重复，未执行写入"));
+        }
+        let colon = body
+            .find(':')
+            .ok_or_else(|| write_error("bad_frontmatter", "任务字段格式无效"))?;
+        output.push_str(&body[..=colon]);
+        if !yaml_value.is_empty() {
+            output.push(' ');
+            output.push_str(yaml_value);
+        }
+        output.push_str(ending);
+        replaced = true;
+        index += 1;
+        while index < lines.len() {
+            let child_body = lines[index].trim_end_matches(['\r', '\n']);
+            let child_trimmed = child_body.trim_start();
+            if child_trimmed.is_empty() {
+                break;
+            }
+            if child_trimmed.starts_with("- ") {
+                index += 1;
+                continue;
+            }
+            break;
+        }
+    }
+    if !replaced {
+        output.push_str(key);
+        output.push(':');
+        if !yaml_value.is_empty() {
+            output.push(' ');
+            output.push_str(yaml_value);
+        }
+        output.push('\n');
+    }
+    output.push_str(&content[end..]);
+    Ok(output)
+}
+
+fn validate_plain_text(
+    value: &str,
+    empty_allowed: bool,
+    max_chars: usize,
+) -> Result<(), WriteError> {
+    let length = value.chars().count();
+    if (!empty_allowed && value.trim().is_empty())
+        || length > max_chars
+        || value.contains(['\r', '\n'])
+    {
+        return Err(write_error("invalid_value", "字段内容不符合正式结构要求"));
+    }
+    Ok(())
+}
+
+fn valid_iso_date(value: &str) -> bool {
+    let parts: Vec<&str> = value.split('-').collect();
+    if parts.len() != 3 {
+        return false;
+    }
+    let Ok(year) = parts[0].parse::<i32>() else {
+        return false;
+    };
+    let Ok(month_number) = parts[1].parse::<u8>() else {
+        return false;
+    };
+    let Ok(day) = parts[2].parse::<u8>() else {
+        return false;
+    };
+    let Ok(month) = Month::try_from(month_number) else {
+        return false;
+    };
+    Date::from_calendar_date(year, month, day).is_ok()
+}
+
+fn prepare_field_edit(
+    content: &str,
+    task_id: &str,
+    field: &str,
+    new_value: &Value,
+) -> Result<PreparedFieldEdit, WriteError> {
+    let (start, end) = frontmatter_range(content)?;
+    let frontmatter = &content[start..end];
+    let scalar_before = |key: &str| {
+        Value::String(
+            frontmatter_scalar(frontmatter, key)
+                .unwrap_or("")
+                .to_string(),
+        )
+    };
+    let (yaml_value, before_value, after_value, event_type) = match field {
+        "title" => {
+            let value = new_value
+                .as_str()
+                .ok_or_else(|| write_error("invalid_value", "标题格式无效"))?;
+            validate_plain_text(value, false, 200)?;
+            (
+                serde_json::to_string(value).unwrap(),
+                scalar_before("title"),
+                Value::String(value.to_string()),
+                "title_changed",
+            )
+        }
+        "task_status" => {
+            let value = new_value
+                .as_str()
+                .ok_or_else(|| write_error("invalid_value", "任务状态格式无效"))?;
+            if !["todo", "doing", "long_term", "done", "cancelled"].contains(&value) {
+                return Err(write_error(
+                    "unsupported_value",
+                    "正式结构暂不支持该任务状态",
+                ));
+            }
+            (
+                value.to_string(),
+                scalar_before("task_status"),
+                Value::String(value.to_string()),
+                "status_changed",
+            )
+        }
+        "priority" => {
+            let value = new_value
+                .as_str()
+                .ok_or_else(|| write_error("invalid_value", "优先级格式无效"))?;
+            validate_priority(value)?;
+            (
+                value.to_string(),
+                scalar_before("priority"),
+                Value::String(value.to_string()),
+                "priority_changed",
+            )
+        }
+        "deadline" => {
+            let value = new_value
+                .as_str()
+                .ok_or_else(|| write_error("invalid_value", "截止日期格式无效"))?;
+            if !value.is_empty() && !valid_iso_date(value) {
+                return Err(write_error(
+                    "invalid_value",
+                    "截止日期必须是有效的 YYYY-MM-DD",
+                ));
+            }
+            (
+                if value.is_empty() {
+                    String::new()
+                } else {
+                    value.to_string()
+                },
+                scalar_before("deadline"),
+                Value::String(value.to_string()),
+                "deadline_changed",
+            )
+        }
+        "assignee" => {
+            let value = new_value
+                .as_str()
+                .ok_or_else(|| write_error("invalid_value", "负责人格式无效"))?;
+            validate_plain_text(value, true, 120)?;
+            (
+                if value.is_empty() {
+                    String::new()
+                } else {
+                    serde_json::to_string(value).unwrap()
+                },
+                scalar_before("assignee"),
+                Value::String(value.to_string()),
+                "assignee_changed",
+            )
+        }
+        "related_ids" => {
+            let values = new_value
+                .as_array()
+                .ok_or_else(|| write_error("invalid_value", "关系列表格式无效"))?;
+            if values.len() > 64 {
+                return Err(write_error("invalid_value", "关联任务数量超过安全上限"));
+            }
+            let mut normalized = Vec::new();
+            for value in values {
+                let value = value
+                    .as_str()
+                    .ok_or_else(|| write_error("invalid_value", "关联任务编号格式无效"))?;
+                if !value.starts_with("tsk_")
+                    || value.len() > 128
+                    || value == task_id
+                    || normalized.iter().any(|existing| existing == value)
+                {
+                    return Err(write_error(
+                        "invalid_value",
+                        "关联任务编号无效、重复或指向自身",
+                    ));
+                }
+                normalized.push(value.to_string());
+            }
+            let before = frontmatter_list(frontmatter, "related_ids")?;
+            (
+                serde_json::to_string(&normalized).unwrap(),
+                serde_json::to_value(before).unwrap(),
+                serde_json::to_value(&normalized).unwrap(),
+                "relations_changed",
+            )
+        }
+        "record_status" => {
+            let value = new_value
+                .as_str()
+                .ok_or_else(|| write_error("invalid_value", "记录状态格式无效"))?;
+            if !["current", "archived"].contains(&value) {
+                return Err(write_error(
+                    "unsupported_value",
+                    "正式结构暂不支持该记录状态",
+                ));
+            }
+            let event_type = if value == "archived" {
+                "archived"
+            } else {
+                "restored"
+            };
+            (
+                value.to_string(),
+                scalar_before("record_status"),
+                Value::String(value.to_string()),
+                event_type,
+            )
+        }
+        _ => {
+            return Err(write_error(
+                "unsupported_field",
+                "正式结构暂不支持写入该字段",
+            ))
+        }
+    };
+    Ok(PreparedFieldEdit {
+        yaml_value,
+        before_value,
+        after_value,
+        event_type,
+    })
+}
+
 fn preview_priority_edit_at(
     root: &Path,
     file_token: &str,
@@ -549,7 +955,9 @@ fn write_prepared_file(
 }
 
 fn current_event_time() -> Result<(String, String), WriteError> {
-    let now = OffsetDateTime::now_utc();
+    let task_hub_offset = UtcOffset::from_hms(8, 0, 0)
+        .map_err(|_| write_error("clock_error", "任务中枢时区不可用"))?;
+    let now = OffsetDateTime::now_utc().to_offset(task_hub_offset);
     let occurred_at = now
         .format(&Rfc3339)
         .map_err(|_| write_error("clock_error", "无法生成事件时间"))?;
@@ -559,6 +967,10 @@ fn current_event_time() -> Result<(String, String), WriteError> {
 
 fn rollback_file(path: &Path, backup: Option<&Path>) -> Result<(), WriteError> {
     if let Some(backup) = backup {
+        if path.exists() {
+            fs::remove_file(path)
+                .map_err(|_| write_error("rollback_failed", "写入失败且无法移除异常文件"))?;
+        }
         fs::rename(backup, path)
             .map_err(|_| write_error("rollback_failed", "写入失败且无法自动恢复原文件"))?;
     } else if path.exists() {
@@ -568,35 +980,21 @@ fn rollback_file(path: &Path, backup: Option<&Path>) -> Result<(), WriteError> {
     Ok(())
 }
 
-fn apply_priority_edit_at(
-    root: &Path,
+// Keeping every transaction input explicit makes the security boundary auditable at each call site.
+#[allow(clippy::too_many_arguments)]
+fn commit_existing_task_change(
+    task_path: &Path,
+    original: &str,
+    updated: &str,
     events_root: &Path,
-    request: PriorityEditRequest,
+    task_id: &str,
+    event_type: &str,
+    event_details: Value,
     occurred_at: &str,
     event_month: &str,
-) -> Result<PriorityEditReceipt, WriteError> {
-    if !request.confirmed {
-        return Err(write_error(
-            "confirmation_required",
-            "用户未确认，未执行写入",
-        ));
-    }
-    validate_priority(&request.new_priority)?;
-    let (task_path, original) = read_writable_task(root, &request.file_token)?;
-    let current_hash = sha256_hex(original.as_bytes());
-    if current_hash != request.expected_hash {
-        return Err(write_error(
-            "conflict",
-            "任务已被其他操作修改，请重新读取后确认",
-        ));
-    }
-    let (task_id, previous_priority) = task_id_and_priority(&original)?;
-    if previous_priority == request.new_priority {
-        return Err(write_error("no_change", "修改前后相同，未执行写入"));
-    }
-    let updated = replace_frontmatter_scalar(&original, "priority", &request.new_priority)?;
+    fault: CommitFault,
+) -> Result<AtomicWriteReceipt, WriteError> {
     let updated_hash = sha256_hex(updated.as_bytes());
-
     fs::create_dir_all(events_root)
         .map_err(|_| write_error("event_prepare_failed", "事件目录不可用，未执行写入"))?;
     let canonical_events = events_root
@@ -634,34 +1032,35 @@ fn apply_priority_edit_at(
         .map_err(|_| write_error("clock_error", "系统时间不可用"))?
         .as_nanos();
     let event_id = format!("evt_task_center_{nonce}_{}", &updated_hash[..12]);
-    let event = serde_json::json!({
+    let mut event = serde_json::json!({
         "id": event_id,
         "task_id": task_id,
-        "event_type": "priority_changed",
+        "event_type": event_type,
         "occurred_at": occurred_at,
         "source_refs": ["task-center-ui"],
         "confirmed_by": "user_ui_confirmation",
-        "previous_priority": previous_priority,
-        "new_priority": request.new_priority,
         "privacy": "general"
     });
+    if let (Some(target), Some(details)) = (event.as_object_mut(), event_details.as_object()) {
+        for (key, value) in details {
+            target.insert(key.clone(), value.clone());
+        }
+    }
+    let event_line = serde_json::to_string(&event)
+        .map_err(|_| write_error("event_prepare_failed", "事件序列化失败，未执行写入"))?;
     let mut next_events = existing_events.clone();
-    next_events.extend_from_slice(
-        serde_json::to_string(&event)
-            .map_err(|_| write_error("event_prepare_failed", "事件序列化失败，未执行写入"))?
-            .as_bytes(),
-    );
+    next_events.extend_from_slice(event_line.as_bytes());
     next_events.push(b'\n');
 
-    let task_temp = unique_sidecar_path(&task_path, "tmp")?;
+    let task_temp = unique_sidecar_path(task_path, "tmp")?;
     let event_temp = unique_sidecar_path(&event_path, "tmp")?;
-    let task_backup = unique_sidecar_path(&task_path, "bak")?;
+    let task_backup = unique_sidecar_path(task_path, "bak")?;
     let event_backup = if event_path.exists() {
         Some(unique_sidecar_path(&event_path, "bak")?)
     } else {
         None
     };
-    let task_permissions = fs::metadata(&task_path)
+    let task_permissions = fs::metadata(task_path)
         .ok()
         .map(|value| value.permissions());
     let event_permissions = fs::metadata(&event_path)
@@ -676,7 +1075,7 @@ fn apply_priority_edit_at(
         let _ = fs::remove_file(&event_temp);
         return Err(error);
     }
-    if fs::copy(&task_path, &task_backup).is_err() {
+    if fs::copy(task_path, &task_backup).is_err() {
         let _ = fs::remove_file(&task_temp);
         let _ = fs::remove_file(&event_temp);
         return Err(write_error("backup_failed", "无法创建恢复副本，未执行写入"));
@@ -693,29 +1092,88 @@ fn apply_priority_edit_at(
         }
     }
 
+    let mut task_committed = false;
+    let mut event_committed = false;
     let commit_result = (|| -> Result<(), WriteError> {
-        fs::rename(&task_temp, &task_path)
+        #[cfg(test)]
+        if fault == CommitFault::BeforeTaskCommitExternalChange {
+            fs::write(
+                task_path,
+                original.replace(
+                    "unknown_extension: keep-me",
+                    "unknown_extension: external-change",
+                ),
+            )
+            .map_err(|_| write_error("test_fault_failed", "无法注入测试冲突"))?;
+        }
+        if fs::read(task_path).map_err(|_| write_error("conflict", "任务提交前无法重新核对"))?
+            != original.as_bytes()
+        {
+            return Err(write_error(
+                "conflict",
+                "任务已被其他操作修改，请重新读取后确认",
+            ));
+        }
+        fs::rename(&task_temp, task_path)
             .map_err(|_| write_error("task_commit_failed", "任务原子替换失败"))?;
+        task_committed = true;
+        if fault == CommitFault::AfterTaskCommit {
+            return Err(write_error("event_commit_failed", "事件追加失败"));
+        }
+        #[cfg(test)]
+        if fault == CommitFault::BeforeEventCommitExternalChange {
+            let mut external_events = existing_events.clone();
+            external_events.extend_from_slice(b"{\"id\":\"external-concurrent-event\"}\n");
+            fs::write(&event_path, external_events)
+                .map_err(|_| write_error("test_fault_failed", "无法注入测试冲突"))?;
+        }
+        let event_is_unchanged = if event_path.exists() {
+            fs::read(&event_path)
+                .map_err(|_| write_error("event_conflict", "事件提交前无法重新核对"))?
+                == existing_events
+        } else {
+            existing_events.is_empty()
+        };
+        if !event_is_unchanged {
+            return Err(write_error(
+                "event_conflict",
+                "事件文件已被其他操作修改，请重新读取后确认",
+            ));
+        }
         fs::rename(&event_temp, &event_path)
             .map_err(|_| write_error("event_commit_failed", "事件追加失败"))?;
+        event_committed = true;
+        if fault == CommitFault::AfterEventCommit {
+            return Err(write_error("readback_mismatch", "写后任务内容核对不一致"));
+        }
         let written_task =
-            fs::read(&task_path).map_err(|_| write_error("readback_failed", "写后任务回读失败"))?;
+            fs::read(task_path).map_err(|_| write_error("readback_failed", "写后任务回读失败"))?;
         if sha256_hex(&written_task) != updated_hash {
             return Err(write_error("readback_mismatch", "写后任务内容核对不一致"));
         }
         let written_events = fs::read(&event_path)
             .map_err(|_| write_error("readback_failed", "写后事件回读失败"))?;
-        if !written_events.ends_with(
-            format!("{}\n", serde_json::to_string(&event).unwrap_or_default()).as_bytes(),
-        ) {
+        if !written_events.ends_with(format!("{event_line}\n").as_bytes()) {
             return Err(write_error("event_readback_mismatch", "写后事件核对不一致"));
         }
         Ok(())
     })();
 
     if let Err(error) = commit_result {
-        let task_rollback = rollback_file(&task_path, Some(&task_backup));
-        let event_rollback = rollback_file(&event_path, event_backup.as_deref());
+        let task_rollback = if task_committed {
+            rollback_file(task_path, Some(&task_backup))
+        } else {
+            let _ = fs::remove_file(&task_backup);
+            Ok(())
+        };
+        let event_rollback = if event_committed {
+            rollback_file(&event_path, event_backup.as_deref())
+        } else {
+            if let Some(backup) = event_backup.as_deref() {
+                let _ = fs::remove_file(backup);
+            }
+            Ok(())
+        };
         let _ = fs::remove_file(&task_temp);
         let _ = fs::remove_file(&event_temp);
         if task_rollback.is_err() || event_rollback.is_err() {
@@ -731,16 +1189,577 @@ fn apply_priority_edit_at(
     if let Some(backup) = event_backup.as_deref() {
         let _ = fs::remove_file(backup);
     }
+    Ok(AtomicWriteReceipt {
+        file_hash: updated_hash,
+        event_id,
+        event_file: event_file_name,
+    })
+}
+
+fn apply_priority_edit_at(
+    root: &Path,
+    events_root: &Path,
+    request: PriorityEditRequest,
+    occurred_at: &str,
+    event_month: &str,
+) -> Result<PriorityEditReceipt, WriteError> {
+    if !request.confirmed {
+        return Err(write_error(
+            "confirmation_required",
+            "用户未确认，未执行写入",
+        ));
+    }
+    validate_priority(&request.new_priority)?;
+    let (task_path, original) = read_writable_task(root, &request.file_token)?;
+    let current_hash = sha256_hex(original.as_bytes());
+    if current_hash != request.expected_hash {
+        return Err(write_error(
+            "conflict",
+            "任务已被其他操作修改，请重新读取后确认",
+        ));
+    }
+    let (task_id, previous_priority) = task_id_and_priority(&original)?;
+    if previous_priority == request.new_priority {
+        return Err(write_error("no_change", "修改前后相同，未执行写入"));
+    }
+    let updated = replace_frontmatter_scalar(&original, "priority", &request.new_priority)?;
+    let atomic = commit_existing_task_change(
+        &task_path,
+        &original,
+        &updated,
+        events_root,
+        &task_id,
+        "priority_changed",
+        serde_json::json!({
+            "previous_priority": previous_priority,
+            "new_priority": request.new_priority,
+        }),
+        occurred_at,
+        event_month,
+        CommitFault::None,
+    )?;
     Ok(PriorityEditReceipt {
         file_token: request.file_token,
         task_id,
         previous_priority,
         new_priority: request.new_priority,
-        file_hash: updated_hash,
+        file_hash: atomic.file_hash,
+        event_id: atomic.event_id,
+        event_file: atomic.event_file,
+        verified: true,
+    })
+}
+
+fn preview_task_field_edit_at(
+    root: &Path,
+    file_token: &str,
+    field: &str,
+    new_value: &Value,
+) -> Result<TaskFieldEditPreview, WriteError> {
+    let (_, content) = read_writable_task(root, file_token)?;
+    let (task_id, _) = task_id_and_priority(&content)?;
+    let prepared = prepare_field_edit(&content, &task_id, field, new_value)?;
+    if prepared.before_value == prepared.after_value {
+        return Err(write_error("no_change", "修改前后相同，未执行写入"));
+    }
+    let _ = replace_frontmatter_entry(&content, field, &prepared.yaml_value)?;
+    Ok(TaskFieldEditPreview {
+        file_token: file_token.to_string(),
+        task_id,
+        field: field.to_string(),
+        before_value: prepared.before_value,
+        after_value: prepared.after_value,
+        expected_hash: sha256_hex(content.as_bytes()),
+    })
+}
+
+fn apply_task_field_edit_at(
+    root: &Path,
+    events_root: &Path,
+    request: TaskFieldEditRequest,
+    occurred_at: &str,
+    event_month: &str,
+) -> Result<TaskFieldEditReceipt, WriteError> {
+    if !request.confirmed {
+        return Err(write_error(
+            "confirmation_required",
+            "用户未确认，未执行写入",
+        ));
+    }
+    let (task_path, original) = read_writable_task(root, &request.file_token)?;
+    if sha256_hex(original.as_bytes()) != request.expected_hash {
+        return Err(write_error(
+            "conflict",
+            "任务已被其他操作修改，请重新读取后确认",
+        ));
+    }
+    let (task_id, _) = task_id_and_priority(&original)?;
+    let prepared = prepare_field_edit(&original, &task_id, &request.field, &request.new_value)?;
+    if prepared.before_value == prepared.after_value {
+        return Err(write_error("no_change", "修改前后相同，未执行写入"));
+    }
+    let updated = replace_frontmatter_entry(&original, &request.field, &prepared.yaml_value)?;
+    let mut details = serde_json::json!({
+        "changed_field": request.field,
+        "previous_value": prepared.before_value,
+        "new_value": prepared.after_value,
+    });
+    if request.field == "task_status" {
+        if let Some(object) = details.as_object_mut() {
+            object.insert(
+                "previous_task_status".to_string(),
+                prepared.before_value.clone(),
+            );
+            object.insert("new_task_status".to_string(), prepared.after_value.clone());
+        }
+    }
+    let atomic = commit_existing_task_change(
+        &task_path,
+        &original,
+        &updated,
+        events_root,
+        &task_id,
+        prepared.event_type,
+        details,
+        occurred_at,
+        event_month,
+        CommitFault::None,
+    )?;
+    Ok(TaskFieldEditReceipt {
+        file_token: request.file_token,
+        task_id,
+        field: request.field,
+        previous_value: prepared.before_value,
+        new_value: prepared.after_value,
+        file_hash: atomic.file_hash,
+        event_id: atomic.event_id,
+        event_file: atomic.event_file,
+        verified: true,
+    })
+}
+
+fn validate_new_task_draft(draft: &NewTaskDraft) -> Result<(), WriteError> {
+    validate_plain_text(&draft.title, false, 200)?;
+    validate_plain_text(&draft.domain, false, 120)?;
+    validate_plain_text(&draft.assignee, true, 120)?;
+    if !["todo", "doing", "long_term", "done", "cancelled"].contains(&draft.task_status.as_str()) {
+        return Err(write_error(
+            "unsupported_value",
+            "正式结构暂不支持该任务状态",
+        ));
+    }
+    validate_priority(&draft.priority)?;
+    if !draft.deadline.is_empty() && !valid_iso_date(&draft.deadline) {
+        return Err(write_error(
+            "invalid_value",
+            "截止日期必须是有效的 YYYY-MM-DD",
+        ));
+    }
+    if draft.related_ids.len() > 64 {
+        return Err(write_error("invalid_value", "关联任务数量超过安全上限"));
+    }
+    let mut seen = Vec::new();
+    for related in &draft.related_ids {
+        if !related.starts_with("tsk_")
+            || related.len() > 128
+            || seen.iter().any(|existing| existing == related)
+        {
+            return Err(write_error("invalid_value", "关联任务编号无效或重复"));
+        }
+        seen.push(related.clone());
+    }
+    Ok(())
+}
+
+fn safe_title_slug(title: &str) -> String {
+    let mut slug = String::new();
+    let mut last_dash = false;
+    for character in title.chars() {
+        if character.is_alphanumeric() {
+            slug.push(character);
+            last_dash = false;
+        } else if !last_dash && !slug.is_empty() {
+            slug.push('-');
+            last_dash = true;
+        }
+        if slug.chars().count() >= 48 {
+            break;
+        }
+    }
+    slug.trim_matches('-').to_string()
+}
+
+fn render_new_task(preview: &CreateTaskPreview) -> Result<String, WriteError> {
+    validate_new_task_draft(&preview.draft)?;
+    if preview
+        .draft
+        .related_ids
+        .iter()
+        .any(|value| value == &preview.task_id)
+    {
+        return Err(write_error("invalid_value", "关联任务不能指向新任务自身"));
+    }
+    let title = serde_json::to_string(&preview.draft.title)
+        .map_err(|_| write_error("invalid_value", "标题无法安全序列化"))?;
+    let domain = serde_json::to_string(&preview.draft.domain)
+        .map_err(|_| write_error("invalid_value", "归属无法安全序列化"))?;
+    let assignee = if preview.draft.assignee.is_empty() {
+        String::new()
+    } else {
+        serde_json::to_string(&preview.draft.assignee)
+            .map_err(|_| write_error("invalid_value", "负责人无法安全序列化"))?
+    };
+    let relations = serde_json::to_string(&preview.draft.related_ids)
+        .map_err(|_| write_error("invalid_value", "关系列表无法安全序列化"))?;
+    Ok(format!(
+        "---\n\
+id: {id}\n\
+task_id: {id}\n\
+schema_version: 1\n\
+record_type: task\n\
+record_status: current\n\
+task_status: {status}\n\
+workflow_status: 待推进\n\
+title: {title}\n\
+domain: {domain}\n\
+owner_scope: personal\n\
+priority: {priority}\n\
+assignee:{assignee_prefix}{assignee}\n\
+deadline:{deadline_prefix}{deadline}\n\
+next_action:\n\
+project_id:\n\
+source_refs: [\"task-center-ui\"]\n\
+privacy: general\n\
+codex_access: proposal_only\n\
+verification_status: human_confirmed\n\
+ai_status: human_confirmed\n\
+approval_status: accepted\n\
+created_at: {created}\n\
+updated_at: {created}\n\
+completed_at:\n\
+related_ids: {relations}\n\
+---\n\
+# {body_title}\n\n\
+## 预期结果\n\n\n\
+## 当前情况\n\n\n\
+## 下一步\n\n\n\
+## 补充说明\n",
+        id = preview.task_id,
+        status = preview.draft.task_status,
+        title = title,
+        domain = domain,
+        priority = preview.draft.priority,
+        assignee_prefix = if assignee.is_empty() { "" } else { " " },
+        assignee = assignee,
+        deadline_prefix = if preview.draft.deadline.is_empty() {
+            ""
+        } else {
+            " "
+        },
+        deadline = preview.draft.deadline,
+        created = preview.created_at,
+        relations = relations,
+        body_title = preview.draft.title,
+    ))
+}
+
+fn preview_create_task_at(
+    draft: NewTaskDraft,
+    occurred_at: &str,
+) -> Result<CreateTaskPreview, WriteError> {
+    validate_new_task_draft(&draft)?;
+    let created_at = occurred_at
+        .get(..10)
+        .ok_or_else(|| write_error("clock_error", "无法生成任务日期"))?
+        .to_string();
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| write_error("clock_error", "系统时间不可用"))?
+        .as_nanos();
+    let seed = format!(
+        "{}\n{}\n{}\n{nonce}",
+        draft.title, draft.domain, occurred_at
+    );
+    let digest = sha256_hex(seed.as_bytes());
+    let task_id = format!("tsk_{}", &digest[..16]);
+    let slug = safe_title_slug(&draft.title);
+    let file_token = if slug.is_empty() {
+        format!("{task_id}.md")
+    } else {
+        format!("{task_id}-{slug}.md")
+    };
+    let mut preview = CreateTaskPreview {
+        draft,
+        task_id,
+        file_token,
+        created_at,
+        occurred_at: occurred_at.to_string(),
+        expected_hash: String::new(),
+    };
+    preview.expected_hash = sha256_hex(render_new_task(&preview)?.as_bytes());
+    Ok(preview)
+}
+
+fn apply_create_task_at(
+    root: &Path,
+    events_root: &Path,
+    request: CreateTaskRequest,
+    event_month: &str,
+) -> Result<CreateTaskReceipt, WriteError> {
+    apply_create_task_at_with_fault(root, events_root, request, event_month, CommitFault::None)
+}
+
+fn apply_create_task_at_with_fault(
+    root: &Path,
+    events_root: &Path,
+    request: CreateTaskRequest,
+    event_month: &str,
+    fault: CommitFault,
+) -> Result<CreateTaskReceipt, WriteError> {
+    if !request.confirmed {
+        return Err(write_error(
+            "confirmation_required",
+            "用户未确认，未执行写入",
+        ));
+    }
+    let content = render_new_task(&request.preview)?;
+    let content_hash = sha256_hex(content.as_bytes());
+    if content_hash != request.preview.expected_hash {
+        return Err(write_error(
+            "preview_mismatch",
+            "新建预览已变化，请重新确认",
+        ));
+    }
+    let root = root
+        .canonicalize()
+        .map_err(|_| write_error("invalid_file", "任务根目录不可用"))?;
+    let token = Path::new(&request.preview.file_token);
+    if token.components().count() != 1
+        || token.extension().and_then(|value| value.to_str()) != Some("md")
+    {
+        return Err(write_error("invalid_file", "新任务文件名无效"));
+    }
+    let task_path = root.join(token);
+    if task_path.exists() {
+        return Err(write_error("conflict", "同名任务已经存在，请重新生成预览"));
+    }
+    if scan_metadata(&root)
+        .map_err(|_| write_error("read_failed", "无法核对现有任务编号"))?
+        .iter()
+        .filter(|source| source.error.is_none())
+        .any(|source| {
+            frontmatter_scalar(&source.frontmatter, "task_id") == Some(&request.preview.task_id)
+        })
+    {
+        return Err(write_error("conflict", "任务编号已经存在，请重新生成预览"));
+    }
+
+    fs::create_dir_all(events_root)
+        .map_err(|_| write_error("event_prepare_failed", "事件目录不可用，未执行写入"))?;
+    let canonical_events = events_root
+        .canonicalize()
+        .map_err(|_| write_error("event_prepare_failed", "事件目录不可用，未执行写入"))?;
+    let event_file_name = format!("{event_month}.jsonl");
+    let event_path = canonical_events.join(&event_file_name);
+    if event_path.exists() {
+        let metadata = fs::metadata(&event_path)
+            .map_err(|_| write_error("event_prepare_failed", "事件文件不可用，未执行写入"))?;
+        if !metadata.is_file()
+            || metadata.permissions().readonly()
+            || metadata.len() > MAX_EVENT_FILE_BYTES
+        {
+            return Err(write_error(
+                "event_prepare_failed",
+                "事件文件不可安全追加，未执行写入",
+            ));
+        }
+    }
+    let existing_events = if event_path.exists() {
+        fs::read(&event_path)
+            .map_err(|_| write_error("event_prepare_failed", "事件文件读取失败，未执行写入"))?
+    } else {
+        Vec::new()
+    };
+    if !existing_events.is_empty() && !existing_events.ends_with(b"\n") {
+        return Err(write_error(
+            "event_prepare_failed",
+            "事件文件末行不完整，未执行写入",
+        ));
+    }
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| write_error("clock_error", "系统时间不可用"))?
+        .as_nanos();
+    let event_id = format!("evt_task_center_{nonce}_{}", &content_hash[..12]);
+    let event = serde_json::json!({
+        "id": event_id,
+        "task_id": request.preview.task_id,
+        "event_type": "created",
+        "occurred_at": request.preview.occurred_at,
+        "source_refs": ["task-center-ui"],
+        "confirmed_by": "user_ui_confirmation",
+        "new_task_status": request.preview.draft.task_status,
+        "privacy": "general"
+    });
+    let event_line = serde_json::to_string(&event)
+        .map_err(|_| write_error("event_prepare_failed", "事件序列化失败，未执行写入"))?;
+    let mut next_events = existing_events.clone();
+    next_events.extend_from_slice(event_line.as_bytes());
+    next_events.push(b'\n');
+
+    let task_temp = unique_sidecar_path(&task_path, "tmp")?;
+    let event_temp = unique_sidecar_path(&event_path, "tmp")?;
+    let event_backup = if event_path.exists() {
+        Some(unique_sidecar_path(&event_path, "bak")?)
+    } else {
+        None
+    };
+    write_prepared_file(&task_temp, content.as_bytes(), None)?;
+    if let Err(error) = write_prepared_file(
+        &event_temp,
+        &next_events,
+        fs::metadata(&event_path)
+            .ok()
+            .map(|value| value.permissions()),
+    ) {
+        let _ = fs::remove_file(&task_temp);
+        return Err(error);
+    }
+    if let Some(backup) = event_backup.as_deref() {
+        if fs::copy(&event_path, backup).is_err() {
+            let _ = fs::remove_file(&task_temp);
+            let _ = fs::remove_file(&event_temp);
+            return Err(write_error(
+                "backup_failed",
+                "无法创建事件恢复副本，未执行写入",
+            ));
+        }
+    }
+
+    let mut task_committed = false;
+    let mut event_committed = false;
+    let commit_result = (|| -> Result<(), WriteError> {
+        fs::hard_link(&task_temp, &task_path)
+            .map_err(|_| write_error("task_commit_failed", "新任务原子创建失败"))?;
+        task_committed = true;
+        fs::remove_file(&task_temp)
+            .map_err(|_| write_error("task_commit_failed", "新任务临时文件清理失败"))?;
+        if fault == CommitFault::AfterTaskCommit {
+            return Err(write_error("event_commit_failed", "创建事件追加失败"));
+        }
+        #[cfg(test)]
+        if fault == CommitFault::BeforeEventCommitExternalChange {
+            let mut external_events = existing_events.clone();
+            external_events.extend_from_slice(b"{\"id\":\"external-concurrent-event\"}\n");
+            fs::write(&event_path, external_events)
+                .map_err(|_| write_error("test_fault_failed", "无法注入测试冲突"))?;
+        }
+        let event_is_unchanged = if event_path.exists() {
+            fs::read(&event_path)
+                .map_err(|_| write_error("event_conflict", "事件提交前无法重新核对"))?
+                == existing_events
+        } else {
+            existing_events.is_empty()
+        };
+        if !event_is_unchanged {
+            return Err(write_error(
+                "event_conflict",
+                "事件文件已被其他操作修改，请重新读取后确认",
+            ));
+        }
+        fs::rename(&event_temp, &event_path)
+            .map_err(|_| write_error("event_commit_failed", "创建事件追加失败"))?;
+        event_committed = true;
+        if fault == CommitFault::AfterEventCommit {
+            return Err(write_error("readback_mismatch", "新任务写后核对不一致"));
+        }
+        if sha256_hex(
+            &fs::read(&task_path).map_err(|_| write_error("readback_failed", "新任务回读失败"))?,
+        ) != content_hash
+        {
+            return Err(write_error("readback_mismatch", "新任务写后核对不一致"));
+        }
+        let written_events = fs::read(&event_path)
+            .map_err(|_| write_error("readback_failed", "创建事件回读失败"))?;
+        if !written_events.ends_with(format!("{event_line}\n").as_bytes()) {
+            return Err(write_error(
+                "event_readback_mismatch",
+                "创建事件写后核对不一致",
+            ));
+        }
+        Ok(())
+    })();
+    if let Err(error) = commit_result {
+        let _ = fs::remove_file(&task_temp);
+        let task_rollback = if task_committed && task_path.exists() {
+            fs::remove_file(&task_path).map_err(|_| ())
+        } else {
+            Ok(())
+        };
+        let event_rollback = if event_committed {
+            rollback_file(&event_path, event_backup.as_deref())
+        } else {
+            if let Some(backup) = event_backup.as_deref() {
+                let _ = fs::remove_file(backup);
+            }
+            Ok(())
+        };
+        let _ = fs::remove_file(&event_temp);
+        if task_rollback.is_err() || event_rollback.is_err() {
+            return Err(write_error(
+                "rollback_failed",
+                "新建失败且自动恢复未完成，请停止继续写入",
+            ));
+        }
+        return Err(error);
+    }
+    if let Some(backup) = event_backup.as_deref() {
+        let _ = fs::remove_file(backup);
+    }
+    Ok(CreateTaskReceipt {
+        task_id: request.preview.task_id,
+        file_token: request.preview.file_token,
+        file_hash: content_hash,
         event_id,
         event_file: event_file_name,
         verified: true,
     })
+}
+
+#[tauri::command]
+fn preview_create_task(draft: NewTaskDraft) -> Result<CreateTaskPreview, WriteError> {
+    let (occurred_at, _) = current_event_time()?;
+    preview_create_task_at(draft, &occurred_at)
+}
+
+#[tauri::command]
+fn apply_create_task(request: CreateTaskRequest) -> Result<CreateTaskReceipt, WriteError> {
+    let month = request
+        .preview
+        .occurred_at
+        .get(..7)
+        .ok_or_else(|| write_error("clock_error", "创建事件月份无效"))?
+        .to_string();
+    let root = default_task_root();
+    apply_create_task_at(&root, &events_root(&root), request, &month)
+}
+
+#[tauri::command]
+fn preview_task_field_edit(
+    file_token: String,
+    field: String,
+    new_value: Value,
+) -> Result<TaskFieldEditPreview, WriteError> {
+    preview_task_field_edit_at(&default_task_root(), &file_token, &field, &new_value)
+}
+
+#[tauri::command]
+fn apply_task_field_edit(
+    request: TaskFieldEditRequest,
+) -> Result<TaskFieldEditReceipt, WriteError> {
+    let (occurred_at, month) = current_event_time()?;
+    let root = default_task_root();
+    apply_task_field_edit_at(&root, &events_root(&root), request, &occurred_at, &month)
 }
 
 #[tauri::command]
@@ -812,7 +1831,11 @@ pub fn run() {
             load_task_events,
             load_project_mappings,
             preview_priority_edit,
-            apply_priority_edit
+            apply_priority_edit,
+            preview_task_field_edit,
+            apply_task_field_edit,
+            preview_create_task,
+            apply_create_task
         ])
         .on_window_event(|window, event| {
             if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
@@ -835,6 +1858,7 @@ mod tests {
 task_id: tsk_write_test\n\
 schema_version: 1\n\
 record_type: task\n\
+record_status: current\n\
 task_status: doing\n\
 title: Write test\n\
 domain: test\n\
@@ -843,6 +1867,8 @@ unknown_extension: keep-me\n\
 privacy: general\n\
 codex_access: proposal_only\n\
 source_refs: []\n\
+related_ids:\n\
+  - tsk_existing_relation\n\
 verification_status: human_confirmed\n\
 ---\n\
 # Body\n\nKeep --- body formatting.\n"
@@ -1088,6 +2114,107 @@ verification_status: human_confirmed\n\
     }
 
     #[test]
+    fn post_commit_failures_restore_task_and_event_exactly() {
+        for fault in [CommitFault::AfterTaskCommit, CommitFault::AfterEventCommit] {
+            let dir = tempdir().unwrap();
+            let task_root = dir.path().join("任务");
+            let events = dir.path().join("事件");
+            fs::create_dir_all(&task_root).unwrap();
+            fs::create_dir_all(&events).unwrap();
+            let task_path = task_root.join("tsk_write_test.md");
+            let event_path = events.join("2026-08.jsonl");
+            let original = writable_task("medium");
+            let original_events = "{\"id\":\"existing\",\"task_id\":\"tsk_write_test\"}\n";
+            fs::write(&task_path, &original).unwrap();
+            fs::write(&event_path, original_events).unwrap();
+            let updated = original.replacen("priority: medium", "priority: high", 1);
+
+            let error = commit_existing_task_change(
+                &task_path,
+                &original,
+                &updated,
+                &events,
+                "tsk_write_test",
+                "priority_changed",
+                serde_json::json!({
+                    "previous_priority": "medium",
+                    "new_priority": "high"
+                }),
+                "2026-08-24T16:00:00+08:00",
+                "2026-08",
+                fault,
+            )
+            .unwrap_err();
+
+            assert!(matches!(
+                error.code,
+                "event_commit_failed" | "readback_mismatch"
+            ));
+            assert_eq!(fs::read_to_string(&task_path).unwrap(), original);
+            assert_eq!(fs::read_to_string(&event_path).unwrap(), original_events);
+            assert!(!task_root.read_dir().unwrap().any(|entry| entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .contains("task-center")));
+            assert!(!events.read_dir().unwrap().any(|entry| entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .contains("task-center")));
+        }
+    }
+
+    #[test]
+    fn late_task_and_event_conflicts_preserve_external_changes() {
+        for fault in [
+            CommitFault::BeforeTaskCommitExternalChange,
+            CommitFault::BeforeEventCommitExternalChange,
+        ] {
+            let dir = tempdir().unwrap();
+            let task_root = dir.path().join("任务");
+            let events = dir.path().join("事件");
+            fs::create_dir_all(&task_root).unwrap();
+            fs::create_dir_all(&events).unwrap();
+            let task_path = task_root.join("tsk_write_test.md");
+            let event_path = events.join("2026-08.jsonl");
+            let original = writable_task("medium");
+            let original_events = "{\"id\":\"existing\",\"task_id\":\"tsk_write_test\"}\n";
+            fs::write(&task_path, &original).unwrap();
+            fs::write(&event_path, original_events).unwrap();
+            let updated = original.replacen("priority: medium", "priority: high", 1);
+
+            let error = commit_existing_task_change(
+                &task_path,
+                &original,
+                &updated,
+                &events,
+                "tsk_write_test",
+                "priority_changed",
+                serde_json::json!({}),
+                "2026-08-24T16:00:00+08:00",
+                "2026-08",
+                fault,
+            )
+            .unwrap_err();
+
+            if fault == CommitFault::BeforeTaskCommitExternalChange {
+                assert_eq!(error.code, "conflict");
+                assert!(fs::read_to_string(&task_path)
+                    .unwrap()
+                    .contains("unknown_extension: external-change"));
+                assert_eq!(fs::read_to_string(&event_path).unwrap(), original_events);
+            } else {
+                assert_eq!(error.code, "event_conflict");
+                assert_eq!(fs::read_to_string(&task_path).unwrap(), original);
+                assert!(fs::read_to_string(&event_path)
+                    .unwrap()
+                    .ends_with("{\"id\":\"external-concurrent-event\"}\n"));
+            }
+        }
+    }
+
+    #[test]
     fn restricted_and_unsupported_priority_writes_are_rejected() {
         let dir = tempdir().unwrap();
         let private_path = dir.path().join("tsk_private.md");
@@ -1108,5 +2235,364 @@ verification_status: human_confirmed\n\
                 .code,
             "unsupported_value"
         );
+    }
+
+    fn apply_field_fixture(
+        task_root: &Path,
+        events: &Path,
+        field: &str,
+        new_value: Value,
+    ) -> TaskFieldEditReceipt {
+        let preview = preview_task_field_edit_at(task_root, "tsk_write_test.md", field, &new_value)
+            .unwrap_or_else(|error| panic!("preview failed for {field}: {error:?}"));
+        apply_task_field_edit_at(
+            task_root,
+            events,
+            TaskFieldEditRequest {
+                file_token: preview.file_token,
+                field: preview.field,
+                new_value,
+                expected_hash: preview.expected_hash,
+                confirmed: true,
+            },
+            "2026-08-24T08:00:00Z",
+            "2026-08",
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn approved_fields_status_relations_archive_and_restore_round_trip() {
+        let dir = tempdir().unwrap();
+        let task_root = dir.path().join("任务");
+        let events = dir.path().join("事件");
+        fs::create_dir_all(&task_root).unwrap();
+        let path = task_root.join("tsk_write_test.md");
+        fs::write(&path, writable_task("medium")).unwrap();
+
+        let cases = [
+            ("title", serde_json::json!("Updated title")),
+            ("task_status", serde_json::json!("done")),
+            ("priority", serde_json::json!("low")),
+            ("deadline", serde_json::json!("2026-09-30")),
+            ("assignee", serde_json::json!("用户本人")),
+            (
+                "related_ids",
+                serde_json::json!(["tsk_relation_one", "tsk_relation_two"]),
+            ),
+            ("record_status", serde_json::json!("archived")),
+            ("record_status", serde_json::json!("current")),
+        ];
+        let expected_event_count = cases.len();
+        for (field, value) in cases {
+            let receipt = apply_field_fixture(&task_root, &events, field, value.clone());
+            assert_eq!(receipt.field, field);
+            assert_eq!(receipt.new_value, value);
+            assert!(receipt.verified);
+        }
+
+        let written = fs::read_to_string(path).unwrap();
+        assert!(written.contains("title: \"Updated title\""));
+        assert!(written.contains("task_status: done"));
+        assert!(written.contains("priority: low"));
+        assert!(written.contains("deadline: 2026-09-30"));
+        assert!(written.contains("assignee: \"用户本人\""));
+        assert!(written.contains("related_ids: [\"tsk_relation_one\",\"tsk_relation_two\"]"));
+        assert!(written.contains("record_status: current"));
+        assert!(written.contains("unknown_extension: keep-me"));
+        assert!(written.ends_with("# Body\n\nKeep --- body formatting.\n"));
+        let event_rows: Vec<Value> = fs::read_to_string(events.join("2026-08.jsonl"))
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(event_rows.len(), expected_event_count);
+        assert_eq!(event_rows[1]["previous_task_status"], "doing");
+        assert_eq!(event_rows[1]["new_task_status"], "done");
+        assert_eq!(event_rows[6]["event_type"], "archived");
+        assert_eq!(event_rows[7]["event_type"], "restored");
+    }
+
+    #[test]
+    fn invalid_unknown_and_self_relation_fields_are_rejected_before_write() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("tsk_write_test.md");
+        let original = writable_task("medium");
+        fs::write(&path, &original).unwrap();
+        let cases = [
+            (
+                "task_status",
+                serde_json::json!("blocked"),
+                "unsupported_value",
+            ),
+            ("deadline", serde_json::json!("2026-02-30"), "invalid_value"),
+            (
+                "related_ids",
+                serde_json::json!(["tsk_write_test"]),
+                "invalid_value",
+            ),
+            ("comments", serde_json::json!([]), "unsupported_field"),
+        ];
+        for (field, value, expected_code) in cases {
+            let error = preview_task_field_edit_at(dir.path(), "tsk_write_test.md", field, &value)
+                .unwrap_err();
+            assert_eq!(error.code, expected_code);
+            assert_eq!(fs::read_to_string(&path).unwrap(), original);
+        }
+    }
+
+    #[test]
+    fn malformed_yaml_is_rejected_without_event_or_rewrite() {
+        let dir = tempdir().unwrap();
+        let task_root = dir.path().join("任务");
+        let events = dir.path().join("事件");
+        fs::create_dir_all(&task_root).unwrap();
+        let path = task_root.join("tsk_broken.md");
+        let original = "---\ntask_id: tsk_broken\npriority: [not closed\nprivacy: general\ncodex_access: proposal_only\n---\nBODY\n";
+        fs::write(&path, original).unwrap();
+
+        let error = preview_task_field_edit_at(
+            &task_root,
+            "tsk_broken.md",
+            "priority",
+            &serde_json::json!("high"),
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code, "invalid_frontmatter");
+        assert_eq!(fs::read_to_string(path).unwrap(), original);
+        assert!(!events.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_only_task_is_rejected_before_preview() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("tsk_write_test.md");
+        fs::write(&path, writable_task("medium")).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o444)).unwrap();
+        let error = preview_task_field_edit_at(
+            dir.path(),
+            "tsk_write_test.md",
+            "priority",
+            &serde_json::json!("high"),
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "read_only");
+    }
+
+    fn new_task_draft() -> NewTaskDraft {
+        NewTaskDraft {
+            title: "新建安全任务".to_string(),
+            domain: "task_hub".to_string(),
+            task_status: "todo".to_string(),
+            priority: "medium".to_string(),
+            assignee: "用户本人".to_string(),
+            deadline: "2026-09-30".to_string(),
+            related_ids: vec!["tsk_existing_relation".to_string()],
+        }
+    }
+
+    #[test]
+    fn create_preview_and_cancel_write_nothing() {
+        let dir = tempdir().unwrap();
+        let task_root = dir.path().join("任务");
+        let events = dir.path().join("事件");
+        fs::create_dir_all(&task_root).unwrap();
+        let preview = preview_create_task_at(new_task_draft(), "2026-08-24T08:00:00Z").unwrap();
+        assert!(preview.task_id.starts_with("tsk_"));
+        assert!(preview.file_token.ends_with(".md"));
+        assert!(task_root.read_dir().unwrap().next().is_none());
+        let error = apply_create_task_at(
+            &task_root,
+            &events,
+            CreateTaskRequest {
+                preview,
+                confirmed: false,
+            },
+            "2026-08",
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "confirmation_required");
+        assert!(task_root.read_dir().unwrap().next().is_none());
+        assert!(!events.exists());
+    }
+
+    #[test]
+    fn create_task_writes_minimum_fields_event_and_readback() {
+        let dir = tempdir().unwrap();
+        let task_root = dir.path().join("任务");
+        let events = dir.path().join("事件");
+        fs::create_dir_all(&task_root).unwrap();
+        let preview = preview_create_task_at(new_task_draft(), "2026-08-24T08:00:00Z").unwrap();
+        let receipt = apply_create_task_at(
+            &task_root,
+            &events,
+            CreateTaskRequest {
+                preview: preview.clone(),
+                confirmed: true,
+            },
+            "2026-08",
+        )
+        .unwrap();
+        assert!(receipt.verified);
+        assert_eq!(receipt.task_id, preview.task_id);
+        let content = fs::read_to_string(task_root.join(&preview.file_token)).unwrap();
+        assert_eq!(sha256_hex(content.as_bytes()), receipt.file_hash);
+        for expected in [
+            "record_type: task",
+            "record_status: current",
+            "task_status: todo",
+            "privacy: general",
+            "codex_access: proposal_only",
+            "verification_status: human_confirmed",
+            "ai_status: human_confirmed",
+            "approval_status: accepted",
+            "source_refs: [\"task-center-ui\"]",
+        ] {
+            assert!(content.contains(expected), "missing {expected}");
+        }
+        let event: Value = serde_json::from_str(
+            fs::read_to_string(events.join("2026-08.jsonl"))
+                .unwrap()
+                .trim(),
+        )
+        .unwrap();
+        assert_eq!(event["task_id"], preview.task_id);
+        assert_eq!(event["event_type"], "created");
+        assert_eq!(event["confirmed_by"], "user_ui_confirmation");
+    }
+
+    #[test]
+    fn create_conflict_tamper_and_event_failure_leave_no_partial_task() {
+        let dir = tempdir().unwrap();
+        let task_root = dir.path().join("任务");
+        let events = dir.path().join("事件");
+        fs::create_dir_all(&task_root).unwrap();
+        let preview = preview_create_task_at(new_task_draft(), "2026-08-24T08:00:00Z").unwrap();
+
+        let mut tampered = preview.clone();
+        tampered.draft.title = "预览后被篡改".to_string();
+        let error = apply_create_task_at(
+            &task_root,
+            &events,
+            CreateTaskRequest {
+                preview: tampered,
+                confirmed: true,
+            },
+            "2026-08",
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "preview_mismatch");
+        assert!(task_root.read_dir().unwrap().next().is_none());
+
+        fs::write(task_root.join(&preview.file_token), "existing").unwrap();
+        let error = apply_create_task_at(
+            &task_root,
+            &events,
+            CreateTaskRequest {
+                preview: preview.clone(),
+                confirmed: true,
+            },
+            "2026-08",
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "conflict");
+        fs::remove_file(task_root.join(&preview.file_token)).unwrap();
+
+        fs::create_dir_all(events.join("2026-08.jsonl")).unwrap();
+        let error = apply_create_task_at(
+            &task_root,
+            &events,
+            CreateTaskRequest {
+                preview: preview.clone(),
+                confirmed: true,
+            },
+            "2026-08",
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "event_prepare_failed");
+        assert!(!task_root.join(preview.file_token).exists());
+    }
+
+    #[test]
+    fn create_post_commit_failures_remove_task_and_restore_event() {
+        for fault in [CommitFault::AfterTaskCommit, CommitFault::AfterEventCommit] {
+            let dir = tempdir().unwrap();
+            let task_root = dir.path().join("任务");
+            let events = dir.path().join("事件");
+            fs::create_dir_all(&task_root).unwrap();
+            fs::create_dir_all(&events).unwrap();
+            let event_path = events.join("2026-08.jsonl");
+            let original_events = "{\"id\":\"existing\",\"task_id\":\"tsk_existing\"}\n";
+            fs::write(&event_path, original_events).unwrap();
+            let preview =
+                preview_create_task_at(new_task_draft(), "2026-08-24T16:00:00+08:00").unwrap();
+
+            let error = apply_create_task_at_with_fault(
+                &task_root,
+                &events,
+                CreateTaskRequest {
+                    preview: preview.clone(),
+                    confirmed: true,
+                },
+                "2026-08",
+                fault,
+            )
+            .unwrap_err();
+
+            assert!(matches!(
+                error.code,
+                "event_commit_failed" | "readback_mismatch"
+            ));
+            assert!(!task_root.join(&preview.file_token).exists());
+            assert_eq!(fs::read_to_string(&event_path).unwrap(), original_events);
+            assert!(!task_root.read_dir().unwrap().any(|entry| entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .contains("task-center")));
+            assert!(!events.read_dir().unwrap().any(|entry| entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .contains("task-center")));
+        }
+    }
+
+    #[test]
+    fn create_late_event_conflict_removes_new_task_but_preserves_external_event() {
+        let dir = tempdir().unwrap();
+        let task_root = dir.path().join("任务");
+        let events = dir.path().join("事件");
+        fs::create_dir_all(&task_root).unwrap();
+        fs::create_dir_all(&events).unwrap();
+        let event_path = events.join("2026-08.jsonl");
+        fs::write(
+            &event_path,
+            "{\"id\":\"existing\",\"task_id\":\"tsk_existing\"}\n",
+        )
+        .unwrap();
+        let preview =
+            preview_create_task_at(new_task_draft(), "2026-08-24T16:00:00+08:00").unwrap();
+
+        let error = apply_create_task_at_with_fault(
+            &task_root,
+            &events,
+            CreateTaskRequest {
+                preview: preview.clone(),
+                confirmed: true,
+            },
+            "2026-08",
+            CommitFault::BeforeEventCommitExternalChange,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code, "event_conflict");
+        assert!(!task_root.join(preview.file_token).exists());
+        assert!(fs::read_to_string(event_path)
+            .unwrap()
+            .ends_with("{\"id\":\"external-concurrent-event\"}\n"));
     }
 }

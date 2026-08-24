@@ -30,7 +30,7 @@
     "active": true,
     "targets": "all",
     "icon": ["../../assets/AppIcon-master.png", "../../overlay/AppIcon.icns", "../../windows/resources/CodexMonitorHUD.ico"],
-    "shortDescription": "按需启动、严格只读的 Codex Monitor 任务中心",
-    "longDescription": "独立于常驻 HUD 的只读任务总览、看板、列表和详情应用。"
+    "shortDescription": "按需启动、显式确认安全写入的 Codex Monitor 任务中心",
+    "longDescription": "独立于常驻 HUD 的任务总览、看板、列表、详情与安全写入应用。"
   }
 }

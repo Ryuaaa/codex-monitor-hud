@@ -46,6 +46,8 @@ export function parseTask(source: RawTaskSource): { task?: TaskRecord; issue?: T
   const id = text(data.task_id) ?? text(data.id);
   if (!id) return { issue: { fileToken: source.fileToken, code: "missing_id", message: "缺少任务编号" } };
   const normalized = normalizeStatus(data.task_status);
+  const recordStatusRaw = text(data.record_status) ?? "current";
+  const recordStatus = recordStatusRaw === "current" || recordStatusRaw === "archived" ? recordStatusRaw : "unknown";
   const priorityRaw = text(data.priority) ?? "unknown";
   const deadline = text(data.deadline);
   if (deadline && Number.isNaN(Date.parse(deadline))) {
@@ -58,6 +60,7 @@ export function parseTask(source: RawTaskSource): { task?: TaskRecord; issue?: T
       title: text(data.title) ?? "无标题任务",
       status: normalized.status,
       rawStatus: normalized.raw,
+      recordStatus,
       workflowStatus: text(data.workflow_status),
       priority: priorities.has(priorityRaw as TaskPriority) ? (priorityRaw as TaskPriority) : "unknown",
       deadline,
