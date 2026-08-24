@@ -43,6 +43,7 @@ jobs:
         shell: bash
         run: |
           rustup toolchain install 1.88.0 --profile minimal
+          rustup component add clippy --toolchain 1.88.0
           rustup default 1.88.0
 
       - name: Install locked frontend dependencies
