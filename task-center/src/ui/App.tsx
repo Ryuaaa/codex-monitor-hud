@@ -1,6 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
 import { codexThreadIds, deriveAttention, parseTask } from "../domain/task";
-import type { ProjectMapping, TaskEvent, TaskLoadIssue, TaskRecord, TaskStatus } from "../domain/types";
+import type {
+  PriorityEditPreview,
+  PriorityEditReceipt,
+  ProjectMapping,
+  TaskEvent,
+  TaskLoadIssue,
+  TaskPriority,
+  TaskRecord,
+  TaskStatus,
+  TaskWriteFailure,
+} from "../domain/types";
 import { taskDataProvider, type TaskDataProvider } from "../data/provider";
 
 const statusLabels: Record<TaskStatus, string> = {
@@ -28,6 +38,11 @@ export function App({ provider = taskDataProvider }: { provider?: TaskDataProvid
   const [events, setEvents] = useState<TaskEvent[]>([]);
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [loadError, setLoadError] = useState<string>();
+  const [priorityDraft, setPriorityDraft] = useState<"high" | "medium" | "low">();
+  const [writePreview, setWritePreview] = useState<PriorityEditPreview>();
+  const [writeReceipt, setWriteReceipt] = useState<PriorityEditReceipt>();
+  const [writeFailure, setWriteFailure] = useState<TaskWriteFailure>();
+  const [writing, setWriting] = useState(false);
 
   useEffect(() => {
     let live = true;
@@ -68,6 +83,7 @@ export function App({ provider = taskDataProvider }: { provider?: TaskDataProvid
     setEvents([]);
     setLoadingDetail(true);
     setLoadError(undefined);
+    resetWriteFlow();
     try {
       const [nextBody, nextEvents] = await Promise.all([
         provider.loadBody(task.fileToken),
@@ -82,12 +98,83 @@ export function App({ provider = taskDataProvider }: { provider?: TaskDataProvid
     }
   }
 
+  function resetWriteFlow() {
+    setPriorityDraft(undefined);
+    setWritePreview(undefined);
+    setWriteReceipt(undefined);
+    setWriteFailure(undefined);
+    setWriting(false);
+  }
+
+  function normalizeWriteError(error: unknown): TaskWriteFailure {
+    if (error && typeof error === "object" && "code" in error && "message" in error) {
+      return { code: String(error.code), message: String(error.message) };
+    }
+    return { code: "write_failed", message: "写入失败，原任务已保留。" };
+  }
+
+  async function previewPriority() {
+    if (!selected || !priorityDraft) return;
+    setWriting(true);
+    setWriteFailure(undefined);
+    setWriteReceipt(undefined);
+    try {
+      setWritePreview(await provider.previewPriorityEdit(selected.fileToken, priorityDraft));
+    } catch (error) {
+      setWritePreview(undefined);
+      setWriteFailure(normalizeWriteError(error));
+    } finally {
+      setWriting(false);
+    }
+  }
+
+  async function refreshAfterConflict(selectedId: string) {
+    try {
+      const sources = await provider.loadMetadata();
+      const parsed = sources.map(parseTask);
+      const nextTasks = parsed.flatMap((result) => (result.task ? [result.task] : []));
+      setTasks(nextTasks);
+      setIssues(parsed.flatMap((result) => (result.issue ? [result.issue] : [])));
+      setSelected(nextTasks.find((task) => task.id === selectedId));
+    } catch {
+      // 保留原写入错误，不用刷新错误覆盖它。
+    }
+  }
+
+  async function confirmPriority() {
+    if (!selected || !priorityDraft || !writePreview) return;
+    setWriting(true);
+    setWriteFailure(undefined);
+    try {
+      const receipt = await provider.applyPriorityEdit({
+        fileToken: selected.fileToken,
+        newPriority: priorityDraft,
+        expectedHash: writePreview.expectedHash,
+        confirmed: true,
+      });
+      const nextTask: TaskRecord = { ...selected, priority: receipt.newPriority };
+      setTasks((current) => current.map((task) => task.id === nextTask.id ? nextTask : task));
+      setSelected(nextTask);
+      setEvents(await provider.loadEvents(nextTask.id));
+      setWriteReceipt(receipt);
+      setWritePreview(undefined);
+      setPriorityDraft(undefined);
+    } catch (error) {
+      const failure = normalizeWriteError(error);
+      setWriteFailure(failure);
+      setWritePreview(undefined);
+      if (failure.code === "conflict") await refreshAfterConflict(selected.id);
+    } finally {
+      setWriting(false);
+    }
+  }
+
   return (
     <div className={compact ? "app compact" : "app"}>
       <header className="topbar">
         <div>
           <p className="eyebrow">CODEX MONITOR</p>
-          <h1>任务中心 <span>只读预览</span></h1>
+          <h1>任务中心 <span>安全写入预览</span></h1>
         </div>
         <div className="top-actions" aria-label="视图设置">
           <button className={view === "board" ? "active" : ""} onClick={() => setView("board")}>看板</button>
@@ -154,7 +241,33 @@ export function App({ provider = taskDataProvider }: { provider?: TaskDataProvid
         </main>
       </div>
 
-      {selected && <DetailPanel task={selected} body={body} events={events} loading={loadingDetail} onClose={() => setSelected(undefined)} />}
+      {selected && <DetailPanel
+        task={selected}
+        body={body}
+        events={events}
+        loading={loadingDetail}
+        priorityDraft={priorityDraft}
+        writePreview={writePreview}
+        writeReceipt={writeReceipt}
+        writeFailure={writeFailure}
+        writing={writing}
+        onBeginPriority={() => {
+          const initial = selected.priority === "unknown" ? "medium" : selected.priority;
+          setPriorityDraft(initial as "high" | "medium" | "low");
+          setWritePreview(undefined);
+          setWriteReceipt(undefined);
+          setWriteFailure(undefined);
+        }}
+        onPriorityDraft={(value) => {
+          setPriorityDraft(value);
+          setWritePreview(undefined);
+          setWriteFailure(undefined);
+        }}
+        onPreviewPriority={previewPriority}
+        onConfirmPriority={confirmPriority}
+        onCancelPriority={resetWriteFlow}
+        onClose={() => { resetWriteFlow(); setSelected(undefined); }}
+      />}
     </div>
   );
 }
@@ -174,7 +287,26 @@ function TaskCard({ task, onOpen }: { task: TaskRecord; onOpen: () => void }) {
   </button>;
 }
 
-function DetailPanel({ task, body, events, loading, onClose }: { task: TaskRecord; body?: string; events: TaskEvent[]; loading: boolean; onClose: () => void }) {
+function DetailPanel({
+  task, body, events, loading, priorityDraft, writePreview, writeReceipt, writeFailure, writing,
+  onBeginPriority, onPriorityDraft, onPreviewPriority, onConfirmPriority, onCancelPriority, onClose,
+}: {
+  task: TaskRecord;
+  body?: string;
+  events: TaskEvent[];
+  loading: boolean;
+  priorityDraft?: "high" | "medium" | "low";
+  writePreview?: PriorityEditPreview;
+  writeReceipt?: PriorityEditReceipt;
+  writeFailure?: TaskWriteFailure;
+  writing: boolean;
+  onBeginPriority: () => void;
+  onPriorityDraft: (value: "high" | "medium" | "low") => void;
+  onPreviewPriority: () => void;
+  onConfirmPriority: () => void;
+  onCancelPriority: () => void;
+  onClose: () => void;
+}) {
   const threads = codexThreadIds(task);
   useEffect(() => {
     const closeOnEscape = (event: KeyboardEvent) => event.key === "Escape" && onClose();
@@ -185,6 +317,24 @@ function DetailPanel({ task, body, events, loading, onClose }: { task: TaskRecor
     <aside className="detail" role="dialog" aria-modal="true" aria-labelledby="detail-title">
       <div className="detail-head"><div><p className="eyebrow">{task.id}</p><h2 id="detail-title">{task.title}</h2></div><button autoFocus aria-label="关闭详情" onClick={onClose}>×</button></div>
       <dl className="facts"><div><dt>状态</dt><dd>{statusLabels[task.status]}</dd></div><div><dt>优先级</dt><dd>{priorityLabels[task.priority]}</dd></div><div><dt>负责人</dt><dd>{task.assignee ?? "—"}</dd></div><div><dt>截止</dt><dd>{task.deadline ?? "—"}</dd></div></dl>
+      <section className="safe-write" aria-label="安全编辑">
+        <div className="section-title"><h3>安全编辑</h3>{!priorityDraft && <button onClick={onBeginPriority}>编辑优先级</button>}</div>
+        <p className="write-boundary">仅写正式支持字段；评论、附件、重复任务、甘特图与工作流等暂不支持，也不会保存到缓存。</p>
+        {priorityDraft && <div className="write-editor">
+          <label><span>优先级草稿</span><select value={priorityDraft} onChange={(event) => onPriorityDraft(event.target.value as "high" | "medium" | "low")}>
+            <option value="high">高</option><option value="medium">中</option><option value="low">低</option>
+          </select></label>
+          {!writePreview && <div className="write-actions"><button disabled={writing || priorityDraft === task.priority} onClick={onPreviewPriority}>生成写入预览</button><button className="secondary" disabled={writing} onClick={onCancelPriority}>取消</button></div>}
+        </div>}
+        {writePreview && <div className="write-preview" role="region" aria-label="修改预览">
+          <strong>确认修改前后</strong>
+          <dl><div><dt>修改前</dt><dd>{priorityLabels[writePreview.beforePriority as TaskPriority] ?? writePreview.beforePriority}</dd></div><div><dt>修改后</dt><dd>{priorityLabels[writePreview.afterPriority as TaskPriority] ?? writePreview.afterPriority}</dd></div></dl>
+          <p>确认时会再次检查文件版本；冲突不会覆盖他人修改。</p>
+          <div className="write-actions"><button className="confirm-write" disabled={writing} onClick={onConfirmPriority}>{writing ? "正在安全写入…" : "确认写入"}</button><button className="secondary" disabled={writing} onClick={onCancelPriority}>取消</button></div>
+        </div>}
+        {writeFailure && <div role="alert" className="write-failure"><strong>未写入</strong><span>{writeFailure.message}</span>{writeFailure.code === "conflict" && <small>已重新读取当前任务；你的优先级草稿仍保留。</small>}</div>}
+        {writeReceipt && <div role="status" className="write-success"><strong>已写入并核对</strong><span>任务与事件均已回读一致。</span></div>}
+      </section>
       {task.nextAction && <section><h3>下一步</h3><p>{task.nextAction}</p></section>}
       <section><h3>Codex 对话</h3>{threads.length ? threads.map((id) => <div className="thread" key={id}><span>{id}</span><span className="runtime unknown">外部任务 · 状态未知</span><button disabled title="尚无已验证的官方第三方打开方式">打开任务</button></div>) : <p className="muted-text">没有正式绑定记录。</p>}</section>
       <section><h3>正文 <span className="on-demand">按需读取</span></h3>{loading ? <p>正在读取…</p> : <pre className="body">{body ?? "正文不可用"}</pre>}</section>

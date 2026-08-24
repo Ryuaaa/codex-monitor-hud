@@ -49,6 +49,37 @@ export interface ProjectMapping {
   workdirs: string[];
 }
 
+export interface PriorityEditPreview {
+  fileToken: string;
+  taskId: string;
+  beforePriority: string;
+  afterPriority: string;
+  expectedHash: string;
+}
+
+export interface PriorityEditRequest {
+  fileToken: string;
+  newPriority: "high" | "medium" | "low";
+  expectedHash: string;
+  confirmed: boolean;
+}
+
+export interface PriorityEditReceipt {
+  fileToken: string;
+  taskId: string;
+  previousPriority: string;
+  newPriority: "high" | "medium" | "low";
+  fileHash: string;
+  eventId: string;
+  eventFile: string;
+  verified: boolean;
+}
+
+export interface TaskWriteFailure {
+  code: string;
+  message: string;
+}
+
 export type RuntimeDisplayState =
   | "proven_active"
   | "known_not_loaded"

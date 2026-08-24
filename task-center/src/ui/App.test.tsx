@@ -10,6 +10,23 @@ function provider(): TaskDataProvider {
     loadProjectMappings: vi.fn().mockResolvedValue(fixtureProjects),
     loadBody: vi.fn().mockResolvedValue("# 按需正文"),
     loadEvents: vi.fn().mockResolvedValue(fixtureEvents),
+    previewPriorityEdit: vi.fn().mockImplementation((fileToken, newPriority) => Promise.resolve({
+      fileToken,
+      taskId: "tsk_demo_governance",
+      beforePriority: "high",
+      afterPriority: newPriority,
+      expectedHash: "synthetic-sha256",
+    })),
+    applyPriorityEdit: vi.fn().mockImplementation((request) => Promise.resolve({
+      fileToken: request.fileToken,
+      taskId: "tsk_demo_governance",
+      previousPriority: "high",
+      newPriority: request.newPriority,
+      fileHash: "updated-synthetic-sha256",
+      eventId: "evt_synthetic_priority",
+      eventFile: "2026-08.jsonl",
+      verified: true,
+    })),
   };
 }
 
@@ -61,5 +78,48 @@ describe("任务中心核心流程", () => {
     fireEvent.click(card);
     expect(await screen.findByRole("alert")).toHaveTextContent("该任务详情读取失败");
     expect(screen.getByText("完成 Mac 键盘决策级研究")).toBeInTheDocument();
+  });
+
+  it("取消写入预览不会调用确认写接口", async () => {
+    const mock = provider();
+    render(<App provider={mock} />);
+    fireEvent.click(await screen.findByRole("button", { name: /统一个人 AI 规则与能力边界/ }));
+    fireEvent.click(screen.getByRole("button", { name: "编辑优先级" }));
+    fireEvent.change(screen.getByLabelText("优先级草稿"), { target: { value: "low" } });
+    fireEvent.click(screen.getByRole("button", { name: "生成写入预览" }));
+    expect(await screen.findByRole("region", { name: "修改预览" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    expect(screen.queryByRole("region", { name: "修改预览" })).not.toBeInTheDocument();
+    expect(mock.applyPriorityEdit).not.toHaveBeenCalled();
+  });
+
+  it("明确确认后调用带并发令牌的写接口并显示回读成功", async () => {
+    const mock = provider();
+    render(<App provider={mock} />);
+    fireEvent.click(await screen.findByRole("button", { name: /统一个人 AI 规则与能力边界/ }));
+    fireEvent.click(screen.getByRole("button", { name: "编辑优先级" }));
+    fireEvent.change(screen.getByLabelText("优先级草稿"), { target: { value: "low" } });
+    fireEvent.click(screen.getByRole("button", { name: "生成写入预览" }));
+    fireEvent.click(await screen.findByRole("button", { name: "确认写入" }));
+    expect(await screen.findByRole("status")).toHaveTextContent("已写入并核对");
+    expect(mock.applyPriorityEdit).toHaveBeenCalledWith({
+      fileToken: "tsk_demo_governance.md",
+      newPriority: "low",
+      expectedHash: "synthetic-sha256",
+      confirmed: true,
+    });
+  });
+
+  it("并发冲突不覆盖且保留用户草稿", async () => {
+    const mock = provider();
+    vi.mocked(mock.applyPriorityEdit).mockRejectedValue({ code: "conflict", message: "任务已被其他操作修改，请重新读取后确认" });
+    render(<App provider={mock} />);
+    fireEvent.click(await screen.findByRole("button", { name: /统一个人 AI 规则与能力边界/ }));
+    fireEvent.click(screen.getByRole("button", { name: "编辑优先级" }));
+    fireEvent.change(screen.getByLabelText("优先级草稿"), { target: { value: "low" } });
+    fireEvent.click(screen.getByRole("button", { name: "生成写入预览" }));
+    fireEvent.click(await screen.findByRole("button", { name: "确认写入" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("已重新读取当前任务；你的优先级草稿仍保留");
+    expect(screen.getByLabelText("优先级草稿")).toHaveValue("low");
   });
 });

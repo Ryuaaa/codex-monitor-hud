@@ -1,12 +1,21 @@
 import { invoke } from "@tauri-apps/api/core";
 import { fixtureEvents, fixtureProjects, fixtureSources } from "./fixtures";
-import type { ProjectMapping, RawTaskSource, TaskEvent } from "../domain/types";
+import type {
+  PriorityEditPreview,
+  PriorityEditReceipt,
+  PriorityEditRequest,
+  ProjectMapping,
+  RawTaskSource,
+  TaskEvent,
+} from "../domain/types";
 
 export interface TaskDataProvider {
   loadMetadata(): Promise<RawTaskSource[]>;
   loadBody(fileToken: string): Promise<string>;
   loadEvents(taskId: string): Promise<TaskEvent[]>;
   loadProjectMappings(): Promise<ProjectMapping[]>;
+  previewPriorityEdit(fileToken: string, newPriority: "high" | "medium" | "low"): Promise<PriorityEditPreview>;
+  applyPriorityEdit(request: PriorityEditRequest): Promise<PriorityEditReceipt>;
 }
 
 const isTauri = () => typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -30,5 +39,13 @@ export const taskDataProvider: TaskDataProvider = {
   },
   async loadProjectMappings() {
     return isTauri() ? invoke<ProjectMapping[]>("load_project_mappings") : fixtureProjects;
+  },
+  async previewPriorityEdit(fileToken, newPriority) {
+    if (!isTauri()) throw new Error("浏览器合成预览不执行文件写入");
+    return invoke<PriorityEditPreview>("preview_priority_edit", { fileToken, newPriority });
+  },
+  async applyPriorityEdit(request) {
+    if (!isTauri()) throw new Error("浏览器合成预览不执行文件写入");
+    return invoke<PriorityEditReceipt>("apply_priority_edit", { request });
   },
 };
