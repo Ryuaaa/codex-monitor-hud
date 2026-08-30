@@ -2507,6 +2507,7 @@ fn validate_expected_update_version(expected: &str, actual: &str) -> Result<(), 
     Ok(())
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn parse_macos_https_proxy(settings: &str) -> Option<url::Url> {
     fn value<'a>(settings: &'a str, key: &str) -> Option<&'a str> {
         settings.lines().find_map(|line| {
