@@ -1,3 +1,5 @@
+mod codex_history;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -202,11 +204,57 @@ fn default_task_root() -> PathBuf {
         .or_else(|| env::var_os("USERPROFILE"))
         .map(PathBuf::from)
         .unwrap_or_default();
-    home.join("Documents")
+    if home.as_os_str().is_empty() {
+        return PathBuf::new();
+    }
+    let existing_personal_root = home
+        .join("Documents")
         .join("01-小烈刀-AI协作库-默认可读")
         .join("30-领域与项目")
         .join("任务中枢")
-        .join("任务")
+        .join("任务");
+    if existing_personal_root.is_dir() {
+        return existing_personal_root;
+    }
+    #[cfg(target_os = "macos")]
+    let data_root = home
+        .join("Library")
+        .join("Application Support")
+        .join("CodexMonitorTaskCenter");
+    #[cfg(windows)]
+    let data_root = env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join("AppData").join("Local"))
+        .join("CodexMonitorTaskCenter");
+    #[cfg(not(any(target_os = "macos", windows)))]
+    let data_root = env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".local").join("share"))
+        .join("codex-monitor-task-center");
+    data_root.join("任务")
+}
+
+fn initialize_task_library_at(root: &Path) -> Result<(), String> {
+    if root.file_name().and_then(|name| name.to_str()) != Some("任务") {
+        return Err("任务库目录必须明确指向“任务”文件夹".to_string());
+    }
+    if root.exists() && !root.is_dir() {
+        return Err("任务库目标已存在但不是文件夹".to_string());
+    }
+    if let Ok(metadata) = fs::symlink_metadata(root) {
+        if metadata.file_type().is_symlink() {
+            return Err("任务库目标不能是符号链接".to_string());
+        }
+    }
+    fs::create_dir_all(root).map_err(|_| "无法创建本地任务目录".to_string())?;
+    let event_root = events_root(root);
+    fs::create_dir_all(&event_root).map_err(|_| "无法创建本地事件目录".to_string())?;
+    root.canonicalize()
+        .map_err(|_| "新建任务目录无法核对".to_string())?;
+    event_root
+        .canonicalize()
+        .map_err(|_| "新建事件目录无法核对".to_string())?;
+    Ok(())
 }
 
 fn ensure_child(root: &Path, candidate: &Path) -> Result<PathBuf, String> {
@@ -1797,6 +1845,36 @@ fn load_project_mappings() -> Result<Vec<ProjectMapping>, String> {
     read_project_mappings(project_config_path().as_deref())
 }
 
+#[tauri::command]
+async fn load_codex_thread_page(
+    thread_id: String,
+    cursor: Option<String>,
+) -> Result<codex_history::CodexThreadPage, codex_history::CodexHistoryError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        codex_history::load_thread_page(&thread_id, cursor.as_deref())
+    })
+    .await
+    .map_err(|_| {
+        codex_history::CodexHistoryError::new("worker_failed", "Codex 历史读取任务异常结束")
+    })?
+}
+
+#[tauri::command]
+async fn load_codex_thread_list(
+    cursor: Option<String>,
+) -> Result<codex_history::CodexThreadListPage, codex_history::CodexHistoryError> {
+    tauri::async_runtime::spawn_blocking(move || codex_history::load_thread_list(cursor.as_deref()))
+        .await
+        .map_err(|_| {
+            codex_history::CodexHistoryError::new("worker_failed", "Codex 任务列表读取异常结束")
+        })?
+}
+
+#[tauri::command]
+fn initialize_local_task_library() -> Result<(), String> {
+    initialize_task_library_at(&default_task_root())
+}
+
 pub fn read_only_diagnostic() -> i32 {
     let root = default_task_root();
     match scan_metadata(&root) {
@@ -1830,6 +1908,9 @@ pub fn run() {
             load_task_body,
             load_task_events,
             load_project_mappings,
+            load_codex_thread_list,
+            load_codex_thread_page,
+            initialize_local_task_library,
             preview_priority_edit,
             apply_priority_edit,
             preview_task_field_edit,
@@ -1873,6 +1954,18 @@ verification_status: human_confirmed\n\
 ---\n\
 # Body\n\nKeep --- body formatting.\n"
         )
+    }
+
+    #[test]
+    fn local_task_library_is_created_only_at_explicit_target() {
+        let temp = tempdir().unwrap();
+        let root = temp.path().join("CodexMonitorTaskCenter").join("任务");
+        assert!(!root.exists());
+        initialize_task_library_at(&root).unwrap();
+        assert!(root.is_dir());
+        assert!(events_root(&root).is_dir());
+        initialize_task_library_at(&root).unwrap();
+        assert!(initialize_task_library_at(&temp.path().join("ambiguous")).is_err());
     }
 
     #[test]

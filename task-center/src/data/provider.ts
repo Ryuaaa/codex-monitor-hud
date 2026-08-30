@@ -4,6 +4,8 @@ import type {
   PriorityEditPreview,
   PriorityEditReceipt,
   PriorityEditRequest,
+  CodexThreadPage,
+  CodexThreadListPage,
   CreateTaskPreview,
   CreateTaskReceipt,
   NewTaskDraft,
@@ -20,6 +22,9 @@ export interface TaskDataProvider {
   loadBody(fileToken: string): Promise<string>;
   loadEvents(taskId: string): Promise<TaskEvent[]>;
   loadProjectMappings(): Promise<ProjectMapping[]>;
+  loadCodexThreadList(cursor?: string): Promise<CodexThreadListPage>;
+  loadCodexThreadPage(threadId: string, cursor?: string): Promise<CodexThreadPage>;
+  initializeLocalTaskLibrary(): Promise<void>;
   previewPriorityEdit(fileToken: string, newPriority: "high" | "medium" | "low"): Promise<PriorityEditPreview>;
   applyPriorityEdit(request: PriorityEditRequest): Promise<PriorityEditReceipt>;
   previewTaskFieldEdit(fileToken: string, field: TaskFieldEditRequest["field"], newValue: unknown): Promise<TaskFieldEditPreview>;
@@ -37,6 +42,48 @@ const demoBodies: Record<string, string> = {
   "tsk_demo_done.md": "# 建立安全同步\n\n双端接入已经完成。",
 };
 
+const demoCodexPage = (threadId: string, cursor?: string): CodexThreadPage => ({
+  threadId,
+  name: "合成 Codex 任务",
+  sourceKind: "vscode",
+  sourceLabel: "Codex 桌面版或编辑器",
+  reportedStatus: "notLoaded",
+  createdAt: 1787443200,
+  updatedAt: 1787616000,
+  historyMode: "paginated",
+  turns: cursor ? [{ id: "turn_demo_older", status: "completed", startedAt: 1787529600, completedAt: 1787529900, durationMs: 300000 }]
+    : [{ id: "turn_demo_latest", status: "completed", startedAt: 1787615700, completedAt: 1787616000, durationMs: 300000 }],
+  nextCursor: cursor ? undefined : "demo-older-page",
+  historyState: "paged",
+  observedAt: 1787616060,
+});
+
+const demoCodexList = (cursor?: string): CodexThreadListPage => ({
+  threads: cursor ? [{
+    threadId: "019f-demo-older",
+    name: "较早的 Codex 任务",
+    sourceKind: "cli",
+    sourceLabel: "Codex 命令行",
+    reportedStatus: "notLoaded",
+    createdAt: 1787529600,
+    updatedAt: 1787529900,
+    workspaceName: "demo-project",
+    isPinned: false,
+  }] : [{
+    threadId: "019f-demo-running",
+    name: "合成 Codex 任务",
+    sourceKind: "vscode",
+    sourceLabel: "Codex 桌面版或编辑器",
+    reportedStatus: "notLoaded",
+    createdAt: 1787615700,
+    updatedAt: 1787616000,
+    workspaceName: "codex-monitor",
+    isPinned: true,
+  }],
+  nextCursor: cursor ? undefined : "demo-next-page",
+  observedAt: 1787616060,
+});
+
 export const taskDataProvider: TaskDataProvider = {
   async loadMetadata() {
     return isTauri() ? invoke<RawTaskSource[]>("load_task_metadata") : fixtureSources;
@@ -49,6 +96,20 @@ export const taskDataProvider: TaskDataProvider = {
   },
   async loadProjectMappings() {
     return isTauri() ? invoke<ProjectMapping[]>("load_project_mappings") : fixtureProjects;
+  },
+  async loadCodexThreadList(cursor) {
+    return isTauri()
+      ? invoke<CodexThreadListPage>("load_codex_thread_list", { cursor: cursor ?? null })
+      : demoCodexList(cursor);
+  },
+  async loadCodexThreadPage(threadId, cursor) {
+    return isTauri()
+      ? invoke<CodexThreadPage>("load_codex_thread_page", { threadId, cursor: cursor ?? null })
+      : demoCodexPage(threadId, cursor);
+  },
+  async initializeLocalTaskLibrary() {
+    if (!isTauri()) return;
+    return invoke<void>("initialize_local_task_library");
   },
   async previewPriorityEdit(fileToken, newPriority) {
     if (!isTauri()) throw new Error("浏览器合成预览不执行文件写入");

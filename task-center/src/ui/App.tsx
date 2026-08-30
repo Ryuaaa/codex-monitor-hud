@@ -1,8 +1,13 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { codexThreadIds, deriveAttention, parseTask } from "../domain/task";
 import type {
   PriorityEditPreview,
   PriorityEditReceipt,
+  CodexHistoryFailure,
+  CodexThreadListPage,
+  CodexThreadPage,
+  CodexThreadSummary,
+  CodexTurnSummary,
   CreateTaskPreview,
   CreateTaskReceipt,
   NewTaskDraft,
@@ -30,13 +35,25 @@ const statusLabels: Record<TaskStatus, string> = {
 const columns: TaskStatus[] = ["todo", "doing", "long_term", "done", "cancelled", "unknown"];
 const priorityLabels = { high: "高", medium: "中", low: "低", unknown: "未知" } as const;
 
+interface CodexHistoryView {
+  page?: CodexThreadPage;
+  turns: CodexTurnSummary[];
+  loading: boolean;
+  failure?: CodexHistoryFailure;
+}
+
+type AppSection = "codex" | "managed";
+type ManagedLoadState = "idle" | "loading" | "ready" | "error";
+
 export function App({ provider = taskDataProvider }: { provider?: TaskDataProvider }) {
+  const [section, setSection] = useState<AppSection>("codex");
   const [tasks, setTasks] = useState<TaskRecord[]>([]);
   const [issues, setIssues] = useState<TaskLoadIssue[]>([]);
   const [projects, setProjects] = useState<ProjectMapping[]>([]);
   const [selectedProject, setSelectedProject] = useState("all");
   const [view, setView] = useState<"board" | "list">("board");
   const [query, setQuery] = useState("");
+  const [codexQuery, setCodexQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<TaskStatus | "all">("all");
   const [compact, setCompact] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
@@ -45,6 +62,13 @@ export function App({ provider = taskDataProvider }: { provider?: TaskDataProvid
   const [events, setEvents] = useState<TaskEvent[]>([]);
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [loadError, setLoadError] = useState<string>();
+  const [managedLoadState, setManagedLoadState] = useState<ManagedLoadState>("idle");
+  const [libraryInitializing, setLibraryInitializing] = useState(false);
+  const [codexThreads, setCodexThreads] = useState<CodexThreadSummary[]>([]);
+  const [codexListPage, setCodexListPage] = useState<CodexThreadListPage>();
+  const [codexListLoading, setCodexListLoading] = useState(false);
+  const [codexListFailure, setCodexListFailure] = useState<CodexHistoryFailure>();
+  const [selectedCodex, setSelectedCodex] = useState<CodexThreadSummary>();
   const [priorityDraft, setPriorityDraft] = useState<"high" | "medium" | "low">();
   const [writePreview, setWritePreview] = useState<PriorityEditPreview>();
   const [writeReceipt, setWriteReceipt] = useState<PriorityEditReceipt>();
@@ -61,20 +85,27 @@ export function App({ provider = taskDataProvider }: { provider?: TaskDataProvid
   const [createPreview, setCreatePreview] = useState<CreateTaskPreview>();
   const [createReceipt, setCreateReceipt] = useState<CreateTaskReceipt>();
   const [createFailure, setCreateFailure] = useState<TaskWriteFailure>();
+  const [codexHistory, setCodexHistory] = useState<Record<string, CodexHistoryView>>({});
+  const codexHistoryGeneration = useRef(0);
+  const codexListGeneration = useRef(0);
+  const managedLoadGeneration = useRef(0);
+  const taskDetailGeneration = useRef(0);
 
   useEffect(() => {
-    let live = true;
-    Promise.all([provider.loadMetadata(), provider.loadProjectMappings()])
-      .then(([sources, mappings]) => {
-        if (!live) return;
-        const parsed = sources.map(parseTask);
-        setTasks(parsed.flatMap((result) => (result.task ? [result.task] : [])));
-        setIssues(parsed.flatMap((result) => (result.issue ? [result.issue] : [])));
-        setProjects(mappings);
-      })
-      .catch(() => live && setLoadError("任务元数据暂时不可用；未读取任何正文。"));
-    return () => { live = false; };
+    void loadCodexThreads(undefined, true);
+    return () => {
+      codexListGeneration.current += 1;
+      codexHistoryGeneration.current += 1;
+      managedLoadGeneration.current += 1;
+      taskDetailGeneration.current += 1;
+    };
   }, [provider]);
+
+  useEffect(() => {
+    if (section === "managed" && managedLoadState === "idle") {
+      void loadManagedTasks();
+    }
+  }, [section, managedLoadState]);
 
   const filtered = useMemo(() => {
     const normalized = query.trim().toLowerCase();
@@ -88,6 +119,13 @@ export function App({ provider = taskDataProvider }: { provider?: TaskDataProvid
     });
   }, [tasks, query, selectedProject, statusFilter, showArchived]);
 
+  const filteredCodexThreads = useMemo(() => {
+    const normalized = codexQuery.trim().toLowerCase();
+    if (!normalized) return codexThreads;
+    return codexThreads.filter((thread) => [thread.name, thread.workspaceName, thread.sourceLabel, thread.threadId]
+      .filter(Boolean).join(" ").toLowerCase().includes(normalized));
+  }, [codexThreads, codexQuery]);
+
   const projectOptions = useMemo(() => {
     const mapped = projects.map((project) => ({ id: project.id, name: project.name, workdirs: project.workdirs }));
     const mappedIds = new Set(mapped.map((project) => project.id));
@@ -96,24 +134,154 @@ export function App({ provider = taskDataProvider }: { provider?: TaskDataProvid
     return [...mapped, ...domains];
   }, [projects, tasks]);
 
+  async function loadCodexThreads(cursor?: string, replace = false) {
+    const generation = codexListGeneration.current + 1;
+    codexListGeneration.current = generation;
+    setCodexListLoading(true);
+    setCodexListFailure(undefined);
+    if (replace) {
+      setCodexThreads([]);
+      setCodexListPage(undefined);
+    }
+    try {
+      const page = await provider.loadCodexThreadList(cursor);
+      if (generation !== codexListGeneration.current) return;
+      setCodexThreads((current) => {
+        const previous = replace ? [] : current;
+        const seen = new Set(previous.map((thread) => thread.threadId));
+        return [...previous, ...page.threads.filter((thread) => !seen.has(thread.threadId))];
+      });
+      setCodexListPage(page);
+    } catch (error) {
+      if (generation !== codexListGeneration.current) return;
+      setCodexListFailure(normalizeCodexHistoryError(error));
+    } finally {
+      if (generation === codexListGeneration.current) setCodexListLoading(false);
+    }
+  }
+
+  async function loadManagedTasks() {
+    const generation = managedLoadGeneration.current + 1;
+    managedLoadGeneration.current = generation;
+    setManagedLoadState("loading");
+    setLoadError(undefined);
+    try {
+      const [sources, mappings] = await Promise.all([
+        provider.loadMetadata(),
+        provider.loadProjectMappings(),
+      ]);
+      if (generation !== managedLoadGeneration.current) return;
+      const parsed = sources.map(parseTask);
+      setTasks(parsed.flatMap((result) => (result.task ? [result.task] : [])));
+      setIssues(parsed.flatMap((result) => (result.issue ? [result.issue] : [])));
+      setProjects(mappings);
+      setManagedLoadState("ready");
+    } catch {
+      if (generation !== managedLoadGeneration.current) return;
+      setManagedLoadState("error");
+      setLoadError("正式任务库尚未连接或不可用；Codex 活动不受影响。");
+    }
+  }
+
+  async function initializeLocalTaskLibrary() {
+    setLibraryInitializing(true);
+    setLoadError(undefined);
+    try {
+      await provider.initializeLocalTaskLibrary();
+      setManagedLoadState("idle");
+    } catch {
+      setLoadError("本地任务库创建失败；未修改现有任务资料。");
+    } finally {
+      setLibraryInitializing(false);
+    }
+  }
+
+  function openCodexThread(thread: CodexThreadSummary) {
+    codexHistoryGeneration.current += 1;
+    setCodexHistory({});
+    setSelectedCodex(thread);
+  }
+
+  function closeDetails() {
+    taskDetailGeneration.current += 1;
+    codexHistoryGeneration.current += 1;
+    resetWriteFlow();
+    setCodexHistory({});
+    setSelected(undefined);
+    setSelectedCodex(undefined);
+  }
+
   async function openTask(task: TaskRecord) {
+    const generation = taskDetailGeneration.current + 1;
+    taskDetailGeneration.current = generation;
+    codexHistoryGeneration.current += 1;
     setSelected(task);
     setBody(undefined);
     setEvents([]);
     setLoadingDetail(true);
     setLoadError(undefined);
+    setCodexHistory({});
     resetWriteFlow();
     try {
       const [nextBody, nextEvents] = await Promise.all([
         provider.loadBody(task.fileToken),
         provider.loadEvents(task.id),
       ]);
+      if (generation !== taskDetailGeneration.current) return;
       setBody(nextBody);
       setEvents(nextEvents);
     } catch {
-      setLoadError("该任务详情读取失败；其他任务仍可继续使用。 ");
+      if (generation === taskDetailGeneration.current) {
+        setLoadError("该任务详情读取失败；其他任务仍可继续使用。 ");
+      }
     } finally {
-      setLoadingDetail(false);
+      if (generation === taskDetailGeneration.current) setLoadingDetail(false);
+    }
+  }
+
+  function normalizeCodexHistoryError(error: unknown): CodexHistoryFailure {
+    if (error && typeof error === "object" && "code" in error && "message" in error) {
+      return { code: String(error.code), message: String(error.message) };
+    }
+    return { code: "history_failed", message: "本轮未能读取 Codex 官方历史。" };
+  }
+
+  async function loadCodexHistory(threadId: string, cursor?: string) {
+    const generation = codexHistoryGeneration.current;
+    setCodexHistory((current) => ({
+      ...current,
+      [threadId]: {
+        page: current[threadId]?.page,
+        turns: current[threadId]?.turns ?? [],
+        loading: true,
+      },
+    }));
+    try {
+      const page = await provider.loadCodexThreadPage(threadId, cursor);
+      if (generation !== codexHistoryGeneration.current) return;
+      setCodexHistory((current) => {
+        const previous = cursor ? current[threadId]?.turns ?? [] : [];
+        const seen = new Set(previous.map((turn) => turn.id));
+        return {
+          ...current,
+          [threadId]: {
+            page,
+            turns: [...previous, ...page.turns.filter((turn) => !seen.has(turn.id))],
+            loading: false,
+          },
+        };
+      });
+    } catch (error) {
+      if (generation !== codexHistoryGeneration.current) return;
+      setCodexHistory((current) => ({
+        ...current,
+        [threadId]: {
+          page: current[threadId]?.page,
+          turns: current[threadId]?.turns ?? [],
+          loading: false,
+          failure: normalizeCodexHistoryError(error),
+        },
+      }));
     }
   }
 
@@ -318,28 +486,40 @@ export function App({ provider = taskDataProvider }: { provider?: TaskDataProvid
       <header className="topbar">
         <div>
           <p className="eyebrow">CODEX MONITOR</p>
-          <h1>任务中心 <span>安全写入预览</span></h1>
+          <h1>任务中心 <span>{section === "codex" ? "官方只读" : "安全写入预览"}</span></h1>
         </div>
         <div className="top-actions" aria-label="视图设置">
-          <button className="create-entry" onClick={() => { resetCreateFlow(); setCreateOpen(true); }}>新建任务</button>
-          <button className={view === "board" ? "active" : ""} onClick={() => setView("board")}>看板</button>
-          <button className={view === "list" ? "active" : ""} onClick={() => setView("list")}>列表</button>
-          <button aria-pressed={showArchived} onClick={() => setShowArchived((value) => !value)}>归档</button>
+          {section === "codex" ? <button disabled={codexListLoading} onClick={() => loadCodexThreads(undefined, true)}>{codexListLoading ? "读取中…" : "刷新"}</button> : <>
+            {managedLoadState === "ready" && <button className="create-entry" onClick={() => { resetCreateFlow(); setCreateOpen(true); }}>新建任务</button>}
+            <button className={view === "board" ? "active" : ""} onClick={() => setView("board")}>看板</button>
+            <button className={view === "list" ? "active" : ""} onClick={() => setView("list")}>列表</button>
+            <button aria-pressed={showArchived} onClick={() => setShowArchived((value) => !value)}>归档</button>
+          </>}
           <button aria-pressed={compact} onClick={() => setCompact((value) => !value)}>紧凑</button>
         </div>
       </header>
 
       <div className="workspace">
-        <aside className="sidebar" aria-label="项目">
-          <button className={selectedProject === "all" ? "project active" : "project"} onClick={() => setSelectedProject("all")}>
-            <span>全项目</span><strong>{tasks.length}</strong>
-          </button>
-          {projectOptions.map((project) => (
-            <button key={project.id} className={selectedProject === project.id ? "project active" : "project"} onClick={() => setSelectedProject(project.id)}>
-              <span>{project.name}<small>{project.workdirs[0] ?? "按正式领域归类"}</small></span>
-              <strong>{tasks.filter((task) => task.projectId === project.id || task.domain === project.id).length}</strong>
+        <aside className="sidebar" aria-label="任务中心导航">
+          <nav className="source-nav" aria-label="数据来源">
+            <button className={section === "codex" ? "source-entry active" : "source-entry"} onClick={() => { closeDetails(); setLoadError(undefined); setSection("codex"); }}>
+              <span>Codex 活动<small>官方任务列表 · 自动读取</small></span><strong>{codexThreads.length}</strong>
             </button>
-          ))}
+            <button className={section === "managed" ? "source-entry active" : "source-entry"} onClick={() => { closeDetails(); setLoadError(undefined); setSection("managed"); }}>
+              <span>管理任务<small>可选本地任务库</small></span><strong>{managedLoadState === "ready" ? tasks.length : "—"}</strong>
+            </button>
+          </nav>
+          {section === "managed" && <div className="project-nav" aria-label="项目">
+            <button className={selectedProject === "all" ? "project active" : "project"} onClick={() => setSelectedProject("all")}>
+              <span>全项目</span><strong>{tasks.length}</strong>
+            </button>
+            {projectOptions.map((project) => (
+              <button key={project.id} className={selectedProject === project.id ? "project active" : "project"} onClick={() => setSelectedProject(project.id)}>
+                <span>{project.name}<small>{project.workdirs[0] ?? "按正式领域归类"}</small></span>
+                <strong>{tasks.filter((task) => task.projectId === project.id || task.domain === project.id).length}</strong>
+              </button>
+            ))}
+          </div>}
           <div className="boundary-note">
             <strong>运行边界</strong>
             <p>独立进程 · 无后台服务<br />关闭窗口即退出</p>
@@ -347,43 +527,65 @@ export function App({ provider = taskDataProvider }: { provider?: TaskDataProvid
         </aside>
 
         <main>
-          <section className="summary" aria-label="任务概况">
-            <Metric label="进行中" value={tasks.filter((task) => task.status === "doing").length} tone="blue" />
-            <Metric label="需要关注" value={tasks.filter((task) => deriveAttention(task).length).length} tone="orange" />
-            <Metric label="已完成" value={tasks.filter((task) => task.status === "done").length} tone="green" />
-            <Metric label="已隔离文件" value={issues.length} tone={issues.length ? "red" : "muted"} />
-          </section>
+          {section === "codex" ? <CodexActivity
+            threads={filteredCodexThreads}
+            allThreads={codexThreads}
+            page={codexListPage}
+            loading={codexListLoading}
+            failure={codexListFailure}
+            query={codexQuery}
+            onQuery={setCodexQuery}
+            onOpen={openCodexThread}
+            onRetry={() => loadCodexThreads(undefined, true)}
+            onMore={(cursor) => loadCodexThreads(cursor)}
+          /> : <>
+            {managedLoadState === "ready" && <>
+              <section className="summary" aria-label="任务概况">
+                <Metric label="进行中" value={tasks.filter((task) => task.status === "doing").length} tone="blue" />
+                <Metric label="需要关注" value={tasks.filter((task) => deriveAttention(task).length).length} tone="orange" />
+                <Metric label="已完成" value={tasks.filter((task) => task.status === "done").length} tone="green" />
+                <Metric label="已隔离文件" value={issues.length} tone={issues.length ? "red" : "muted"} />
+              </section>
 
-          <section className="toolbar" aria-label="搜索和筛选">
-            <label className="search"><span>搜索</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="标题、领域、负责人…" /></label>
-            <label><span>状态</span><select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as TaskStatus | "all")}>
-              <option value="all">全部状态</option>
-              {columns.map((status) => <option key={status} value={status}>{statusLabels[status]}</option>)}
-            </select></label>
-            <div className="result-count">{filtered.length} 项</div>
-          </section>
+              <section className="toolbar" aria-label="搜索和筛选">
+                <label className="search"><span>搜索</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="标题、领域、负责人…" /></label>
+                <label><span>状态</span><select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as TaskStatus | "all")}>
+                  <option value="all">全部状态</option>
+                  {columns.map((status) => <option key={status} value={status}>{statusLabels[status]}</option>)}
+                </select></label>
+                <div className="result-count">{filtered.length} 项</div>
+              </section>
 
-          {loadError && <div role="alert" className="alert">{loadError}</div>}
-          {view === "board" ? (
-            <section className="board" aria-label="任务看板">
-              {columns.map((status) => {
-                const cards = filtered.filter((task) => task.status === status);
-                if (!cards.length && (status === "cancelled" || status === "unknown")) return null;
-                return <div className="column" key={status}>
-                  <h2><span className={`dot ${status}`} />{statusLabels[status]} <b>{cards.length}</b></h2>
-                  <div className="card-stack">{cards.map((task) => <TaskCard key={task.id} task={task} onOpen={() => openTask(task)} />)}</div>
-                </div>;
-              })}
-            </section>
-          ) : (
-            <section className="list-view" aria-label="任务列表">
-              <div className="list-head"><span>任务</span><span>状态</span><span>优先级</span><span>归属</span><span>更新</span></div>
-              {filtered.map((task) => <button key={task.id} className="list-row" onClick={() => openTask(task)}>
-                <span><strong>{task.title}{task.recordStatus === "archived" ? "（已归档）" : ""}</strong><small>{task.id}</small></span>
-                <span>{statusLabels[task.status]}</span><span>{priorityLabels[task.priority]}</span><span>{task.domain}</span><span>{task.updatedAt ?? "—"}</span>
-              </button>)}
-            </section>
-          )}
+              {loadError && <div role="alert" className="alert">{loadError}</div>}
+              {view === "board" ? (
+                <section className="board" aria-label="任务看板">
+                  {columns.map((status) => {
+                    const cards = filtered.filter((task) => task.status === status);
+                    if (!cards.length && (status === "cancelled" || status === "unknown")) return null;
+                    return <div className="column" key={status}>
+                      <h2><span className={`dot ${status}`} />{statusLabels[status]} <b>{cards.length}</b></h2>
+                      <div className="card-stack">{cards.map((task) => <TaskCard key={task.id} task={task} onOpen={() => openTask(task)} />)}</div>
+                    </div>;
+                  })}
+                </section>
+              ) : (
+                <section className="list-view" aria-label="任务列表">
+                  <div className="list-head"><span>任务</span><span>状态</span><span>优先级</span><span>归属</span><span>更新</span></div>
+                  {filtered.map((task) => <button key={task.id} className="list-row" onClick={() => openTask(task)}>
+                    <span><strong>{task.title}{task.recordStatus === "archived" ? "（已归档）" : ""}</strong><small>{task.id}</small></span>
+                    <span>{statusLabels[task.status]}</span><span>{priorityLabels[task.priority]}</span><span>{task.domain}</span><span>{task.updatedAt ?? "—"}</span>
+                  </button>)}
+                </section>
+              )}
+            </>}
+            {managedLoadState === "loading" && <div className="empty-state" role="status"><strong>正在连接本地任务库…</strong><p>这一步只在你打开“管理任务”后执行。</p></div>}
+            {managedLoadState === "error" && <div className="empty-state library-setup">
+              {loadError && <div role="alert" className="alert">{loadError}</div>}
+              <strong>尚未建立管理任务库</strong>
+              <p>可以创建一个透明、可迁移的本地任务库；不会影响上面的 Codex 官方任务列表。</p>
+              <div className="empty-actions"><button disabled={libraryInitializing} onClick={initializeLocalTaskLibrary}>{libraryInitializing ? "创建中…" : "创建本地任务库"}</button><button className="secondary" onClick={() => setManagedLoadState("idle")}>重新检测</button></div>
+            </div>}
+          </>}
         </main>
       </div>
 
@@ -400,6 +602,7 @@ export function App({ provider = taskDataProvider }: { provider?: TaskDataProvid
         fieldDraft={fieldDraft}
         fieldPreview={fieldPreview}
         fieldReceipt={fieldReceipt}
+        codexHistory={codexHistory}
         onBeginPriority={() => {
           const initial = selected.priority === "unknown" ? "medium" : selected.priority;
           setPriorityDraft(initial as "high" | "medium" | "low");
@@ -436,7 +639,14 @@ export function App({ provider = taskDataProvider }: { provider?: TaskDataProvid
         onPreviewField={previewFieldEdit}
         onConfirmField={confirmFieldEdit}
         onCancelField={resetWriteFlow}
-        onClose={() => { resetWriteFlow(); setSelected(undefined); }}
+        onLoadCodexHistory={loadCodexHistory}
+        onClose={closeDetails}
+      />}
+      {selectedCodex && <CodexActivityDetail
+        thread={selectedCodex}
+        history={codexHistory[selectedCodex.threadId]}
+        onLoad={loadCodexHistory}
+        onClose={closeDetails}
       />}
       {createOpen && <CreateTaskDialog
         draft={createDraft}
@@ -451,6 +661,84 @@ export function App({ provider = taskDataProvider }: { provider?: TaskDataProvid
       />}
     </div>
   );
+}
+
+function CodexActivity({
+  threads, allThreads, page, loading, failure, query,
+  onQuery, onOpen, onRetry, onMore,
+}: {
+  threads: CodexThreadSummary[];
+  allThreads: CodexThreadSummary[];
+  page?: CodexThreadListPage;
+  loading: boolean;
+  failure?: CodexHistoryFailure;
+  query: string;
+  onQuery: (value: string) => void;
+  onOpen: (thread: CodexThreadSummary) => void;
+  onRetry: () => void;
+  onMore: (cursor: string) => void;
+}) {
+  const workspaces = new Set(allThreads.map((thread) => thread.workspaceName).filter(Boolean));
+  return <>
+    <section className="source-intro">
+      <div><p className="eyebrow">DEFAULT DATA SOURCE</p><h2>Codex 活动</h2></div>
+      <p>直接读取本机官方任务列表，不需要个人任务目录。只显示任务名称与必要元数据，不使用对话预览作为标题。</p>
+    </section>
+    <section className="summary" aria-label="Codex 活动概况">
+      <Metric label="已读取任务" value={allThreads.length} tone="blue" />
+      <Metric label="已有名称" value={allThreads.filter((thread) => thread.name).length} tone="green" />
+      <Metric label="置顶任务" value={allThreads.filter((thread) => thread.isPinned).length} tone="orange" />
+      <Metric label="工作目录" value={workspaces.size} tone="muted" />
+    </section>
+    <section className="toolbar" aria-label="Codex 活动搜索">
+      <label className="search"><span>搜索</span><input value={query} onChange={(event) => onQuery(event.target.value)} placeholder="任务名称、项目、来源…" /></label>
+      <div className="result-count">{threads.length} 项</div>
+    </section>
+    {failure && <div role="alert" className="alert codex-list-error"><span>{failure.message}</span><button disabled={loading} onClick={onRetry}>重新读取</button></div>}
+    {loading && !allThreads.length && <div className="empty-state" role="status"><strong>正在读取 Codex 官方任务…</strong><p>完成后接口进程会立即退出。</p></div>}
+    {!loading && !failure && !allThreads.length && <div className="empty-state"><strong>没有可显示的 Codex 任务</strong><p>Codex 未安装、未登录或尚无任务时都可能出现此状态。</p></div>}
+    {allThreads.length > 0 && <section className="codex-activity-list" aria-label="Codex 官方任务列表">
+      <div className="codex-list-head"><span>任务</span><span>来源</span><span>项目</span><span>最近活动</span><span>属性</span></div>
+      {threads.map((thread) => <button key={thread.threadId} className="codex-activity-row" onClick={() => onOpen(thread)}>
+        <span><strong>{thread.name ?? "未命名 Codex 任务"}</strong><small>{thread.threadId}</small></span>
+        <span>{thread.sourceLabel}</span>
+        <span>{thread.workspaceName ?? "—"}</span>
+        <span>{formatUnixTime(thread.updatedAt ?? thread.createdAt)}</span>
+        <span>{thread.isPinned ? "已置顶" : "普通"}</span>
+      </button>)}
+      {!threads.length && <p className="no-search-result">没有匹配当前搜索的任务。</p>}
+    </section>}
+    {page?.nextCursor && <button className="load-more codex-list-more" disabled={loading} onClick={() => onMore(page.nextCursor!)}>{loading ? "正在加载…" : "加载更多官方任务"}</button>}
+    {page && <p className="observed-at">本轮读取：{formatUnixTime(page.observedAt)} · 官方记录不等于桌面版实时运行状态</p>}
+  </>;
+}
+
+function CodexActivityDetail({
+  thread, history, onLoad, onClose,
+}: {
+  thread: CodexThreadSummary;
+  history?: CodexHistoryView;
+  onLoad: (threadId: string, cursor?: string) => void;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    const closeOnEscape = (event: KeyboardEvent) => event.key === "Escape" && onClose();
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [onClose]);
+  return <div className="scrim" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+    <aside className="detail" role="dialog" aria-modal="true" aria-labelledby="codex-detail-title">
+      <div className="detail-head"><div><p className="eyebrow">CODEX OFFICIAL THREAD</p><h2 id="codex-detail-title">{thread.name ?? "未命名 Codex 任务"}</h2></div><button autoFocus aria-label="关闭 Codex 详情" onClick={onClose}>×</button></div>
+      <dl className="facts">
+        <div><dt>来源</dt><dd>{thread.sourceLabel}</dd></div>
+        <div><dt>项目</dt><dd>{thread.workspaceName ?? "—"}</dd></div>
+        <div><dt>最近活动</dt><dd>{formatUnixTime(thread.updatedAt ?? thread.createdAt)}</dd></div>
+        <div><dt>记录状态</dt><dd>{codexReportedStatus(thread.reportedStatus)}</dd></div>
+      </dl>
+      <section><h3>任务编号</h3><p className="thread-id-copy">{thread.threadId}</p></section>
+      <section><h3>Codex 历史 <span className="on-demand">按需读取</span></h3><CodexThreadHistory threadId={thread.threadId} view={history} onLoad={onLoad} /></section>
+    </aside>
+  </div>;
 }
 
 function Metric({ label, value, tone }: { label: string; value: number; tone: string }) {
@@ -470,9 +758,10 @@ function TaskCard({ task, onOpen }: { task: TaskRecord; onOpen: () => void }) {
 
 function DetailPanel({
   task, body, events, loading, priorityDraft, writePreview, writeReceipt, writeFailure, writing,
-  fieldDraft, fieldPreview, fieldReceipt,
+  fieldDraft, fieldPreview, fieldReceipt, codexHistory,
   onBeginPriority, onPriorityDraft, onPreviewPriority, onConfirmPriority, onCancelPriority,
-  onBeginField, onFieldChange, onFieldValue, onPreviewField, onConfirmField, onCancelField, onClose,
+  onBeginField, onFieldChange, onFieldValue, onPreviewField, onConfirmField, onCancelField,
+  onLoadCodexHistory, onClose,
 }: {
   task: TaskRecord;
   body?: string;
@@ -486,6 +775,7 @@ function DetailPanel({
   fieldDraft?: { field: WritableTaskField; rawValue: string };
   fieldPreview?: TaskFieldEditPreview;
   fieldReceipt?: TaskFieldEditReceipt;
+  codexHistory: Record<string, CodexHistoryView>;
   onBeginPriority: () => void;
   onPriorityDraft: (value: "high" | "medium" | "low") => void;
   onPreviewPriority: () => void;
@@ -497,6 +787,7 @@ function DetailPanel({
   onPreviewField: () => void;
   onConfirmField: () => void;
   onCancelField: () => void;
+  onLoadCodexHistory: (threadId: string, cursor?: string) => void;
   onClose: () => void;
 }) {
   const threads = codexThreadIds(task);
@@ -542,11 +833,90 @@ function DetailPanel({
         {fieldReceipt && <div role="status" className="write-success"><strong>字段已写入并核对</strong><span>任务与事件均已回读一致。</span></div>}
       </section>
       {task.nextAction && <section><h3>下一步</h3><p>{task.nextAction}</p></section>}
-      <section><h3>Codex 对话</h3>{threads.length ? threads.map((id) => <div className="thread" key={id}><span>{id}</span><span className="runtime unknown">外部任务 · 状态未知</span><button disabled title="尚无已验证的官方第三方打开方式">打开任务</button></div>) : <p className="muted-text">没有正式绑定记录。</p>}</section>
+      <section><h3>Codex 对话 <span className="on-demand">官方历史按需读取</span></h3>{threads.length ? threads.map((id) => <CodexThreadHistory
+        key={id}
+        threadId={id}
+        view={codexHistory[id]}
+        onLoad={onLoadCodexHistory}
+      />) : <p className="muted-text">没有正式绑定记录。</p>}</section>
       <section><h3>正文 <span className="on-demand">按需读取</span></h3>{loading ? <p>正在读取…</p> : <pre className="body">{body ?? "正文不可用"}</pre>}</section>
       <section><h3>活动时间线</h3>{events.length ? <ol className="timeline">{events.map((event) => <li key={event.id}><time>{new Date(event.occurredAt).toLocaleString("zh-CN")}</time><strong>{event.eventType}</strong><span>{event.previousTaskStatus ?? "—"} → {event.newTaskStatus ?? "—"}</span></li>)}</ol> : <p className="muted-text">没有可显示的正式事件。</p>}</section>
     </aside>
   </div>;
+}
+
+function CodexThreadHistory({
+  threadId, view, onLoad,
+}: {
+  threadId: string;
+  view?: CodexHistoryView;
+  onLoad: (threadId: string, cursor?: string) => void;
+}) {
+  const page = view?.page;
+  return <div className="thread-block">
+    <div className="thread">
+      <span>{threadId}</span>
+      <span className="runtime history">官方历史 · 实时未知</span>
+      <button disabled={view?.loading} onClick={() => onLoad(threadId)}>
+        {view?.loading && !page ? "读取中…" : page || view?.failure ? "重新读取" : "读取历史"}
+      </button>
+    </div>
+    {view?.failure && <div className="thread-history-error" role="alert">{view.failure.message}</div>}
+    {page && <div className="thread-history" aria-label={`Codex 历史 ${threadId}`}>
+      <dl>
+        <div><dt>来源</dt><dd>{page.sourceLabel}</dd></div>
+        <div><dt>接口状态</dt><dd>{codexReportedStatus(page.reportedStatus)}</dd></div>
+        <div><dt>最近更新</dt><dd>{formatUnixTime(page.updatedAt)}</dd></div>
+        <div><dt>历史模式</dt><dd>{page.historyState === "paged" ? "按需分页" : "分页不可用"}</dd></div>
+      </dl>
+      <p>分页请求不加载轮次内容；应用不展示或保存对话正文。该短期接口不能代表桌面版实时运行状态。</p>
+      {page.historyMessage && <div className="thread-history-note">{page.historyMessage}</div>}
+      {view.turns.length ? <ol className="turn-list">{view.turns.map((turn) => <li key={turn.id}>
+        <span>{codexTurnStatus(turn.status)}</span>
+        <strong>{formatUnixTime(turn.completedAt ?? turn.startedAt)}</strong>
+        <small>{formatDuration(turn.durationMs)}</small>
+      </li>)}</ol> : page.historyState === "paged" && <p className="muted-text">没有可显示的轮次元数据。</p>}
+      {page.nextCursor && <button className="load-more" disabled={view.loading} onClick={() => onLoad(threadId, page.nextCursor)}>
+        {view.loading ? "正在加载…" : "加载更早记录"}
+      </button>}
+    </div>}
+  </div>;
+}
+
+function codexReportedStatus(status: string): string {
+  const labels: Record<string, string> = {
+    notLoaded: "未载入（实时未知）",
+    idle: "接口进程空闲（实时未知）",
+    active: "接口进程活动（不代表桌面版）",
+    systemError: "接口进程异常",
+  };
+  return labels[status] ?? "未知状态";
+}
+
+function codexTurnStatus(status: string): string {
+  const labels: Record<string, string> = {
+    completed: "已完成",
+    inProgress: "进行中",
+    interrupted: "已中断",
+    failed: "失败",
+  };
+  return labels[status] ?? "未知";
+}
+
+function formatUnixTime(value?: number): string {
+  if (!value) return "—";
+  const milliseconds = value > 10_000_000_000 ? value : value * 1000;
+  const date = new Date(milliseconds);
+  return Number.isNaN(date.getTime()) ? "—" : date.toLocaleString("zh-CN");
+}
+
+function formatDuration(value?: number): string {
+  if (value === undefined || value < 0) return "时长未知";
+  const seconds = Math.round(value / 1000);
+  if (seconds < 60) return `${seconds}秒`;
+  const minutes = Math.floor(seconds / 60);
+  const remainder = seconds % 60;
+  return remainder ? `${minutes}分${remainder}秒` : `${minutes}分钟`;
 }
 
 function FieldValueInput({

@@ -156,3 +156,50 @@ export interface CodexRuntimeEvidence {
   providerAvailable: boolean;
   stale: boolean;
 }
+
+export interface CodexTurnSummary {
+  id: string;
+  status: string;
+  startedAt?: number;
+  completedAt?: number;
+  durationMs?: number;
+}
+
+export interface CodexThreadSummary {
+  threadId: string;
+  name?: string;
+  sourceKind: string;
+  sourceLabel: string;
+  reportedStatus: string;
+  createdAt?: number;
+  updatedAt?: number;
+  workspaceName?: string;
+  isPinned: boolean;
+}
+
+export interface CodexThreadListPage {
+  threads: CodexThreadSummary[];
+  nextCursor?: string;
+  observedAt: number;
+}
+
+export interface CodexThreadPage {
+  threadId: string;
+  name?: string;
+  sourceKind: string;
+  sourceLabel: string;
+  reportedStatus: string;
+  createdAt?: number;
+  updatedAt?: number;
+  historyMode?: string;
+  turns: CodexTurnSummary[];
+  nextCursor?: string;
+  historyState: "paged" | "unsupported" | "error";
+  historyMessage?: string;
+  observedAt: number;
+}
+
+export interface CodexHistoryFailure {
+  code: string;
+  message: string;
+}
