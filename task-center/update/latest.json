@@ -1,15 +1,15 @@
 {
   "version": "1.2.1",
   "notes": "新增标签与保存筛选、父子/阻塞/相关关系、评论与人工活动，并加入独立安全更新通道。",
-  "pub_date": "2026-08-30T03:59:31.209Z",
+  "pub_date": "2026-08-30T04:28:35.601Z",
   "platforms": {
     "darwin-aarch64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTaVVZZ2pLWWQ2ZWwzUnZPcGI2YzlxZU5QN2tLdU9WVzk5enNhNDk0eEROTk1uaytaa2kwOUQ1RkxjR0QwOFIwb3ZnN3JpbmFzb1EvNXVGOXFodGxNdkFWVnRlVjdsVkFzPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4MDYxMTQwCWZpbGU6Q29kZXggTW9uaXRvciBUYXNrIENlbnRlci5hcHAudGFyLmd6CnQzcEZZUmNSblp0dUs0NWNJZWM3aEw5aEp4eXhGU2pSWWRraGV4NVRCaS92NnBqUTBBcFMyd1NNdm12U3FwS1ZMYU15SGgveDk0WmpnYVNiWHFteUFBPT0K",
-      "url": "https://api.github.com/repos/Ryuaaa/codex-monitor-hud/releases/assets/536116201"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTaVVZZ2pLWWQ2ZXM3RkovK1RMVkJzclJYWXMwREtoMEUvT2pxQVhiamZLYTdOa3FMNkpQcTR5RVYyelFxcENIeFR1RlEzcVh1Z00xMm9GQTkrY29sZHdiYXVjMnlMTXd3PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4MDY0MDQ3CWZpbGU6Q29kZXgtTW9uaXRvci1UYXNrLUNlbnRlci1tYWNPUy11bml2ZXJzYWwtMS4yLjEuYXBwLnRhci5negoyaEVScWpnaFNPUEw4cmpIcXdWKzFCd2pQbjJ6Q0VNLzdrT0JoVGN4RThUemRyUFc3WTBZOU85R1hzOU5EWDFGNFIrNFlTcEE3OGhDNXFCemhLYURDZz09Cg==",
+      "url": "https://api.github.com/repos/Ryuaaa/codex-monitor-hud/releases/assets/536142391"
     },
     "darwin-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTaVVZZ2pLWWQ2ZWwzUnZPcGI2YzlxZU5QN2tLdU9WVzk5enNhNDk0eEROTk1uaytaa2kwOUQ1RkxjR0QwOFIwb3ZnN3JpbmFzb1EvNXVGOXFodGxNdkFWVnRlVjdsVkFzPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4MDYxMTQwCWZpbGU6Q29kZXggTW9uaXRvciBUYXNrIENlbnRlci5hcHAudGFyLmd6CnQzcEZZUmNSblp0dUs0NWNJZWM3aEw5aEp4eXhGU2pSWWRraGV4NVRCaS92NnBqUTBBcFMyd1NNdm12U3FwS1ZMYU15SGgveDk0WmpnYVNiWHFteUFBPT0K",
-      "url": "https://api.github.com/repos/Ryuaaa/codex-monitor-hud/releases/assets/536116201"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTaVVZZ2pLWWQ2ZXM3RkovK1RMVkJzclJYWXMwREtoMEUvT2pxQVhiamZLYTdOa3FMNkpQcTR5RVYyelFxcENIeFR1RlEzcVh1Z00xMm9GQTkrY29sZHdiYXVjMnlMTXd3PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4MDY0MDQ3CWZpbGU6Q29kZXgtTW9uaXRvci1UYXNrLUNlbnRlci1tYWNPUy11bml2ZXJzYWwtMS4yLjEuYXBwLnRhci5negoyaEVScWpnaFNPUEw4cmpIcXdWKzFCd2pQbjJ6Q0VNLzdrT0JoVGN4RThUemRyUFc3WTBZOU85R1hzOU5EWDFGNFIrNFlTcEE3OGhDNXFCemhLYURDZz09Cg==",
+      "url": "https://api.github.com/repos/Ryuaaa/codex-monitor-hud/releases/assets/536142391"
     }
   }
 }

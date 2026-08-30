@@ -77,7 +77,7 @@ if [[ -e "$updater_archive" ]]; then /bin/unlink "$updater_archive"; fi
 if [[ -e "$updater_signature" ]]; then /bin/unlink "$updater_signature"; fi
 (
   cd "$bundle_dir"
-  /usr/bin/tar -czf "$updater_archive" "$app_name"
+  COPYFILE_DISABLE=1 /usr/bin/tar --no-xattrs --exclude '._*' -czf "$updater_archive" "$app_name"
 )
 npm run tauri signer sign -- "$updater_archive"
 
