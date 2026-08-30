@@ -1,6 +1,6 @@
 [package]
 name = "codex-monitor-task-center"
-version = "1.2.0"
+version = "1.2.1"
 description = "On-demand task center with explicit safe writes for the Codex Monitor product family"
 authors = ["Ryua"]
 edition = "2021"
@@ -20,6 +20,7 @@ sha2 = "0.10.9"
 tauri = { version = "2.11.5", features = [] }
 tauri-plugin-updater = "2.10.1"
 time = { version = "0.3.55", features = ["formatting"] }
+url = "2.5.8"
 yaml_serde = "0.10.4"
 
 [dev-dependencies]

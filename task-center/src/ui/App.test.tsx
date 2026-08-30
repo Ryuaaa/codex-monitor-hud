@@ -170,6 +170,17 @@ describe("任务中心核心流程", () => {
     await waitFor(() => expect(mock.installTaskCenterUpdate).toHaveBeenCalledWith("1.3.0"));
   });
 
+  it("更新失败只显示后端给出的安全阶段提示", async () => {
+    localStorage.setItem("codex-monitor-task-center.last-update-check", String(Date.now()));
+    const mock = provider();
+    vi.mocked(mock.checkTaskCenterUpdate).mockResolvedValue({ currentVersion: "1.2.0", available: true, version: "1.2.1" });
+    vi.mocked(mock.installTaskCenterUpdate).mockRejectedValue("更新包下载中断；当前版本未改变，请检查网络后重试");
+    render(<App provider={mock} />);
+    fireEvent.click(screen.getByRole("button", { name: "检查更新" }));
+    fireEvent.click(await screen.findByRole("button", { name: "安装 1.2.1" }));
+    expect(await screen.findByRole("status")).toHaveTextContent("更新包下载中断");
+  });
+
   it("默认自动读取官方 Codex 任务且不访问个人任务目录", async () => {
     const mock = provider();
     render(<App provider={mock} />);

@@ -2507,12 +2507,79 @@ fn validate_expected_update_version(expected: &str, actual: &str) -> Result<(), 
     Ok(())
 }
 
+fn parse_macos_https_proxy(settings: &str) -> Option<url::Url> {
+    fn value<'a>(settings: &'a str, key: &str) -> Option<&'a str> {
+        settings.lines().find_map(|line| {
+            let (candidate, value) = line.trim().split_once(':')?;
+            (candidate.trim() == key).then_some(value.trim())
+        })
+    }
+
+    if value(settings, "HTTPSEnable")? != "1" {
+        return None;
+    }
+    let host = value(settings, "HTTPSProxy")?;
+    let port = value(settings, "HTTPSPort")?.parse::<u16>().ok()?;
+    if host.is_empty()
+        || host.len() > 255
+        || host.chars().any(|character| {
+            character.is_whitespace() || matches!(character, '/' | '@' | '?' | '#')
+        })
+    {
+        return None;
+    }
+    let authority = if host.contains(':') {
+        format!("[{host}]:{port}")
+    } else {
+        format!("{host}:{port}")
+    };
+    let proxy = url::Url::parse(&format!("http://{authority}")).ok()?;
+    (proxy.username().is_empty() && proxy.password().is_none()).then_some(proxy)
+}
+
+#[cfg(target_os = "macos")]
+fn system_https_proxy() -> Option<url::Url> {
+    let output = std::process::Command::new("/usr/sbin/scutil")
+        .arg("--proxy")
+        .output()
+        .ok()?;
+    if !output.status.success() || output.stdout.len() > 64 * 1024 {
+        return None;
+    }
+    parse_macos_https_proxy(std::str::from_utf8(&output.stdout).ok()?)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn system_https_proxy() -> Option<url::Url> {
+    None
+}
+
+fn update_download_error(error: &tauri_plugin_updater::Error) -> String {
+    match error {
+        tauri_plugin_updater::Error::Minisign(_)
+        | tauri_plugin_updater::Error::Base64(_)
+        | tauri_plugin_updater::Error::SignatureUtf8(_) => {
+            "更新包签名验证失败；当前版本未改变，请等待修正版".to_string()
+        }
+        tauri_plugin_updater::Error::Reqwest(_) | tauri_plugin_updater::Error::Network(_) => {
+            "更新包下载中断；当前版本未改变，请检查网络后重试".to_string()
+        }
+        _ => "更新包下载或安全验证失败；当前版本未改变".to_string(),
+    }
+}
+
+fn update_install_error(_: &tauri_plugin_updater::Error) -> String {
+    "更新包已通过验证，但无法替换当前应用；当前版本未改变".to_string()
+}
+
 #[tauri::command]
 async fn check_task_center_update(app: tauri::AppHandle) -> Result<TaskCenterUpdateInfo, String> {
     let current_version = app.package_info().version.to_string();
-    let update = app
-        .updater_builder()
-        .timeout(Duration::from_secs(15))
+    let mut builder = app.updater_builder().timeout(Duration::from_secs(15));
+    if let Some(proxy) = system_https_proxy() {
+        builder = builder.proxy(proxy);
+    }
+    let update = builder
         .build()
         .map_err(|_| "更新组件不可用".to_string())?
         .check()
@@ -2537,9 +2604,11 @@ async fn install_task_center_update(
     app: tauri::AppHandle,
     expected_version: String,
 ) -> Result<(), String> {
-    let update = app
-        .updater_builder()
-        .timeout(Duration::from_secs(15))
+    let mut builder = app.updater_builder().timeout(Duration::from_secs(15));
+    if let Some(proxy) = system_https_proxy() {
+        builder = builder.proxy(proxy);
+    }
+    let update = builder
         .build()
         .map_err(|_| "更新组件不可用".to_string())?
         .check()
@@ -2547,10 +2616,13 @@ async fn install_task_center_update(
         .map_err(|_| "暂时无法重新核对任务中心更新".to_string())?
         .ok_or_else(|| "当前已经是最新版".to_string())?;
     validate_expected_update_version(&expected_version, &update.version.to_string())?;
-    update
-        .download_and_install(|_, _| {}, || {})
+    let bytes = update
+        .download(|_, _| {}, || {})
         .await
-        .map_err(|_| "更新包下载或安全验证失败，当前版本未改变".to_string())?;
+        .map_err(|error| update_download_error(&error))?;
+    update
+        .install(&bytes)
+        .map_err(|error| update_install_error(&error))?;
     app.restart();
 }
 
@@ -2921,6 +2993,39 @@ verification_status: human_confirmed\n\
         assert!(validate_expected_update_version("1.2.0", "1.2.1").is_err());
         assert!(validate_expected_update_version("1.2.0\n", "1.2.0").is_err());
         assert!(validate_expected_update_version("", "1.2.0").is_err());
+    }
+
+    #[test]
+    fn macos_https_proxy_parser_accepts_only_enabled_bounded_settings() {
+        let enabled =
+            "<dictionary> {\n  HTTPSEnable : 1\n  HTTPSPort : 6134\n  HTTPSProxy : 127.0.0.1\n}";
+        assert_eq!(
+            parse_macos_https_proxy(enabled).unwrap().as_str(),
+            "http://127.0.0.1:6134/"
+        );
+        assert!(parse_macos_https_proxy(
+            "HTTPSEnable : 0\nHTTPSPort : 6134\nHTTPSProxy : 127.0.0.1"
+        )
+        .is_none());
+        assert!(parse_macos_https_proxy(
+            "HTTPSEnable : 1\nHTTPSPort : 6134\nHTTPSProxy : proxy.invalid/path"
+        )
+        .is_none());
+        assert!(parse_macos_https_proxy(
+            "HTTPSEnable : 1\nHTTPSPort : 70000\nHTTPSProxy : 127.0.0.1"
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn updater_errors_keep_network_and_install_stages_distinct() {
+        let network = tauri_plugin_updater::Error::Network("synthetic interruption".to_string());
+        assert!(update_download_error(&network).contains("下载中断"));
+        let install = tauri_plugin_updater::Error::Io(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "synthetic permission failure",
+        ));
+        assert!(update_install_error(&install).contains("无法替换"));
     }
 
     #[test]

@@ -42,6 +42,18 @@ const columns: TaskStatus[] = ["todo", "doing", "long_term", "done", "cancelled"
 const priorityLabels = { high: "高", medium: "中", low: "低", unknown: "未知" } as const;
 const updateCheckStorageKey = "codex-monitor-task-center.last-update-check";
 const updateCheckIntervalMs = 24 * 60 * 60 * 1000;
+const fallbackUpdateError = "更新未安装；当前版本保持不变。请稍后重试。";
+
+function safeUpdateError(error: unknown): string {
+  if (
+    typeof error === "string" &&
+    error.length <= 160 &&
+    /^(更新|当前|可安装版本|暂时无法)/.test(error)
+  ) {
+    return error;
+  }
+  return fallbackUpdateError;
+}
 
 interface CodexHistoryView {
   page?: CodexThreadPage;
@@ -664,9 +676,9 @@ export function App({ provider = taskDataProvider }: { provider?: TaskDataProvid
     try {
       await provider.installTaskCenterUpdate(updateInfo.version);
       setUpdateMessage("更新已安装，正在重新打开任务中心…");
-    } catch {
+    } catch (error) {
       setUpdateFailed(true);
-      setUpdateMessage("更新未安装；当前版本保持不变。请稍后重试。");
+      setUpdateMessage(safeUpdateError(error));
     } finally {
       setUpdateBusy(false);
     }
