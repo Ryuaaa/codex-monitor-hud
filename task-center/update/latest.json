@@ -1,15 +1,15 @@
 {
   "version": "1.2.0",
   "notes": "新增标签与保存筛选、父子/阻塞/相关关系、评论与人工活动，并加入独立安全更新通道。",
-  "pub_date": "2026-08-30T03:02:18.938Z",
+  "pub_date": "2026-08-30T03:25:06.880Z",
   "platforms": {
     "darwin-aarch64": {
       "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTaVVZZ2pLWWQ2ZW01UExVUnQvaEtibjBnanNTNE9UTldWRzNKY0NOY3p5UVAyMEQ4RHJWZmREKzNycDF4TW83TzlDb05Lb2dyeCtsYlY3L3FNYTdxWXVOcXdTVWVDV2c4PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4MDU3MDY4CWZpbGU6Q29kZXggTW9uaXRvciBUYXNrIENlbnRlci5hcHAudGFyLmd6CldpZXZXUDVSWlBwZTFIRTZrVk1lb1pPNjh6eUVjQVRZOU4xeU9yaVpsS3Foa0JURWVyc2wvV3JMMmRCa2greE9EYU16S1JKVXVsVkFMbWEweU1WekJnPT0K",
-      "url": "https://github.com/Ryuaaa/codex-monitor-hud/releases/download/task-center-v1.2.0/Codex-Monitor-Task-Center-macOS-universal-1.2.0.app.tar.gz"
+      "url": "https://api.github.com/repos/Ryuaaa/codex-monitor-hud/releases/assets/536073208"
     },
     "darwin-x86_64": {
       "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTaVVZZ2pLWWQ2ZW01UExVUnQvaEtibjBnanNTNE9UTldWRzNKY0NOY3p5UVAyMEQ4RHJWZmREKzNycDF4TW83TzlDb05Lb2dyeCtsYlY3L3FNYTdxWXVOcXdTVWVDV2c4PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4MDU3MDY4CWZpbGU6Q29kZXggTW9uaXRvciBUYXNrIENlbnRlci5hcHAudGFyLmd6CldpZXZXUDVSWlBwZTFIRTZrVk1lb1pPNjh6eUVjQVRZOU4xeU9yaVpsS3Foa0JURWVyc2wvV3JMMmRCa2greE9EYU16S1JKVXVsVkFMbWEweU1WekJnPT0K",
-      "url": "https://github.com/Ryuaaa/codex-monitor-hud/releases/download/task-center-v1.2.0/Codex-Monitor-Task-Center-macOS-universal-1.2.0.app.tar.gz"
+      "url": "https://api.github.com/repos/Ryuaaa/codex-monitor-hud/releases/assets/536073208"
     }
   }
 }
