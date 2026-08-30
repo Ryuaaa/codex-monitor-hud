@@ -73,6 +73,9 @@ export function parseTask(source: RawTaskSource): { task?: TaskRecord; issue?: T
       privacy,
       codexAccess,
       sourceRefs: list(data.source_refs),
+      tags: list(data.tags),
+      parentId: text(data.parent_id),
+      blockedByIds: list(data.blocked_by_ids),
       relatedIds: list(data.related_ids),
       fileToken: source.fileToken,
     },
@@ -89,6 +92,7 @@ export function deriveAttention(task: TaskRecord, now = new Date()): string[] {
   }
   const explainableText = `${task.workflowStatus ?? ""} ${task.nextAction ?? ""}`.toLowerCase();
   if (blockedTerms.some((term) => explainableText.includes(term.toLowerCase()))) hints.push("需要关注");
+  if (task.blockedByIds.length) hints.push("被阻塞");
   if (task.status === "unknown") hints.push("状态待核验");
   return [...new Set(hints)];
 }

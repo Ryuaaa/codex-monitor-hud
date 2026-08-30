@@ -11,10 +11,16 @@ import type {
   NewTaskDraft,
   ProjectMapping,
   RawTaskSource,
+  SavedTaskFilter,
+  SavedTaskFilterDraft,
   TaskEvent,
   TaskFieldEditPreview,
   TaskFieldEditReceipt,
   TaskFieldEditRequest,
+  TaskNoteKind,
+  TaskNotePreview,
+  TaskNoteReceipt,
+  TaskCenterUpdateInfo,
 } from "../domain/types";
 
 export interface TaskDataProvider {
@@ -25,12 +31,19 @@ export interface TaskDataProvider {
   loadCodexThreadList(cursor?: string): Promise<CodexThreadListPage>;
   loadCodexThreadPage(threadId: string, cursor?: string): Promise<CodexThreadPage>;
   initializeLocalTaskLibrary(): Promise<void>;
+  loadSavedFilters(): Promise<SavedTaskFilter[]>;
+  saveTaskFilter(draft: SavedTaskFilterDraft): Promise<SavedTaskFilter>;
+  deleteTaskFilter(id: string): Promise<void>;
   previewPriorityEdit(fileToken: string, newPriority: "high" | "medium" | "low"): Promise<PriorityEditPreview>;
   applyPriorityEdit(request: PriorityEditRequest): Promise<PriorityEditReceipt>;
   previewTaskFieldEdit(fileToken: string, field: TaskFieldEditRequest["field"], newValue: unknown): Promise<TaskFieldEditPreview>;
   applyTaskFieldEdit(request: TaskFieldEditRequest): Promise<TaskFieldEditReceipt>;
   previewCreateTask(draft: NewTaskDraft): Promise<CreateTaskPreview>;
   applyCreateTask(preview: CreateTaskPreview): Promise<CreateTaskReceipt>;
+  previewTaskNote(fileToken: string, kind: TaskNoteKind, text: string, author: string): Promise<TaskNotePreview>;
+  applyTaskNote(preview: TaskNotePreview): Promise<TaskNoteReceipt>;
+  checkTaskCenterUpdate(): Promise<TaskCenterUpdateInfo>;
+  installTaskCenterUpdate(expectedVersion: string): Promise<void>;
 }
 
 const isTauri = () => typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -84,6 +97,8 @@ const demoCodexList = (cursor?: string): CodexThreadListPage => ({
   observedAt: 1787616060,
 });
 
+let demoSavedFilters: SavedTaskFilter[] = [];
+
 export const taskDataProvider: TaskDataProvider = {
   async loadMetadata() {
     return isTauri() ? invoke<RawTaskSource[]>("load_task_metadata") : fixtureSources;
@@ -111,6 +126,22 @@ export const taskDataProvider: TaskDataProvider = {
     if (!isTauri()) return;
     return invoke<void>("initialize_local_task_library");
   },
+  async loadSavedFilters() {
+    return isTauri() ? invoke<SavedTaskFilter[]>("load_saved_task_filters") : [...demoSavedFilters];
+  },
+  async saveTaskFilter(draft) {
+    if (isTauri()) return invoke<SavedTaskFilter>("save_task_filter", { draft });
+    const saved: SavedTaskFilter = {
+      ...draft,
+      id: draft.id ?? `filter-demo-${demoSavedFilters.length + 1}`,
+    };
+    demoSavedFilters = [...demoSavedFilters.filter((item) => item.id !== saved.id), saved];
+    return saved;
+  },
+  async deleteTaskFilter(id) {
+    if (isTauri()) return invoke<void>("delete_task_filter", { id });
+    demoSavedFilters = demoSavedFilters.filter((item) => item.id !== id);
+  },
   async previewPriorityEdit(fileToken, newPriority) {
     if (!isTauri()) throw new Error("浏览器合成预览不执行文件写入");
     return invoke<PriorityEditPreview>("preview_priority_edit", { fileToken, newPriority });
@@ -134,5 +165,36 @@ export const taskDataProvider: TaskDataProvider = {
   async applyCreateTask(preview) {
     if (!isTauri()) throw new Error("浏览器合成预览不执行文件写入");
     return invoke<CreateTaskReceipt>("apply_create_task", { request: { preview, confirmed: true } });
+  },
+  async previewTaskNote(fileToken, kind, text, author) {
+    if (!isTauri()) return {
+      fileToken,
+      taskId: "tsk_demo_governance",
+      kind,
+      text,
+      author,
+      occurredAt: new Date().toISOString(),
+      expectedTaskHash: "demo-task-hash",
+      expectedEventHash: "demo-event-hash",
+    };
+    return invoke<TaskNotePreview>("preview_task_note", { fileToken, kind, text, author });
+  },
+  async applyTaskNote(preview) {
+    if (!isTauri()) return {
+      taskId: preview.taskId,
+      eventId: "evt_demo_note",
+      eventFile: preview.occurredAt.slice(0, 7) + ".jsonl",
+      verified: true,
+    };
+    return invoke<TaskNoteReceipt>("apply_task_note", { request: { ...preview, confirmed: true } });
+  },
+  async checkTaskCenterUpdate() {
+    return isTauri()
+      ? invoke<TaskCenterUpdateInfo>("check_task_center_update")
+      : { currentVersion: "1.2.0", available: false };
+  },
+  async installTaskCenterUpdate(expectedVersion) {
+    if (!isTauri()) throw new Error("浏览器合成预览不安装更新");
+    return invoke<void>("install_task_center_update", { expectedVersion });
   },
 };

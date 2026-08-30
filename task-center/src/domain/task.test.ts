@@ -29,6 +29,27 @@ describe("正式任务契约", () => {
     expect(deriveAttention(result.task!, new Date("2026-08-23T00:00:00+08:00"))).toEqual(["即将到期", "需要关注"]);
     expect(deriveAttention(result.task!, new Date("2026-08-26T00:00:00+08:00"))).toContain("已逾期");
   });
+
+  it("读取标签、父任务和阻塞关系，并由阻塞关系派生提示", () => {
+    const result = parseTask(source([
+      "task_id: tsk_child",
+      "title: 子任务",
+      "task_status: doing",
+      "privacy: general",
+      "codex_access: proposal_only",
+      "tags: [\"接口\", \"P1\"]",
+      "parent_id: tsk_parent",
+      "blocked_by_ids: [\"tsk_blocker\"]",
+      "related_ids: [\"tsk_related\"]",
+    ].join("\n")));
+    expect(result.task).toMatchObject({
+      tags: ["接口", "P1"],
+      parentId: "tsk_parent",
+      blockedByIds: ["tsk_blocker"],
+      relatedIds: ["tsk_related"],
+    });
+    expect(deriveAttention(result.task!)).toContain("被阻塞");
+  });
 });
 
 describe("Codex 运行状态降级", () => {

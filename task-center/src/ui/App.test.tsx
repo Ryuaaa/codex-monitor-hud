@@ -5,6 +5,15 @@ import type { TaskDataProvider } from "../data/provider";
 import { App } from "./App";
 
 function provider(): TaskDataProvider {
+  const savedFilters = new Map<string, {
+    id: string;
+    name: string;
+    projectId: string;
+    status: "all" | "todo" | "doing" | "long_term" | "done" | "cancelled" | "unknown";
+    tag: string;
+    showArchived: boolean;
+    view: "board" | "list";
+  }>();
   return {
     loadMetadata: vi.fn().mockResolvedValue(fixtureSources),
     loadProjectMappings: vi.fn().mockResolvedValue(fixtureProjects),
@@ -56,6 +65,16 @@ function provider(): TaskDataProvider {
       observedAt: 201,
     })),
     initializeLocalTaskLibrary: vi.fn().mockResolvedValue(undefined),
+    loadSavedFilters: vi.fn().mockImplementation(() => Promise.resolve([...savedFilters.values()])),
+    saveTaskFilter: vi.fn().mockImplementation((draft) => {
+      const saved = { ...draft, id: draft.id ?? `filter-${savedFilters.size + 1}` };
+      savedFilters.set(saved.id, saved);
+      return Promise.resolve(saved);
+    }),
+    deleteTaskFilter: vi.fn().mockImplementation((id) => {
+      savedFilters.delete(id);
+      return Promise.resolve();
+    }),
     previewPriorityEdit: vi.fn().mockImplementation((fileToken, newPriority) => Promise.resolve({
       fileToken,
       taskId: "tsk_demo_governance",
@@ -108,6 +127,24 @@ function provider(): TaskDataProvider {
       eventFile: "2026-08.jsonl",
       verified: true,
     })),
+    previewTaskNote: vi.fn().mockImplementation((fileToken, kind, text, author) => Promise.resolve({
+      fileToken,
+      taskId: "tsk_demo_governance",
+      kind,
+      text,
+      author,
+      occurredAt: "2026-08-24T08:00:00Z",
+      expectedTaskHash: "note-task-synthetic-sha256",
+      expectedEventHash: "note-event-synthetic-sha256",
+    })),
+    applyTaskNote: vi.fn().mockImplementation((preview) => Promise.resolve({
+      taskId: preview.taskId,
+      eventId: "evt_synthetic_note",
+      eventFile: "2026-08.jsonl",
+      verified: true,
+    })),
+    checkTaskCenterUpdate: vi.fn().mockResolvedValue({ currentVersion: "1.2.0", available: false }),
+    installTaskCenterUpdate: vi.fn().mockResolvedValue(undefined),
   };
 }
 
@@ -121,6 +158,18 @@ async function enterManagedTasks() {
 }
 
 describe("任务中心核心流程", () => {
+  it("每天至多自动检查一次，并在安装前重新绑定用户看到的版本", async () => {
+    localStorage.setItem("codex-monitor-task-center.last-update-check", String(Date.now()));
+    const mock = provider();
+    vi.mocked(mock.checkTaskCenterUpdate).mockResolvedValue({ currentVersion: "1.2.0", available: true, version: "1.3.0" });
+    render(<App provider={mock} />);
+    expect(mock.checkTaskCenterUpdate).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "检查更新" }));
+    expect(await screen.findByRole("status")).toHaveTextContent("发现任务中心 1.3.0");
+    fireEvent.click(screen.getByRole("button", { name: "安装 1.3.0" }));
+    await waitFor(() => expect(mock.installTaskCenterUpdate).toHaveBeenCalledWith("1.3.0"));
+  });
+
   it("默认自动读取官方 Codex 任务且不访问个人任务目录", async () => {
     const mock = provider();
     render(<App provider={mock} />);
@@ -265,7 +314,89 @@ describe("任务中心核心流程", () => {
     const card = await screen.findByRole("button", { name: /统一个人 AI 规则与能力边界/ });
     fireEvent.click(card);
     expect(await screen.findByRole("alert")).toHaveTextContent("该任务详情读取失败");
+    expect(screen.getAllByText("完成 Mac 键盘决策级研究").length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("标签筛选与保存方案只持久化结构条件，不保存搜索文字", async () => {
+    const mock = provider();
+    render(<App provider={mock} />);
+    await enterManagedTasks();
+    fireEvent.change(screen.getByPlaceholderText("标题、领域、负责人…"), { target: { value: "键盘" } });
+    fireEvent.change(screen.getByLabelText("标签"), { target: { value: "采购研究" } });
     expect(screen.getByText("完成 Mac 键盘决策级研究")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "保存当前筛选" }));
+    fireEvent.change(screen.getByLabelText("筛选方案名称"), { target: { value: "采购任务" } });
+    fireEvent.click(screen.getByRole("button", { name: "确认保存" }));
+    await waitFor(() => expect(mock.saveTaskFilter).toHaveBeenCalledTimes(1));
+    const savedDraft = vi.mocked(mock.saveTaskFilter).mock.calls[0][0];
+    expect(savedDraft).toMatchObject({ name: "采购任务", tag: "采购研究", status: "all", view: "board" });
+    expect(savedDraft).not.toHaveProperty("query");
+    expect(screen.getByLabelText("已保存筛选")).toHaveValue("filter-1");
+
+    fireEvent.change(screen.getByLabelText("标签"), { target: { value: "" } });
+    fireEvent.change(screen.getByLabelText("已保存筛选"), { target: { value: "filter-1" } });
+    expect(screen.getByLabelText("标签")).toHaveValue("采购研究");
+    fireEvent.click(screen.getByRole("button", { name: "删除方案" }));
+    await waitFor(() => expect(mock.deleteTaskFilter).toHaveBeenCalledWith("filter-1"));
+  });
+
+  it("详情显示正向和反向任务关系，并可跳转到已读取任务", async () => {
+    render(<App provider={provider()} />);
+    await enterManagedTasks();
+    fireEvent.click(await screen.findByRole("button", { name: /统一个人 AI 规则与能力边界/ }));
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByText("子任务")).toBeInTheDocument();
+    expect(within(dialog).getByText("阻塞当前任务")).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: /完成 Mac 键盘决策级研究/ }));
+    await waitFor(() => expect(within(screen.getByRole("dialog")).getByRole("heading", { level: 2, name: "完成 Mac 键盘决策级研究" })).toBeInTheDocument());
+    expect(within(screen.getByRole("dialog")).getByText("父任务")).toBeInTheDocument();
+  });
+
+  it("评论预览可取消且不写入，明确确认后只追加并重新读取时间线", async () => {
+    const mock = provider();
+    vi.mocked(mock.loadEvents)
+      .mockResolvedValueOnce(fixtureEvents)
+      .mockResolvedValueOnce([...fixtureEvents, {
+        id: "evt_synthetic_note",
+        taskId: "tsk_demo_governance",
+        eventType: "comment_added",
+        occurredAt: "2026-08-24T08:00:00Z",
+        message: "需要保留的评论",
+        author: "本人",
+      }]);
+    render(<App provider={mock} />);
+    await enterManagedTasks();
+    fireEvent.click(await screen.findByRole("button", { name: /统一个人 AI 规则与能力边界/ }));
+    await screen.findByText("这是一条合成评论。");
+    fireEvent.change(screen.getByLabelText("记录内容"), { target: { value: "需要保留的评论" } });
+    fireEvent.click(screen.getByRole("button", { name: "生成追加预览" }));
+    expect(await screen.findByRole("region", { name: "记录追加预览" })).toHaveTextContent("需要保留的评论");
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    expect(mock.applyTaskNote).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByLabelText("记录内容"), { target: { value: "需要保留的评论" } });
+    fireEvent.click(screen.getByRole("button", { name: "生成追加预览" }));
+    fireEvent.click(await screen.findByRole("button", { name: "确认追加" }));
+    expect(await screen.findByRole("status")).toHaveTextContent("记录已追加并回读");
+    expect(mock.applyTaskNote).toHaveBeenCalledWith(expect.objectContaining({
+      kind: "comment",
+      text: "需要保留的评论",
+      expectedTaskHash: "note-task-synthetic-sha256",
+      expectedEventHash: "note-event-synthetic-sha256",
+    }));
+    expect(screen.getByText("需要保留的评论")).toBeInTheDocument();
+  });
+
+  it("评论事件并发冲突时不覆盖且保留草稿", async () => {
+    const mock = provider();
+    vi.mocked(mock.applyTaskNote).mockRejectedValue({ code: "event_conflict", message: "事件历史已变化" });
+    render(<App provider={mock} />);
+    await enterManagedTasks();
+    fireEvent.click(await screen.findByRole("button", { name: /统一个人 AI 规则与能力边界/ }));
+    fireEvent.change(screen.getByLabelText("记录内容"), { target: { value: "冲突后仍保留" } });
+    fireEvent.click(screen.getByRole("button", { name: "生成追加预览" }));
+    fireEvent.click(await screen.findByRole("button", { name: "确认追加" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("记录草稿仍保留");
+    expect(screen.getByLabelText("记录内容")).toHaveValue("冲突后仍保留");
   });
 
   it("取消写入预览不会调用确认写接口", async () => {

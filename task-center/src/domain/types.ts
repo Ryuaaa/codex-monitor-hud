@@ -25,6 +25,9 @@ export interface TaskRecord {
   privacy: string;
   codexAccess: string;
   sourceRefs: string[];
+  tags: string[];
+  parentId?: string;
+  blockedByIds: string[];
   relatedIds: string[];
   fileToken: string;
 }
@@ -42,6 +45,8 @@ export interface TaskEvent {
   occurredAt: string;
   previousTaskStatus?: string | null;
   newTaskStatus?: string | null;
+  message?: string;
+  author?: string;
 }
 
 export interface ProjectMapping {
@@ -81,7 +86,17 @@ export interface TaskWriteFailure {
   message: string;
 }
 
-export type WritableTaskField = "title" | "task_status" | "priority" | "deadline" | "assignee" | "related_ids" | "record_status";
+export type WritableTaskField =
+  | "title"
+  | "task_status"
+  | "priority"
+  | "deadline"
+  | "assignee"
+  | "tags"
+  | "parent_id"
+  | "blocked_by_ids"
+  | "related_ids"
+  | "record_status";
 
 export interface TaskFieldEditPreview {
   fileToken: string;
@@ -119,6 +134,9 @@ export interface NewTaskDraft {
   priority: "high" | "medium" | "low";
   assignee: string;
   deadline: string;
+  tags: string[];
+  parentId: string;
+  blockedByIds: string[];
   relatedIds: string[];
 }
 
@@ -138,6 +156,56 @@ export interface CreateTaskReceipt {
   eventId: string;
   eventFile: string;
   verified: boolean;
+}
+
+export type TaskNoteKind = "comment" | "activity";
+
+export interface TaskNotePreview {
+  fileToken: string;
+  taskId: string;
+  kind: TaskNoteKind;
+  text: string;
+  author: string;
+  occurredAt: string;
+  expectedTaskHash: string;
+  expectedEventHash: string;
+}
+
+export interface TaskNoteRequest extends TaskNotePreview {
+  confirmed: boolean;
+}
+
+export interface TaskNoteReceipt {
+  taskId: string;
+  eventId: string;
+  eventFile: string;
+  verified: boolean;
+}
+
+export interface TaskCenterUpdateInfo {
+  currentVersion: string;
+  available: boolean;
+  version?: string;
+}
+
+export interface SavedTaskFilter {
+  id: string;
+  name: string;
+  projectId: string;
+  status: TaskStatus | "all";
+  tag: string;
+  showArchived: boolean;
+  view: "board" | "list";
+}
+
+export interface SavedTaskFilterDraft {
+  id?: string;
+  name: string;
+  projectId: string;
+  status: TaskStatus | "all";
+  tag: string;
+  showArchived: boolean;
+  view: "board" | "list";
 }
 
 export type RuntimeDisplayState =

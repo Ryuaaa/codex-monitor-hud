@@ -18,3 +18,4 @@ task-center/src-tauri/gen/
 task-center/*.tsbuildinfo
 task-center/vite.config.js
 task-center/vite.config.d.ts
+task-center/release-artifacts/

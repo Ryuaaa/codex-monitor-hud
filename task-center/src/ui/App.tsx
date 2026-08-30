@@ -12,6 +12,8 @@ import type {
   CreateTaskReceipt,
   NewTaskDraft,
   ProjectMapping,
+  SavedTaskFilter,
+  SavedTaskFilterDraft,
   TaskEvent,
   TaskLoadIssue,
   TaskPriority,
@@ -20,6 +22,10 @@ import type {
   TaskFieldEditPreview,
   TaskFieldEditReceipt,
   TaskWriteFailure,
+  TaskNoteKind,
+  TaskNotePreview,
+  TaskNoteReceipt,
+  TaskCenterUpdateInfo,
   WritableTaskField,
 } from "../domain/types";
 import { taskDataProvider, type TaskDataProvider } from "../data/provider";
@@ -34,6 +40,8 @@ const statusLabels: Record<TaskStatus, string> = {
 };
 const columns: TaskStatus[] = ["todo", "doing", "long_term", "done", "cancelled", "unknown"];
 const priorityLabels = { high: "高", medium: "中", low: "低", unknown: "未知" } as const;
+const updateCheckStorageKey = "codex-monitor-task-center.last-update-check";
+const updateCheckIntervalMs = 24 * 60 * 60 * 1000;
 
 interface CodexHistoryView {
   page?: CodexThreadPage;
@@ -55,6 +63,13 @@ export function App({ provider = taskDataProvider }: { provider?: TaskDataProvid
   const [query, setQuery] = useState("");
   const [codexQuery, setCodexQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<TaskStatus | "all">("all");
+  const [tagFilter, setTagFilter] = useState("");
+  const [savedFilters, setSavedFilters] = useState<SavedTaskFilter[]>([]);
+  const [selectedSavedFilterId, setSelectedSavedFilterId] = useState("");
+  const [filterNameDraft, setFilterNameDraft] = useState("");
+  const [filterEditorOpen, setFilterEditorOpen] = useState(false);
+  const [filterSaving, setFilterSaving] = useState(false);
+  const [filterFailure, setFilterFailure] = useState<string>();
   const [compact, setCompact] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
   const [selected, setSelected] = useState<TaskRecord>();
@@ -77,10 +92,18 @@ export function App({ provider = taskDataProvider }: { provider?: TaskDataProvid
   const [fieldDraft, setFieldDraft] = useState<{ field: WritableTaskField; rawValue: string }>();
   const [fieldPreview, setFieldPreview] = useState<TaskFieldEditPreview>();
   const [fieldReceipt, setFieldReceipt] = useState<TaskFieldEditReceipt>();
+  const [noteDraft, setNoteDraft] = useState<{ kind: TaskNoteKind; text: string; author: string }>({ kind: "comment", text: "", author: "本人" });
+  const [notePreview, setNotePreview] = useState<TaskNotePreview>();
+  const [noteReceipt, setNoteReceipt] = useState<TaskNoteReceipt>();
+  const [noteFailure, setNoteFailure] = useState<TaskWriteFailure>();
+  const [updateInfo, setUpdateInfo] = useState<TaskCenterUpdateInfo>();
+  const [updateBusy, setUpdateBusy] = useState(false);
+  const [updateMessage, setUpdateMessage] = useState<string>();
+  const [updateFailed, setUpdateFailed] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [createDraft, setCreateDraft] = useState<NewTaskDraft>({
     title: "", domain: "task_hub", taskStatus: "todo", priority: "medium",
-    assignee: "本人", deadline: "", relatedIds: [],
+    assignee: "本人", deadline: "", tags: [], parentId: "", blockedByIds: [], relatedIds: [],
   });
   const [createPreview, setCreatePreview] = useState<CreateTaskPreview>();
   const [createReceipt, setCreateReceipt] = useState<CreateTaskReceipt>();
@@ -93,6 +116,11 @@ export function App({ provider = taskDataProvider }: { provider?: TaskDataProvid
 
   useEffect(() => {
     void loadCodexThreads(undefined, true);
+    let lastCheck = 0;
+    try { lastCheck = Number(localStorage.getItem(updateCheckStorageKey) ?? "0"); } catch { /* 本地偏好不可用时仍允许手动检查 */ }
+    if (!Number.isFinite(lastCheck) || Date.now() - lastCheck >= updateCheckIntervalMs) {
+      void checkForUpdate(false);
+    }
     return () => {
       codexListGeneration.current += 1;
       codexHistoryGeneration.current += 1;
@@ -113,11 +141,15 @@ export function App({ provider = taskDataProvider }: { provider?: TaskDataProvid
       const projectMatch = selectedProject === "all" || task.projectId === selectedProject || task.domain === selectedProject;
       const statusMatch = statusFilter === "all" || task.status === statusFilter;
       const archiveMatch = showArchived || task.recordStatus !== "archived";
-      const searchMatch = !normalized || [task.title, task.domain, task.category, task.assignee, task.workflowStatus]
+      const tagMatch = !tagFilter || task.tags.includes(tagFilter);
+      const searchMatch = !normalized || [task.title, task.domain, task.category, task.assignee, task.workflowStatus, ...task.tags]
         .filter(Boolean).join(" ").toLowerCase().includes(normalized);
-      return projectMatch && statusMatch && archiveMatch && searchMatch;
+      return projectMatch && statusMatch && archiveMatch && tagMatch && searchMatch;
     });
-  }, [tasks, query, selectedProject, statusFilter, showArchived]);
+  }, [tasks, query, selectedProject, statusFilter, tagFilter, showArchived]);
+
+  const allTags = useMemo(() => [...new Set(tasks.flatMap((task) => task.tags))]
+    .sort((left, right) => left.localeCompare(right, "zh-CN")), [tasks]);
 
   const filteredCodexThreads = useMemo(() => {
     const normalized = codexQuery.trim().toLowerCase();
@@ -175,6 +207,13 @@ export function App({ provider = taskDataProvider }: { provider?: TaskDataProvid
       setTasks(parsed.flatMap((result) => (result.task ? [result.task] : [])));
       setIssues(parsed.flatMap((result) => (result.issue ? [result.issue] : [])));
       setProjects(mappings);
+      try {
+        setSavedFilters(await provider.loadSavedFilters());
+        setFilterFailure(undefined);
+      } catch {
+        setSavedFilters([]);
+        setFilterFailure("已保存筛选暂不可用；任务数据不受影响。");
+      }
       setManagedLoadState("ready");
     } catch {
       if (generation !== managedLoadGeneration.current) return;
@@ -196,6 +235,63 @@ export function App({ provider = taskDataProvider }: { provider?: TaskDataProvid
     }
   }
 
+  function clearSavedFilterSelection() {
+    setSelectedSavedFilterId("");
+  }
+
+  function applySavedFilter(id: string) {
+    setSelectedSavedFilterId(id);
+    const filter = savedFilters.find((item) => item.id === id);
+    if (!filter) return;
+    setSelectedProject(filter.projectId);
+    setStatusFilter(filter.status);
+    setTagFilter(filter.tag);
+    setShowArchived(filter.showArchived);
+    setView(filter.view);
+    setFilterFailure(undefined);
+  }
+
+  async function saveCurrentFilter() {
+    const name = filterNameDraft.trim();
+    if (!name) return;
+    const draft: SavedTaskFilterDraft = {
+      name,
+      projectId: selectedProject,
+      status: statusFilter,
+      tag: tagFilter,
+      showArchived,
+      view,
+    };
+    setFilterSaving(true);
+    setFilterFailure(undefined);
+    try {
+      const saved = await provider.saveTaskFilter(draft);
+      setSavedFilters((current) => [...current.filter((item) => item.id !== saved.id), saved]);
+      setSelectedSavedFilterId(saved.id);
+      setFilterNameDraft("");
+      setFilterEditorOpen(false);
+    } catch {
+      setFilterFailure("筛选方案保存失败；当前筛选仍保留。");
+    } finally {
+      setFilterSaving(false);
+    }
+  }
+
+  async function deleteSelectedFilter() {
+    if (!selectedSavedFilterId) return;
+    setFilterSaving(true);
+    setFilterFailure(undefined);
+    try {
+      await provider.deleteTaskFilter(selectedSavedFilterId);
+      setSavedFilters((current) => current.filter((item) => item.id !== selectedSavedFilterId));
+      setSelectedSavedFilterId("");
+    } catch {
+      setFilterFailure("筛选方案删除失败；任务数据不受影响。");
+    } finally {
+      setFilterSaving(false);
+    }
+  }
+
   function openCodexThread(thread: CodexThreadSummary) {
     codexHistoryGeneration.current += 1;
     setCodexHistory({});
@@ -206,6 +302,7 @@ export function App({ provider = taskDataProvider }: { provider?: TaskDataProvid
     taskDetailGeneration.current += 1;
     codexHistoryGeneration.current += 1;
     resetWriteFlow();
+    resetNoteFlow();
     setCodexHistory({});
     setSelected(undefined);
     setSelectedCodex(undefined);
@@ -222,6 +319,7 @@ export function App({ provider = taskDataProvider }: { provider?: TaskDataProvid
     setLoadError(undefined);
     setCodexHistory({});
     resetWriteFlow();
+    resetNoteFlow();
     try {
       const [nextBody, nextEvents] = await Promise.all([
         provider.loadBody(task.fileToken),
@@ -294,6 +392,13 @@ export function App({ provider = taskDataProvider }: { provider?: TaskDataProvid
     setFieldDraft(undefined);
     setFieldPreview(undefined);
     setFieldReceipt(undefined);
+  }
+
+  function resetNoteFlow() {
+    setNoteDraft({ kind: "comment", text: "", author: "本人" });
+    setNotePreview(undefined);
+    setNoteReceipt(undefined);
+    setNoteFailure(undefined);
   }
 
   function normalizeWriteError(error: unknown): TaskWriteFailure {
@@ -369,12 +474,15 @@ export function App({ provider = taskDataProvider }: { provider?: TaskDataProvid
     if (field === "priority") return task.priority === "unknown" ? "medium" : task.priority;
     if (field === "deadline") return task.deadline ?? "";
     if (field === "assignee") return task.assignee ?? "";
+    if (field === "tags") return task.tags.join(", ");
+    if (field === "parent_id") return task.parentId ?? "";
+    if (field === "blocked_by_ids") return task.blockedByIds.join(", ");
     if (field === "related_ids") return task.relatedIds.join(", ");
     return task.recordStatus === "unknown" ? "current" : task.recordStatus;
   }
 
   function fieldValue(draft: { field: WritableTaskField; rawValue: string }): unknown {
-    if (draft.field === "related_ids") {
+    if (["tags", "blocked_by_ids", "related_ids"].includes(draft.field)) {
       return draft.rawValue.split(",").map((value) => value.trim()).filter(Boolean);
     }
     return draft.rawValue.trim();
@@ -406,6 +514,9 @@ export function App({ provider = taskDataProvider }: { provider?: TaskDataProvid
     if (receipt.field === "priority") return { ...task, priority: value as TaskPriority };
     if (receipt.field === "deadline") return { ...task, deadline: String(value) || undefined };
     if (receipt.field === "assignee") return { ...task, assignee: String(value) || undefined };
+    if (receipt.field === "tags") return { ...task, tags: value as string[] };
+    if (receipt.field === "parent_id") return { ...task, parentId: String(value) || undefined };
+    if (receipt.field === "blocked_by_ids") return { ...task, blockedByIds: value as string[] };
     if (receipt.field === "related_ids") return { ...task, relatedIds: value as string[] };
     return { ...task, recordStatus: value as TaskRecord["recordStatus"] };
   }
@@ -439,12 +550,58 @@ export function App({ provider = taskDataProvider }: { provider?: TaskDataProvid
     }
   }
 
+  async function previewNote() {
+    if (!selected || !noteDraft.text.trim() || !noteDraft.author.trim()) return;
+    setWriting(true);
+    setNoteFailure(undefined);
+    setNoteReceipt(undefined);
+    try {
+      setNotePreview(await provider.previewTaskNote(
+        selected.fileToken,
+        noteDraft.kind,
+        noteDraft.text,
+        noteDraft.author,
+      ));
+    } catch (error) {
+      setNotePreview(undefined);
+      setNoteFailure(normalizeWriteError(error));
+    } finally {
+      setWriting(false);
+    }
+  }
+
+  async function confirmNote() {
+    if (!selected || !notePreview) return;
+    setWriting(true);
+    setNoteFailure(undefined);
+    try {
+      const receipt = await provider.applyTaskNote(notePreview);
+      setEvents(await provider.loadEvents(selected.id));
+      setNoteReceipt(receipt);
+      setNotePreview(undefined);
+      setNoteDraft((current) => ({ ...current, text: "" }));
+    } catch (error) {
+      const failure = normalizeWriteError(error);
+      setNoteFailure(failure);
+      setNotePreview(undefined);
+      if (failure.code === "conflict") await refreshAfterConflict(selected.id);
+      if (failure.code === "event_conflict") {
+        try { setEvents(await provider.loadEvents(selected.id)); } catch { /* 保留原错误 */ }
+      }
+    } finally {
+      setWriting(false);
+    }
+  }
+
   function resetCreateFlow() {
     setCreateOpen(false);
     setCreatePreview(undefined);
     setCreateReceipt(undefined);
     setCreateFailure(undefined);
-    setCreateDraft({ title: "", domain: "task_hub", taskStatus: "todo", priority: "medium", assignee: "本人", deadline: "", relatedIds: [] });
+    setCreateDraft({
+      title: "", domain: "task_hub", taskStatus: "todo", priority: "medium",
+      assignee: "本人", deadline: "", tags: [], parentId: "", blockedByIds: [], relatedIds: [],
+    });
   }
 
   async function previewCreate() {
@@ -481,21 +638,56 @@ export function App({ provider = taskDataProvider }: { provider?: TaskDataProvid
     }
   }
 
+  async function checkForUpdate(manual: boolean) {
+    setUpdateBusy(true);
+    setUpdateFailed(false);
+    if (manual) setUpdateMessage("正在检查任务中心更新…");
+    try {
+      const info = await provider.checkTaskCenterUpdate();
+      setUpdateInfo(info);
+      try { localStorage.setItem(updateCheckStorageKey, String(Date.now())); } catch { /* 不影响更新检查 */ }
+      if (info.available && info.version) setUpdateMessage(`发现任务中心 ${info.version}，已通过独立签名通道提供。`);
+      else setUpdateMessage(manual ? `当前已是最新版 ${info.currentVersion}。` : undefined);
+    } catch {
+      setUpdateFailed(true);
+      setUpdateMessage(manual ? "暂时无法检查更新；当前版本不受影响。" : undefined);
+    } finally {
+      setUpdateBusy(false);
+    }
+  }
+
+  async function installUpdate() {
+    if (!updateInfo?.available || !updateInfo.version) return;
+    setUpdateBusy(true);
+    setUpdateFailed(false);
+    setUpdateMessage(`正在下载并安全验证 ${updateInfo.version}…`);
+    try {
+      await provider.installTaskCenterUpdate(updateInfo.version);
+      setUpdateMessage("更新已安装，正在重新打开任务中心…");
+    } catch {
+      setUpdateFailed(true);
+      setUpdateMessage("更新未安装；当前版本保持不变。请稍后重试。");
+    } finally {
+      setUpdateBusy(false);
+    }
+  }
+
   return (
     <div className={compact ? "app compact" : "app"}>
       <header className="topbar">
         <div>
           <p className="eyebrow">CODEX MONITOR</p>
-          <h1>任务中心 <span>{section === "codex" ? "官方只读" : "安全写入预览"}</span></h1>
+          <h1>任务中心 <span>{section === "codex" ? "官方只读" : "安全写入"}</span></h1>
         </div>
         <div className="top-actions" aria-label="视图设置">
           {section === "codex" ? <button disabled={codexListLoading} onClick={() => loadCodexThreads(undefined, true)}>{codexListLoading ? "读取中…" : "刷新"}</button> : <>
             {managedLoadState === "ready" && <button className="create-entry" onClick={() => { resetCreateFlow(); setCreateOpen(true); }}>新建任务</button>}
-            <button className={view === "board" ? "active" : ""} onClick={() => setView("board")}>看板</button>
-            <button className={view === "list" ? "active" : ""} onClick={() => setView("list")}>列表</button>
-            <button aria-pressed={showArchived} onClick={() => setShowArchived((value) => !value)}>归档</button>
+            <button className={view === "board" ? "active" : ""} onClick={() => { setView("board"); clearSavedFilterSelection(); }}>看板</button>
+            <button className={view === "list" ? "active" : ""} onClick={() => { setView("list"); clearSavedFilterSelection(); }}>列表</button>
+            <button aria-pressed={showArchived} onClick={() => { setShowArchived((value) => !value); clearSavedFilterSelection(); }}>归档</button>
           </>}
           <button aria-pressed={compact} onClick={() => setCompact((value) => !value)}>紧凑</button>
+          <button className={updateInfo?.available ? "update-ready" : ""} disabled={updateBusy} onClick={() => updateInfo?.available ? installUpdate() : checkForUpdate(true)}>{updateBusy ? "更新处理中…" : updateInfo?.available && updateInfo.version ? `安装 ${updateInfo.version}` : "检查更新"}</button>
         </div>
       </header>
 
@@ -510,11 +702,11 @@ export function App({ provider = taskDataProvider }: { provider?: TaskDataProvid
             </button>
           </nav>
           {section === "managed" && <div className="project-nav" aria-label="项目">
-            <button className={selectedProject === "all" ? "project active" : "project"} onClick={() => setSelectedProject("all")}>
+            <button className={selectedProject === "all" ? "project active" : "project"} onClick={() => { setSelectedProject("all"); clearSavedFilterSelection(); }}>
               <span>全项目</span><strong>{tasks.length}</strong>
             </button>
             {projectOptions.map((project) => (
-              <button key={project.id} className={selectedProject === project.id ? "project active" : "project"} onClick={() => setSelectedProject(project.id)}>
+              <button key={project.id} className={selectedProject === project.id ? "project active" : "project"} onClick={() => { setSelectedProject(project.id); clearSavedFilterSelection(); }}>
                 <span>{project.name}<small>{project.workdirs[0] ?? "按正式领域归类"}</small></span>
                 <strong>{tasks.filter((task) => task.projectId === project.id || task.domain === project.id).length}</strong>
               </button>
@@ -527,6 +719,7 @@ export function App({ provider = taskDataProvider }: { provider?: TaskDataProvid
         </aside>
 
         <main>
+          {updateMessage && <div role={updateFailed ? "alert" : "status"} className={updateFailed ? "alert update-message" : "update-message"}>{updateMessage}</div>}
           {section === "codex" ? <CodexActivity
             threads={filteredCodexThreads}
             allThreads={codexThreads}
@@ -549,12 +742,26 @@ export function App({ provider = taskDataProvider }: { provider?: TaskDataProvid
 
               <section className="toolbar" aria-label="搜索和筛选">
                 <label className="search"><span>搜索</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="标题、领域、负责人…" /></label>
-                <label><span>状态</span><select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as TaskStatus | "all")}>
+                <label><span>状态</span><select value={statusFilter} onChange={(event) => { setStatusFilter(event.target.value as TaskStatus | "all"); clearSavedFilterSelection(); }}>
                   <option value="all">全部状态</option>
                   {columns.map((status) => <option key={status} value={status}>{statusLabels[status]}</option>)}
                 </select></label>
+                <label><span>标签</span><select value={tagFilter} onChange={(event) => { setTagFilter(event.target.value); clearSavedFilterSelection(); }}>
+                  <option value="">全部标签</option>{allTags.map((tag) => <option key={tag} value={tag}>{tag}</option>)}
+                </select></label>
+                <label><span>已保存</span><select aria-label="已保存筛选" value={selectedSavedFilterId} onChange={(event) => applySavedFilter(event.target.value)}>
+                  <option value="">选择方案</option>{savedFilters.map((filter) => <option key={filter.id} value={filter.id}>{filter.name}</option>)}
+                </select></label>
+                <div className="filter-actions"><button onClick={() => { setFilterEditorOpen((value) => !value); setFilterFailure(undefined); }}>保存当前筛选</button>{selectedSavedFilterId && <button className="danger-subtle" disabled={filterSaving} onClick={deleteSelectedFilter}>删除方案</button>}</div>
                 <div className="result-count">{filtered.length} 项</div>
               </section>
+
+              {filterEditorOpen && <section className="filter-save" aria-label="保存筛选方案">
+                <label><span>方案名称</span><input aria-label="筛选方案名称" maxLength={60} value={filterNameDraft} onChange={(event) => setFilterNameDraft(event.target.value)} placeholder="例如：高优先级的AI任务" /></label>
+                <p>保存项目、状态、标签、归档和视图；不保存搜索文字或任务内容。</p>
+                <div><button disabled={filterSaving || !filterNameDraft.trim()} onClick={saveCurrentFilter}>{filterSaving ? "保存中…" : "确认保存"}</button><button className="secondary" disabled={filterSaving} onClick={() => setFilterEditorOpen(false)}>取消</button></div>
+              </section>}
+              {filterFailure && <div role="alert" className="alert">{filterFailure}</div>}
 
               {loadError && <div role="alert" className="alert">{loadError}</div>}
               {view === "board" ? (
@@ -591,6 +798,7 @@ export function App({ provider = taskDataProvider }: { provider?: TaskDataProvid
 
       {selected && <DetailPanel
         task={selected}
+        allTasks={tasks}
         body={body}
         events={events}
         loading={loadingDetail}
@@ -602,6 +810,10 @@ export function App({ provider = taskDataProvider }: { provider?: TaskDataProvid
         fieldDraft={fieldDraft}
         fieldPreview={fieldPreview}
         fieldReceipt={fieldReceipt}
+        noteDraft={noteDraft}
+        notePreview={notePreview}
+        noteReceipt={noteReceipt}
+        noteFailure={noteFailure}
         codexHistory={codexHistory}
         onBeginPriority={() => {
           const initial = selected.priority === "unknown" ? "medium" : selected.priority;
@@ -639,6 +851,11 @@ export function App({ provider = taskDataProvider }: { provider?: TaskDataProvid
         onPreviewField={previewFieldEdit}
         onConfirmField={confirmFieldEdit}
         onCancelField={resetWriteFlow}
+        onNoteDraft={(draft) => { setNoteDraft(draft); setNotePreview(undefined); setNoteReceipt(undefined); setNoteFailure(undefined); }}
+        onPreviewNote={previewNote}
+        onConfirmNote={confirmNote}
+        onCancelNote={resetNoteFlow}
+        onOpenTask={openTask}
         onLoadCodexHistory={loadCodexHistory}
         onClose={closeDetails}
       />}
@@ -749,7 +966,7 @@ function TaskCard({ task, onOpen }: { task: TaskRecord; onOpen: () => void }) {
   const attention = deriveAttention(task);
   const threads = codexThreadIds(task);
   return <button className="task-card" onClick={onOpen}>
-    <div className="badges"><span className={`priority ${task.priority}`}>{priorityLabels[task.priority]}</span>{task.recordStatus === "archived" && <span className="archived">已归档</span>}{attention.map((hint) => <span className="attention" key={hint}>{hint}</span>)}</div>
+    <div className="badges"><span className={`priority ${task.priority}`}>{priorityLabels[task.priority]}</span>{task.recordStatus === "archived" && <span className="archived">已归档</span>}{attention.map((hint) => <span className="attention" key={hint}>{hint}</span>)}{task.tags.slice(0, 3).map((tag) => <span className="tag" key={tag}>{tag}</span>)}</div>
     <h3>{task.title}</h3>
     {task.workflowStatus && <p>{task.workflowStatus}</p>}
     <footer><span>{task.domain}</span><span>{threads.length ? `Codex × ${threads.length}` : task.assignee ?? "未分配"}</span></footer>
@@ -757,13 +974,14 @@ function TaskCard({ task, onOpen }: { task: TaskRecord; onOpen: () => void }) {
 }
 
 function DetailPanel({
-  task, body, events, loading, priorityDraft, writePreview, writeReceipt, writeFailure, writing,
-  fieldDraft, fieldPreview, fieldReceipt, codexHistory,
+  task, allTasks, body, events, loading, priorityDraft, writePreview, writeReceipt, writeFailure, writing,
+  fieldDraft, fieldPreview, fieldReceipt, noteDraft, notePreview, noteReceipt, noteFailure, codexHistory,
   onBeginPriority, onPriorityDraft, onPreviewPriority, onConfirmPriority, onCancelPriority,
   onBeginField, onFieldChange, onFieldValue, onPreviewField, onConfirmField, onCancelField,
-  onLoadCodexHistory, onClose,
+  onNoteDraft, onPreviewNote, onConfirmNote, onCancelNote, onOpenTask, onLoadCodexHistory, onClose,
 }: {
   task: TaskRecord;
+  allTasks: TaskRecord[];
   body?: string;
   events: TaskEvent[];
   loading: boolean;
@@ -775,6 +993,10 @@ function DetailPanel({
   fieldDraft?: { field: WritableTaskField; rawValue: string };
   fieldPreview?: TaskFieldEditPreview;
   fieldReceipt?: TaskFieldEditReceipt;
+  noteDraft: { kind: TaskNoteKind; text: string; author: string };
+  notePreview?: TaskNotePreview;
+  noteReceipt?: TaskNoteReceipt;
+  noteFailure?: TaskWriteFailure;
   codexHistory: Record<string, CodexHistoryView>;
   onBeginPriority: () => void;
   onPriorityDraft: (value: "high" | "medium" | "low") => void;
@@ -787,10 +1009,18 @@ function DetailPanel({
   onPreviewField: () => void;
   onConfirmField: () => void;
   onCancelField: () => void;
+  onNoteDraft: (draft: { kind: TaskNoteKind; text: string; author: string }) => void;
+  onPreviewNote: () => void;
+  onConfirmNote: () => void;
+  onCancelNote: () => void;
+  onOpenTask: (task: TaskRecord) => void;
   onLoadCodexHistory: (threadId: string, cursor?: string) => void;
   onClose: () => void;
 }) {
   const threads = codexThreadIds(task);
+  const taskById = new Map(allTasks.map((item) => [item.id, item]));
+  const children = allTasks.filter((item) => item.parentId === task.id);
+  const blocks = allTasks.filter((item) => item.blockedByIds.includes(task.id));
   useEffect(() => {
     const closeOnEscape = (event: KeyboardEvent) => event.key === "Escape" && onClose();
     window.addEventListener("keydown", closeOnEscape);
@@ -800,9 +1030,10 @@ function DetailPanel({
     <aside className="detail" role="dialog" aria-modal="true" aria-labelledby="detail-title">
       <div className="detail-head"><div><p className="eyebrow">{task.id}</p><h2 id="detail-title">{task.title}</h2></div><button autoFocus aria-label="关闭详情" onClick={onClose}>×</button></div>
       <dl className="facts"><div><dt>状态</dt><dd>{statusLabels[task.status]}</dd></div><div><dt>优先级</dt><dd>{priorityLabels[task.priority]}</dd></div><div><dt>负责人</dt><dd>{task.assignee ?? "—"}</dd></div><div><dt>截止</dt><dd>{task.deadline ?? "—"}</dd></div></dl>
+      {task.tags.length > 0 && <div className="detail-tags" aria-label="任务标签">{task.tags.map((tag) => <span key={tag}>{tag}</span>)}</div>}
       <section className="safe-write" aria-label="安全编辑">
         <div className="section-title"><h3>安全编辑</h3>{!priorityDraft && !fieldDraft && <div className="edit-entry-actions"><button onClick={onBeginPriority}>快速改优先级</button><button onClick={onBeginField}>编辑其他字段</button></div>}</div>
-        <p className="write-boundary">仅写正式支持字段；评论、附件、重复任务、甘特图与工作流等“正式结构暂不支持”，也不会保存到缓存。</p>
+        <p className="write-boundary">标签和任务关系写入当前任务 Markdown；评论和人工记录只追加到事件历史。附件、重复任务、甘特图和工作流仍不写入。</p>
         {priorityDraft && <div className="write-editor">
           <label><span>优先级草稿</span><select value={priorityDraft} onChange={(event) => onPriorityDraft(event.target.value as "high" | "medium" | "low")}>
             <option value="high">高</option><option value="medium">中</option><option value="low">低</option>
@@ -817,7 +1048,7 @@ function DetailPanel({
         </div>}
         {fieldDraft && <div className="write-editor">
           <label><span>正式字段</span><select aria-label="正式字段" value={fieldDraft.field} onChange={(event) => onFieldChange(event.target.value as WritableTaskField)}>
-            <option value="title">标题</option><option value="task_status">任务状态</option><option value="priority">优先级</option><option value="deadline">截止日期</option><option value="assignee">负责人</option><option value="related_ids">关联任务</option><option value="record_status">归档/恢复</option>
+            <option value="title">标题</option><option value="task_status">任务状态</option><option value="priority">优先级</option><option value="deadline">截止日期</option><option value="assignee">负责人</option><option value="tags">标签</option><option value="parent_id">父任务</option><option value="blocked_by_ids">被哪些任务阻塞</option><option value="related_ids">关联任务</option><option value="record_status">归档/恢复</option>
           </select></label>
           <FieldValueInput draft={fieldDraft} onValue={onFieldValue} />
           {!fieldPreview && <div className="write-actions"><button disabled={writing} onClick={onPreviewField}>生成写入预览</button><button className="secondary" disabled={writing} onClick={onCancelField}>取消</button></div>}
@@ -833,6 +1064,15 @@ function DetailPanel({
         {fieldReceipt && <div role="status" className="write-success"><strong>字段已写入并核对</strong><span>任务与事件均已回读一致。</span></div>}
       </section>
       {task.nextAction && <section><h3>下一步</h3><p>{task.nextAction}</p></section>}
+      <section><h3>任务关系 <span className="on-demand">反向关系由当前任务库推导</span></h3>
+        {(task.parentId || children.length || task.blockedByIds.length || blocks.length || task.relatedIds.length) ? <div className="relation-groups">
+          <RelationGroup label="父任务" ids={task.parentId ? [task.parentId] : []} taskById={taskById} onOpen={onOpenTask} />
+          <RelationGroup label="子任务" ids={children.map((item) => item.id)} taskById={taskById} onOpen={onOpenTask} />
+          <RelationGroup label="阻塞当前任务" ids={task.blockedByIds} taskById={taskById} onOpen={onOpenTask} />
+          <RelationGroup label="当前任务正在阻塞" ids={blocks.map((item) => item.id)} taskById={taskById} onOpen={onOpenTask} />
+          <RelationGroup label="相关任务" ids={task.relatedIds} taskById={taskById} onOpen={onOpenTask} />
+        </div> : <p className="muted-text">尚未设置父子、阻塞或相关关系。</p>}
+      </section>
       <section><h3>Codex 对话 <span className="on-demand">官方历史按需读取</span></h3>{threads.length ? threads.map((id) => <CodexThreadHistory
         key={id}
         threadId={id}
@@ -840,9 +1080,57 @@ function DetailPanel({
         onLoad={onLoadCodexHistory}
       />) : <p className="muted-text">没有正式绑定记录。</p>}</section>
       <section><h3>正文 <span className="on-demand">按需读取</span></h3>{loading ? <p>正在读取…</p> : <pre className="body">{body ?? "正文不可用"}</pre>}</section>
-      <section><h3>活动时间线</h3>{events.length ? <ol className="timeline">{events.map((event) => <li key={event.id}><time>{new Date(event.occurredAt).toLocaleString("zh-CN")}</time><strong>{event.eventType}</strong><span>{event.previousTaskStatus ?? "—"} → {event.newTaskStatus ?? "—"}</span></li>)}</ol> : <p className="muted-text">没有可显示的正式事件。</p>}</section>
+      <section className="note-entry" aria-label="添加评论或人工记录"><h3>评论与人工记录 <span className="on-demand">只追加</span></h3>
+        {!notePreview && !noteReceipt && <div className="note-form">
+          <div className="create-grid"><label><span>记录类型</span><select aria-label="记录类型" value={noteDraft.kind} onChange={(event) => onNoteDraft({ ...noteDraft, kind: event.target.value as TaskNoteKind })}><option value="comment">评论</option><option value="activity">人工活动</option></select></label><label><span>记录人</span><input aria-label="记录人" maxLength={120} value={noteDraft.author} onChange={(event) => onNoteDraft({ ...noteDraft, author: event.target.value })} /></label></div>
+          <label><span>内容</span><textarea aria-label="记录内容" maxLength={2000} value={noteDraft.text} onChange={(event) => onNoteDraft({ ...noteDraft, text: event.target.value })} placeholder="输入评论或已发生的人工活动…" /></label>
+          <div className="write-actions"><button disabled={writing || !noteDraft.text.trim() || !noteDraft.author.trim()} onClick={onPreviewNote}>生成追加预览</button></div>
+        </div>}
+        {notePreview && <div className="write-preview" role="region" aria-label="记录追加预览"><strong>{notePreview.kind === "comment" ? "确认追加评论" : "确认追加人工活动"}</strong><p className="note-preview-text">{notePreview.text}</p><small>{notePreview.author} · {new Date(notePreview.occurredAt).toLocaleString("zh-CN")}</small><div className="write-actions"><button className="confirm-write" disabled={writing} onClick={onConfirmNote}>{writing ? "正在安全追加…" : "确认追加"}</button><button className="secondary" disabled={writing} onClick={onCancelNote}>取消</button></div></div>}
+        {noteFailure && <div role="alert" className="write-failure"><strong>未追加</strong><span>{noteFailure.message}</span>{["conflict", "event_conflict"].includes(noteFailure.code) && <small>记录草稿仍保留，请重新生成预览。</small>}</div>}
+        {noteReceipt && <div role="status" className="write-success"><strong>记录已追加并回读</strong><span>{noteReceipt.eventId}</span><button className="inline-reset" onClick={onCancelNote}>继续添加</button></div>}
+      </section>
+      <section><h3>活动时间线</h3>{events.length ? <ol className="timeline">{events.map((event) => <li key={event.id}><time>{new Date(event.occurredAt).toLocaleString("zh-CN")}</time><strong>{taskEventLabel(event.eventType)}</strong>{event.message ? <p className="timeline-message">{event.message}</p> : <span>{event.previousTaskStatus ?? "—"} → {event.newTaskStatus ?? "—"}</span>}{event.author && <small>{event.author}</small>}</li>)}</ol> : <p className="muted-text">没有可显示的正式事件。</p>}</section>
     </aside>
   </div>;
+}
+
+function RelationGroup({
+  label, ids, taskById, onOpen,
+}: {
+  label: string;
+  ids: string[];
+  taskById: Map<string, TaskRecord>;
+  onOpen: (task: TaskRecord) => void;
+}) {
+  if (!ids.length) return null;
+  return <div className="relation-group"><strong>{label}</strong><div>{ids.map((id) => {
+    const target = taskById.get(id);
+    return target
+      ? <button key={id} onClick={() => onOpen(target)}>{target.title}<small>{id}</small></button>
+      : <span key={id}>{id}<small>当前任务库未读取到</small></span>;
+  })}</div></div>;
+}
+
+function taskEventLabel(eventType: string): string {
+  const labels: Record<string, string> = {
+    created: "创建任务",
+    started: "开始任务",
+    status_changed: "状态变更",
+    priority_changed: "优先级变更",
+    title_changed: "标题变更",
+    deadline_changed: "截止日期变更",
+    assignee_changed: "负责人变更",
+    tags_changed: "标签变更",
+    parent_changed: "父任务变更",
+    blockers_changed: "阻塞关系变更",
+    relations_changed: "关联任务变更",
+    archived: "已归档",
+    restored: "已恢复",
+    comment_added: "评论",
+    manual_activity_added: "人工活动",
+  };
+  return labels[eventType] ?? eventType;
 }
 
 function CodexThreadHistory({
@@ -945,7 +1233,7 @@ function FieldValueInput({
     aria-label="字段值"
     type={draft.field === "deadline" ? "date" : "text"}
     value={draft.rawValue}
-    placeholder={draft.field === "related_ids" ? "多个任务编号用英文逗号分隔" : undefined}
+    placeholder={draft.field === "tags" ? "多个标签用英文逗号分隔" : ["blocked_by_ids", "related_ids"].includes(draft.field) ? "多个任务编号用英文逗号分隔" : draft.field === "parent_id" ? "一个父任务编号，可留空" : undefined}
     onChange={(event) => onValue(event.target.value)}
   /></label>;
 }
@@ -992,11 +1280,14 @@ function CreateTaskDialog({
           <option value="high">高</option><option value="medium">中</option><option value="low">低</option>
         </select></label></div>
         <div className="create-grid"><label><span>负责人</span><input aria-label="新任务负责人" value={draft.assignee} onChange={(event) => update("assignee", event.target.value)} /></label><label><span>截止日期</span><input aria-label="新任务截止日期" type="date" value={draft.deadline} onChange={(event) => update("deadline", event.target.value)} /></label></div>
+        <label><span>标签</span><input aria-label="新任务标签" value={draft.tags.join(", ")} placeholder="多个标签用英文逗号分隔" onChange={(event) => update("tags", event.target.value.split(",").map((value) => value.trim()).filter(Boolean))} /></label>
+        <label><span>父任务</span><input aria-label="新任务父任务" value={draft.parentId} placeholder="可留空" onChange={(event) => update("parentId", event.target.value.trim())} /></label>
+        <label><span>阻塞当前任务的任务</span><input aria-label="新任务阻塞关系" value={draft.blockedByIds.join(", ")} placeholder="多个任务编号用英文逗号分隔" onChange={(event) => update("blockedByIds", event.target.value.split(",").map((value) => value.trim()).filter(Boolean))} /></label>
         <label><span>关联任务</span><input aria-label="新任务关联任务" value={draft.relatedIds.join(", ")} placeholder="多个任务编号用英文逗号分隔" onChange={(event) => update("relatedIds", event.target.value.split(",").map((value) => value.trim()).filter(Boolean))} /></label>
       </div>}
       {preview && <div className="write-preview create-preview" role="region" aria-label="新建任务预览">
         <strong>确认新建内容</strong>
-        <dl><div><dt>任务编号</dt><dd>{preview.taskId}</dd></div><div><dt>标题</dt><dd>{preview.draft.title}</dd></div><div><dt>状态</dt><dd>{displayWriteValue(preview.draft.taskStatus)}</dd></div><div><dt>优先级</dt><dd>{displayWriteValue(preview.draft.priority)}</dd></div><div><dt>归属</dt><dd>{preview.draft.domain}</dd></div><div><dt>负责人</dt><dd>{preview.draft.assignee || "（空）"}</dd></div><div><dt>截止</dt><dd>{preview.draft.deadline || "（空）"}</dd></div><div><dt>关联任务</dt><dd>{preview.draft.relatedIds.length ? preview.draft.relatedIds.join("、") : "（空）"}</dd></div><div><dt>隐私 / 访问</dt><dd>general / proposal_only</dd></div><div><dt>来源 / 核验</dt><dd>task-center-ui / human_confirmed</dd></div></dl>
+        <dl><div><dt>任务编号</dt><dd>{preview.taskId}</dd></div><div><dt>标题</dt><dd>{preview.draft.title}</dd></div><div><dt>状态</dt><dd>{displayWriteValue(preview.draft.taskStatus)}</dd></div><div><dt>优先级</dt><dd>{displayWriteValue(preview.draft.priority)}</dd></div><div><dt>归属</dt><dd>{preview.draft.domain}</dd></div><div><dt>负责人</dt><dd>{preview.draft.assignee || "（空）"}</dd></div><div><dt>截止</dt><dd>{preview.draft.deadline || "（空）"}</dd></div><div><dt>标签</dt><dd>{preview.draft.tags.length ? preview.draft.tags.join("、") : "（空）"}</dd></div><div><dt>父任务</dt><dd>{preview.draft.parentId || "（空）"}</dd></div><div><dt>被阻塞于</dt><dd>{preview.draft.blockedByIds.length ? preview.draft.blockedByIds.join("、") : "（空）"}</dd></div><div><dt>关联任务</dt><dd>{preview.draft.relatedIds.length ? preview.draft.relatedIds.join("、") : "（空）"}</dd></div><div><dt>隐私 / 访问</dt><dd>general / proposal_only</dd></div><div><dt>来源 / 核验</dt><dd>task-center-ui / human_confirmed</dd></div></dl>
         <p>确认后才会原子创建任务并追加 created 事件；若编号冲突或事件失败，不留下新任务。</p>
       </div>}
       {failure && <div role="alert" className="write-failure"><strong>未写入</strong><span>{failure.message}</span>{["conflict", "event_conflict"].includes(failure.code) && <small>当前新建草稿仍保留，请重新生成预览。</small>}</div>}

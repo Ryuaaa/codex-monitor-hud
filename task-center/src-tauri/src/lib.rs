@@ -8,14 +8,19 @@ use std::{
     fs::{self, File, OpenOptions},
     io::{BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tauri::Manager;
+use tauri_plugin_updater::UpdaterExt;
 use time::{format_description::well_known::Rfc3339, Date, Month, OffsetDateTime, UtcOffset};
 
 const MAX_FRONTMATTER_BYTES: usize = 128 * 1024;
 const MAX_BODY_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_EVENT_FILE_BYTES: u64 = 8 * 1024 * 1024;
+const MAX_FILTER_FILE_BYTES: u64 = 128 * 1024;
+const MAX_TAGS: usize = 32;
+const MAX_RELATIONS: usize = 64;
+const MAX_NOTE_CHARS: usize = 2_000;
 const WRITABLE_PRIORITIES: [&str; 3] = ["high", "medium", "low"];
 
 #[derive(Debug, Clone, Serialize)]
@@ -44,6 +49,40 @@ struct TaskEvent {
     occurred_at: String,
     previous_task_status: Option<String>,
     new_task_status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    author: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct SavedTaskFilter {
+    id: String,
+    name: String,
+    project_id: String,
+    status: String,
+    tag: String,
+    show_archived: bool,
+    view: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct SavedTaskFilterDraft {
+    id: Option<String>,
+    name: String,
+    project_id: String,
+    status: String,
+    tag: String,
+    show_archived: bool,
+    view: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct SavedTaskFilterFile {
+    version: u32,
+    filters: Vec<SavedTaskFilter>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -148,6 +187,9 @@ struct NewTaskDraft {
     priority: String,
     assignee: String,
     deadline: String,
+    tags: Vec<String>,
+    parent_id: String,
+    blocked_by_ids: Vec<String>,
     related_ids: Vec<String>,
 }
 
@@ -178,6 +220,50 @@ struct CreateTaskReceipt {
     event_id: String,
     event_file: String,
     verified: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct TaskNotePreview {
+    file_token: String,
+    task_id: String,
+    kind: String,
+    text: String,
+    author: String,
+    occurred_at: String,
+    expected_task_hash: String,
+    expected_event_hash: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TaskNoteRequest {
+    file_token: String,
+    task_id: String,
+    kind: String,
+    text: String,
+    author: String,
+    occurred_at: String,
+    expected_task_hash: String,
+    expected_event_hash: String,
+    confirmed: bool,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct TaskNoteReceipt {
+    task_id: String,
+    event_id: String,
+    event_file: String,
+    verified: bool,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct TaskCenterUpdateInfo {
+    current_version: String,
+    available: bool,
+    version: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -456,6 +542,21 @@ fn read_events(root: &Path, task_id: &str) -> Result<Vec<TaskEvent>, String> {
             let Some(occurred_at) = value.get("occurred_at").and_then(Value::as_str) else {
                 continue;
             };
+            let note_event = matches!(event_type, "comment_added" | "manual_activity_added");
+            let message = note_event
+                .then(|| value.get("message").and_then(Value::as_str))
+                .flatten()
+                .filter(|message| {
+                    message.chars().count() <= MAX_NOTE_CHARS && !message.contains('\0')
+                })
+                .map(str::to_string);
+            let author = note_event
+                .then(|| value.get("author").and_then(Value::as_str))
+                .flatten()
+                .filter(|author| {
+                    author.chars().count() <= 120 && !author.contains(['\r', '\n', '\0'])
+                })
+                .map(str::to_string);
             result.push(TaskEvent {
                 id: id.to_string(),
                 task_id: task_id.to_string(),
@@ -469,6 +570,8 @@ fn read_events(root: &Path, task_id: &str) -> Result<Vec<TaskEvent>, String> {
                     .get("new_task_status")
                     .and_then(Value::as_str)
                     .map(str::to_string),
+                message,
+                author,
             });
         }
     }
@@ -514,6 +617,174 @@ fn read_project_mappings(path: Option<&Path>) -> Result<Vec<ProjectMapping>, Str
         return Err("项目映射必须包含编号、名称和绝对工作目录".to_string());
     }
     Ok(mappings)
+}
+
+fn validate_saved_filter(filter: &SavedTaskFilter) -> Result<(), String> {
+    let valid_status = [
+        "all",
+        "todo",
+        "doing",
+        "long_term",
+        "done",
+        "cancelled",
+        "unknown",
+    ];
+    if filter.id.is_empty()
+        || filter.id.len() > 96
+        || !filter
+            .id
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
+        || filter.name.trim().is_empty()
+        || filter.name.chars().count() > 60
+        || filter.name.contains(['\r', '\n', '\0'])
+        || filter.project_id.chars().count() > 160
+        || filter.project_id.contains(['\r', '\n', '\0'])
+        || !valid_status.contains(&filter.status.as_str())
+        || filter.tag.chars().count() > 40
+        || filter.tag.contains(['\r', '\n', '\0'])
+        || !matches!(filter.view.as_str(), "board" | "list")
+    {
+        return Err("保存的筛选条件无效".to_string());
+    }
+    Ok(())
+}
+
+fn read_saved_filters_at(path: &Path) -> Result<Vec<SavedTaskFilter>, String> {
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let metadata = fs::symlink_metadata(path).map_err(|_| "保存筛选配置不可用".to_string())?;
+    if metadata.file_type().is_symlink()
+        || !metadata.is_file()
+        || metadata.len() > MAX_FILTER_FILE_BYTES
+    {
+        return Err("保存筛选配置不可安全读取".to_string());
+    }
+    let file: SavedTaskFilterFile =
+        serde_json::from_reader(File::open(path).map_err(|_| "保存筛选配置不可用".to_string())?)
+            .map_err(|_| "保存筛选配置格式错误".to_string())?;
+    if file.version != 1 {
+        return Err("保存筛选配置版本暂不支持".to_string());
+    }
+    if file.filters.len() > 32 {
+        return Err("保存筛选数量超过安全上限".to_string());
+    }
+    let mut ids = Vec::new();
+    for filter in &file.filters {
+        validate_saved_filter(filter)?;
+        if ids.iter().any(|id| id == &filter.id) {
+            return Err("保存筛选编号重复".to_string());
+        }
+        ids.push(filter.id.clone());
+    }
+    Ok(file.filters)
+}
+
+fn write_saved_filters_at(path: &Path, filters: &[SavedTaskFilter]) -> Result<(), String> {
+    if filters.len() > 32 {
+        return Err("最多保存32个筛选方案".to_string());
+    }
+    for filter in filters {
+        validate_saved_filter(filter)?;
+    }
+    let bytes = serde_json::to_vec_pretty(&SavedTaskFilterFile {
+        version: 1,
+        filters: filters.to_vec(),
+    })
+    .map_err(|_| "保存筛选配置序列化失败".to_string())?;
+    if bytes.len() as u64 > MAX_FILTER_FILE_BYTES {
+        return Err("保存筛选配置超过安全上限".to_string());
+    }
+    let parent = path
+        .parent()
+        .ok_or_else(|| "保存筛选目录不可用".to_string())?;
+    fs::create_dir_all(parent).map_err(|_| "保存筛选目录不可用".to_string())?;
+    if path.exists()
+        && fs::symlink_metadata(path)
+            .map(|metadata| metadata.file_type().is_symlink() || !metadata.is_file())
+            .unwrap_or(true)
+    {
+        return Err("保存筛选配置目标不安全".to_string());
+    }
+    let temp = unique_sidecar_path(path, "tmp").map_err(|error| error.message.to_string())?;
+    let backup = path
+        .exists()
+        .then(|| unique_sidecar_path(path, "bak"))
+        .transpose()
+        .map_err(|error| error.message.to_string())?;
+    write_prepared_file(&temp, &bytes, None).map_err(|error| error.message.to_string())?;
+    if let Some(backup) = backup.as_deref() {
+        fs::rename(path, backup).map_err(|_| {
+            let _ = fs::remove_file(&temp);
+            "保存筛选配置备份失败".to_string()
+        })?;
+    }
+    if fs::rename(&temp, path).is_err() {
+        let _ = fs::remove_file(&temp);
+        if let Some(backup) = backup.as_deref() {
+            let _ = fs::rename(backup, path);
+        }
+        return Err("保存筛选配置写入失败".to_string());
+    }
+    let verified = read_saved_filters_at(path);
+    if verified.as_ref().map(Vec::as_slice) != Ok(filters) {
+        let _ = fs::remove_file(path);
+        if let Some(backup) = backup.as_deref() {
+            let _ = fs::rename(backup, path);
+        }
+        return Err("保存筛选配置回读不一致，已恢复原配置".to_string());
+    }
+    if let Some(backup) = backup.as_deref() {
+        let _ = fs::remove_file(backup);
+    }
+    Ok(())
+}
+
+fn save_task_filter_at(
+    path: &Path,
+    draft: SavedTaskFilterDraft,
+) -> Result<SavedTaskFilter, String> {
+    let id = match draft.id.filter(|id| !id.is_empty()) {
+        Some(id) => id,
+        None => {
+            let nonce = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_err(|_| "系统时间不可用".to_string())?
+                .as_nanos();
+            format!("filter_{nonce}")
+        }
+    };
+    let saved = SavedTaskFilter {
+        id,
+        name: draft.name.trim().to_string(),
+        project_id: draft.project_id.trim().to_string(),
+        status: draft.status,
+        tag: draft.tag.trim().to_string(),
+        show_archived: draft.show_archived,
+        view: draft.view,
+    };
+    validate_saved_filter(&saved)?;
+    let mut filters = read_saved_filters_at(path)?;
+    if let Some(index) = filters.iter().position(|filter| filter.id == saved.id) {
+        filters[index] = saved.clone();
+    } else {
+        if filters.len() >= 32 {
+            return Err("最多保存32个筛选方案".to_string());
+        }
+        filters.push(saved.clone());
+    }
+    write_saved_filters_at(path, &filters)?;
+    Ok(saved)
+}
+
+fn delete_task_filter_at(path: &Path, id: &str) -> Result<(), String> {
+    if id.is_empty() || id.len() > 96 {
+        return Err("保存筛选编号无效".to_string());
+    }
+    let mut filters = read_saved_filters_at(path)?;
+    filters.retain(|filter| filter.id != id);
+    write_saved_filters_at(path, &filters)
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -662,7 +933,7 @@ fn frontmatter_list(frontmatter: &str, key: &str) -> Result<Vec<String>, WriteEr
                 return Ok(Vec::new());
             }
             return serde_json::from_str::<Vec<String>>(inline)
-                .map_err(|_| write_error("unsupported_format", "关系列表格式暂不支持安全写入"));
+                .map_err(|_| write_error("unsupported_format", "列表字段格式暂不支持安全写入"));
         }
         let mut values = Vec::new();
         for child in lines.iter().skip(index + 1) {
@@ -676,7 +947,7 @@ fn frontmatter_list(frontmatter: &str, key: &str) -> Result<Vec<String>, WriteEr
             let Some(value) = trimmed.strip_prefix("- ") else {
                 return Err(write_error(
                     "unsupported_format",
-                    "关系列表格式暂不支持安全写入",
+                    "列表字段格式暂不支持安全写入",
                 ));
             };
             values.push(value.trim().trim_matches(['"', '\'']).to_string());
@@ -764,6 +1035,57 @@ fn validate_plain_text(
         return Err(write_error("invalid_value", "字段内容不符合正式结构要求"));
     }
     Ok(())
+}
+
+fn valid_task_id(value: &str) -> bool {
+    value.starts_with("tsk_") && value.len() <= 128 && !value.contains(['\r', '\n', '\0'])
+}
+
+fn normalized_string_list(
+    new_value: &Value,
+    max_items: usize,
+    max_chars: usize,
+    item_label: &'static str,
+) -> Result<Vec<String>, WriteError> {
+    let values = new_value
+        .as_array()
+        .ok_or_else(|| write_error("invalid_value", "列表字段格式无效"))?;
+    if values.len() > max_items {
+        return Err(write_error("invalid_value", "列表项数超过安全上限"));
+    }
+    let mut normalized = Vec::new();
+    for value in values {
+        let value = value
+            .as_str()
+            .ok_or_else(|| write_error("invalid_value", "列表字段格式无效"))?
+            .trim();
+        if value.is_empty()
+            || value.chars().count() > max_chars
+            || value.contains(['\r', '\n', '\0'])
+            || normalized
+                .iter()
+                .any(|existing: &String| existing.eq_ignore_ascii_case(value))
+        {
+            let _ = item_label;
+            return Err(write_error(
+                "invalid_value",
+                "列表项为空、重复或超过安全上限",
+            ));
+        }
+        normalized.push(value.to_string());
+    }
+    Ok(normalized)
+}
+
+fn normalized_relation_ids(new_value: &Value, task_id: &str) -> Result<Vec<String>, WriteError> {
+    let normalized = normalized_string_list(new_value, MAX_RELATIONS, 128, "任务编号")?;
+    if normalized
+        .iter()
+        .any(|value| !valid_task_id(value) || value == task_id)
+    {
+        return Err(write_error("invalid_value", "任务关系编号无效或指向自身"));
+    }
+    Ok(normalized)
 }
 
 fn valid_iso_date(value: &str) -> bool {
@@ -880,30 +1202,43 @@ fn prepare_field_edit(
                 "assignee_changed",
             )
         }
+        "tags" => {
+            let normalized = normalized_string_list(new_value, MAX_TAGS, 40, "标签")?;
+            let before = frontmatter_list(frontmatter, "tags")?;
+            (
+                serde_json::to_string(&normalized).unwrap(),
+                serde_json::to_value(before).unwrap(),
+                serde_json::to_value(&normalized).unwrap(),
+                "tags_changed",
+            )
+        }
+        "parent_id" => {
+            let value = new_value
+                .as_str()
+                .ok_or_else(|| write_error("invalid_value", "父任务编号格式无效"))?
+                .trim();
+            if !value.is_empty() && (!valid_task_id(value) || value == task_id) {
+                return Err(write_error("invalid_value", "父任务编号无效或指向自身"));
+            }
+            (
+                value.to_string(),
+                scalar_before("parent_id"),
+                Value::String(value.to_string()),
+                "parent_changed",
+            )
+        }
+        "blocked_by_ids" => {
+            let normalized = normalized_relation_ids(new_value, task_id)?;
+            let before = frontmatter_list(frontmatter, "blocked_by_ids")?;
+            (
+                serde_json::to_string(&normalized).unwrap(),
+                serde_json::to_value(before).unwrap(),
+                serde_json::to_value(&normalized).unwrap(),
+                "blockers_changed",
+            )
+        }
         "related_ids" => {
-            let values = new_value
-                .as_array()
-                .ok_or_else(|| write_error("invalid_value", "关系列表格式无效"))?;
-            if values.len() > 64 {
-                return Err(write_error("invalid_value", "关联任务数量超过安全上限"));
-            }
-            let mut normalized = Vec::new();
-            for value in values {
-                let value = value
-                    .as_str()
-                    .ok_or_else(|| write_error("invalid_value", "关联任务编号格式无效"))?;
-                if !value.starts_with("tsk_")
-                    || value.len() > 128
-                    || value == task_id
-                    || normalized.iter().any(|existing| existing == value)
-                {
-                    return Err(write_error(
-                        "invalid_value",
-                        "关联任务编号无效、重复或指向自身",
-                    ));
-                }
-                normalized.push(value.to_string());
-            }
+            let normalized = normalized_relation_ids(new_value, task_id)?;
             let before = frontmatter_list(frontmatter, "related_ids")?;
             (
                 serde_json::to_string(&normalized).unwrap(),
@@ -1011,6 +1346,217 @@ fn current_event_time() -> Result<(String, String), WriteError> {
         .map_err(|_| write_error("clock_error", "无法生成事件时间"))?;
     let month = format!("{:04}-{:02}", now.year(), u8::from(now.month()));
     Ok((occurred_at, month))
+}
+
+fn event_month_from_timestamp(value: &str) -> Result<String, WriteError> {
+    let timestamp = OffsetDateTime::parse(value, &Rfc3339)
+        .map_err(|_| write_error("invalid_value", "记录时间格式无效"))?;
+    Ok(format!(
+        "{:04}-{:02}",
+        timestamp.year(),
+        u8::from(timestamp.month())
+    ))
+}
+
+fn normalize_task_note(
+    kind: &str,
+    text: &str,
+    author: &str,
+) -> Result<(String, String, &'static str), WriteError> {
+    let event_type = match kind {
+        "comment" => "comment_added",
+        "activity" => "manual_activity_added",
+        _ => return Err(write_error("unsupported_value", "记录类型暂不支持")),
+    };
+    let normalized_text = text.replace("\r\n", "\n").replace('\r', "\n");
+    let normalized_text = normalized_text.trim().to_string();
+    let normalized_author = author.trim().to_string();
+    if normalized_text.is_empty()
+        || normalized_text.chars().count() > MAX_NOTE_CHARS
+        || normalized_text.contains('\0')
+    {
+        return Err(write_error("invalid_value", "记录内容为空或超过2000字"));
+    }
+    validate_plain_text(&normalized_author, false, 120)?;
+    Ok((normalized_text, normalized_author, event_type))
+}
+
+fn read_event_snapshot(events_root: &Path, event_month: &str) -> Result<Vec<u8>, WriteError> {
+    if !events_root.exists() {
+        return Ok(Vec::new());
+    }
+    let canonical_events = events_root
+        .canonicalize()
+        .map_err(|_| write_error("event_prepare_failed", "事件目录不可用"))?;
+    let path = canonical_events.join(format!("{event_month}.jsonl"));
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let metadata = fs::symlink_metadata(&path)
+        .map_err(|_| write_error("event_prepare_failed", "事件文件不可用"))?;
+    if metadata.file_type().is_symlink()
+        || !metadata.is_file()
+        || metadata.permissions().readonly()
+        || metadata.len() > MAX_EVENT_FILE_BYTES
+    {
+        return Err(write_error("event_prepare_failed", "事件文件不可安全追加"));
+    }
+    let bytes =
+        fs::read(path).map_err(|_| write_error("event_prepare_failed", "事件文件读取失败"))?;
+    if !bytes.is_empty() && !bytes.ends_with(b"\n") {
+        return Err(write_error("event_prepare_failed", "事件文件末行不完整"));
+    }
+    Ok(bytes)
+}
+
+fn preview_task_note_at(
+    root: &Path,
+    events_root: &Path,
+    file_token: &str,
+    kind: &str,
+    text: &str,
+    author: &str,
+    occurred_at: &str,
+) -> Result<TaskNotePreview, WriteError> {
+    let (_, content) = read_writable_task(root, file_token)?;
+    let (task_id, _) = task_id_and_priority(&content)?;
+    let (text, author, _) = normalize_task_note(kind, text, author)?;
+    let month = event_month_from_timestamp(occurred_at)?;
+    let events = read_event_snapshot(events_root, &month)?;
+    Ok(TaskNotePreview {
+        file_token: file_token.to_string(),
+        task_id,
+        kind: kind.to_string(),
+        text,
+        author,
+        occurred_at: occurred_at.to_string(),
+        expected_task_hash: sha256_hex(content.as_bytes()),
+        expected_event_hash: sha256_hex(&events),
+    })
+}
+
+fn apply_task_note_at(
+    root: &Path,
+    events_root: &Path,
+    request: TaskNoteRequest,
+) -> Result<TaskNoteReceipt, WriteError> {
+    if !request.confirmed {
+        return Err(write_error(
+            "confirmation_required",
+            "用户未确认，未追加记录",
+        ));
+    }
+    let (text, author, event_type) =
+        normalize_task_note(&request.kind, &request.text, &request.author)?;
+    if text != request.text || author != request.author {
+        return Err(write_error(
+            "preview_mismatch",
+            "记录预览已变化，请重新确认",
+        ));
+    }
+    let (_, content) = read_writable_task(root, &request.file_token)?;
+    let (task_id, _) = task_id_and_priority(&content)?;
+    if task_id != request.task_id || sha256_hex(content.as_bytes()) != request.expected_task_hash {
+        return Err(write_error(
+            "conflict",
+            "任务已被其他操作修改，请重新读取后确认",
+        ));
+    }
+    let month = event_month_from_timestamp(&request.occurred_at)?;
+    let existing_events = read_event_snapshot(events_root, &month)?;
+    if sha256_hex(&existing_events) != request.expected_event_hash {
+        return Err(write_error(
+            "event_conflict",
+            "事件文件已被其他操作修改，请重新预览",
+        ));
+    }
+    fs::create_dir_all(events_root)
+        .map_err(|_| write_error("event_prepare_failed", "事件目录不可用"))?;
+    let canonical_events = events_root
+        .canonicalize()
+        .map_err(|_| write_error("event_prepare_failed", "事件目录不可用"))?;
+    let event_file = format!("{month}.jsonl");
+    let event_path = canonical_events.join(&event_file);
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| write_error("clock_error", "系统时间不可用"))?
+        .as_nanos();
+    let event_id = format!("evt_task_center_note_{nonce}");
+    let event = serde_json::json!({
+        "id": event_id,
+        "task_id": task_id,
+        "event_type": event_type,
+        "occurred_at": request.occurred_at,
+        "source_refs": ["task-center-ui"],
+        "confirmed_by": "user_ui_confirmation",
+        "privacy": "general",
+        "author": author,
+        "message": text
+    });
+    let event_line = serde_json::to_string(&event)
+        .map_err(|_| write_error("event_prepare_failed", "记录序列化失败"))?;
+    let mut next_events = existing_events.clone();
+    next_events.extend_from_slice(event_line.as_bytes());
+    next_events.push(b'\n');
+    if next_events.len() as u64 > MAX_EVENT_FILE_BYTES {
+        return Err(write_error("event_prepare_failed", "事件文件超过安全上限"));
+    }
+    let temp = unique_sidecar_path(&event_path, "tmp")?;
+    let backup = event_path
+        .exists()
+        .then(|| unique_sidecar_path(&event_path, "bak"))
+        .transpose()?;
+    write_prepared_file(
+        &temp,
+        &next_events,
+        fs::metadata(&event_path)
+            .ok()
+            .map(|value| value.permissions()),
+    )?;
+    if let Some(backup) = backup.as_deref() {
+        if fs::copy(&event_path, backup).is_err() {
+            let _ = fs::remove_file(&temp);
+            return Err(write_error("backup_failed", "无法创建事件恢复副本"));
+        }
+    }
+    if read_event_snapshot(events_root, &month)? != existing_events {
+        let _ = fs::remove_file(&temp);
+        if let Some(backup) = backup.as_deref() {
+            let _ = fs::remove_file(backup);
+        }
+        return Err(write_error(
+            "event_conflict",
+            "事件文件已被其他操作修改，请重新预览",
+        ));
+    }
+    if fs::rename(&temp, &event_path).is_err() {
+        let _ = fs::remove_file(&temp);
+        if let Some(backup) = backup.as_deref() {
+            let _ = fs::remove_file(backup);
+        }
+        return Err(write_error("event_commit_failed", "记录追加失败"));
+    }
+    let written = fs::read(&event_path).map_err(|_| write_error("readback_failed", "记录回读失败"));
+    if written
+        .as_ref()
+        .map(|bytes| bytes.ends_with(format!("{event_line}\n").as_bytes()))
+        != Ok(true)
+    {
+        let rollback = rollback_file(&event_path, backup.as_deref());
+        if rollback.is_err() {
+            return Err(write_error("rollback_failed", "记录追加失败且无法自动恢复"));
+        }
+        return Err(write_error("event_readback_mismatch", "记录回读不一致"));
+    }
+    if let Some(backup) = backup.as_deref() {
+        let _ = fs::remove_file(backup);
+    }
+    Ok(TaskNoteReceipt {
+        task_id,
+        event_id,
+        event_file,
+        verified: true,
+    })
 }
 
 fn rollback_file(path: &Path, backup: Option<&Path>) -> Result<(), WriteError> {
@@ -1403,18 +1949,22 @@ fn validate_new_task_draft(draft: &NewTaskDraft) -> Result<(), WriteError> {
             "截止日期必须是有效的 YYYY-MM-DD",
         ));
     }
-    if draft.related_ids.len() > 64 {
-        return Err(write_error("invalid_value", "关联任务数量超过安全上限"));
+    let tags_value = serde_json::to_value(&draft.tags)
+        .map_err(|_| write_error("invalid_value", "标签无法安全序列化"))?;
+    let normalized_tags = normalized_string_list(&tags_value, MAX_TAGS, 40, "标签")?;
+    if normalized_tags != draft.tags {
+        return Err(write_error("invalid_value", "标签需要移除空白或重复项"));
     }
-    let mut seen = Vec::new();
-    for related in &draft.related_ids {
-        if !related.starts_with("tsk_")
-            || related.len() > 128
-            || seen.iter().any(|existing| existing == related)
-        {
-            return Err(write_error("invalid_value", "关联任务编号无效或重复"));
+    if !draft.parent_id.is_empty() && !valid_task_id(&draft.parent_id) {
+        return Err(write_error("invalid_value", "父任务编号无效"));
+    }
+    for relations in [&draft.blocked_by_ids, &draft.related_ids] {
+        let value = serde_json::to_value(relations)
+            .map_err(|_| write_error("invalid_value", "任务关系无法安全序列化"))?;
+        let normalized = normalized_relation_ids(&value, "tsk_new_task_not_yet_assigned")?;
+        if normalized != *relations {
+            return Err(write_error("invalid_value", "任务关系需要移除空白或重复项"));
         }
-        seen.push(related.clone());
     }
     Ok(())
 }
@@ -1439,13 +1989,15 @@ fn safe_title_slug(title: &str) -> String {
 
 fn render_new_task(preview: &CreateTaskPreview) -> Result<String, WriteError> {
     validate_new_task_draft(&preview.draft)?;
-    if preview
-        .draft
-        .related_ids
-        .iter()
-        .any(|value| value == &preview.task_id)
+    if preview.draft.parent_id == preview.task_id
+        || preview
+            .draft
+            .blocked_by_ids
+            .iter()
+            .chain(preview.draft.related_ids.iter())
+            .any(|value| value == &preview.task_id)
     {
-        return Err(write_error("invalid_value", "关联任务不能指向新任务自身"));
+        return Err(write_error("invalid_value", "任务关系不能指向新任务自身"));
     }
     let title = serde_json::to_string(&preview.draft.title)
         .map_err(|_| write_error("invalid_value", "标题无法安全序列化"))?;
@@ -1459,6 +2011,10 @@ fn render_new_task(preview: &CreateTaskPreview) -> Result<String, WriteError> {
     };
     let relations = serde_json::to_string(&preview.draft.related_ids)
         .map_err(|_| write_error("invalid_value", "关系列表无法安全序列化"))?;
+    let tags = serde_json::to_string(&preview.draft.tags)
+        .map_err(|_| write_error("invalid_value", "标签无法安全序列化"))?;
+    let blocked_by = serde_json::to_string(&preview.draft.blocked_by_ids)
+        .map_err(|_| write_error("invalid_value", "阻塞关系无法安全序列化"))?;
     Ok(format!(
         "---\n\
 id: {id}\n\
@@ -1474,6 +2030,9 @@ owner_scope: personal\n\
 priority: {priority}\n\
 assignee:{assignee_prefix}{assignee}\n\
 deadline:{deadline_prefix}{deadline}\n\
+tags: {tags}\n\
+parent_id:{parent_prefix}{parent_id}\n\
+blocked_by_ids: {blocked_by}\n\
 next_action:\n\
 project_id:\n\
 source_refs: [\"task-center-ui\"]\n\
@@ -1505,6 +2064,14 @@ related_ids: {relations}\n\
             " "
         },
         deadline = preview.draft.deadline,
+        tags = tags,
+        parent_prefix = if preview.draft.parent_id.is_empty() {
+            ""
+        } else {
+            " "
+        },
+        parent_id = preview.draft.parent_id,
+        blocked_by = blocked_by,
         created = preview.created_at,
         relations = relations,
         body_title = preview.draft.title,
@@ -1875,6 +2442,118 @@ fn initialize_local_task_library() -> Result<(), String> {
     initialize_task_library_at(&default_task_root())
 }
 
+fn saved_filter_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    app.path()
+        .app_config_dir()
+        .map(|path| path.join("saved-task-filters.json"))
+        .map_err(|_| "保存筛选目录不可用".to_string())
+}
+
+#[tauri::command]
+fn load_saved_task_filters(app: tauri::AppHandle) -> Result<Vec<SavedTaskFilter>, String> {
+    read_saved_filters_at(&saved_filter_path(&app)?)
+}
+
+#[tauri::command]
+fn save_task_filter(
+    app: tauri::AppHandle,
+    draft: SavedTaskFilterDraft,
+) -> Result<SavedTaskFilter, String> {
+    save_task_filter_at(&saved_filter_path(&app)?, draft)
+}
+
+#[tauri::command]
+fn delete_task_filter(app: tauri::AppHandle, id: String) -> Result<(), String> {
+    delete_task_filter_at(&saved_filter_path(&app)?, &id)
+}
+
+#[tauri::command]
+fn preview_task_note(
+    file_token: String,
+    kind: String,
+    text: String,
+    author: String,
+) -> Result<TaskNotePreview, WriteError> {
+    let (occurred_at, _) = current_event_time()?;
+    let root = default_task_root();
+    preview_task_note_at(
+        &root,
+        &events_root(&root),
+        &file_token,
+        &kind,
+        &text,
+        &author,
+        &occurred_at,
+    )
+}
+
+#[tauri::command]
+fn apply_task_note(request: TaskNoteRequest) -> Result<TaskNoteReceipt, WriteError> {
+    let root = default_task_root();
+    apply_task_note_at(&root, &events_root(&root), request)
+}
+
+fn validate_expected_update_version(expected: &str, actual: &str) -> Result<(), String> {
+    let valid = |value: &str| {
+        !value.is_empty()
+            && value.len() <= 48
+            && value.chars().all(|character| {
+                character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '+')
+            })
+    };
+    if !valid(expected) || !valid(actual) || expected != actual {
+        return Err("可安装版本已变化，请重新检查更新".to_string());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn check_task_center_update(app: tauri::AppHandle) -> Result<TaskCenterUpdateInfo, String> {
+    let current_version = app.package_info().version.to_string();
+    let update = app
+        .updater_builder()
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|_| "更新组件不可用".to_string())?
+        .check()
+        .await
+        .map_err(|_| "暂时无法读取任务中心更新".to_string())?;
+    Ok(match update {
+        Some(update) => TaskCenterUpdateInfo {
+            current_version,
+            available: true,
+            version: Some(update.version.to_string()),
+        },
+        None => TaskCenterUpdateInfo {
+            current_version,
+            available: false,
+            version: None,
+        },
+    })
+}
+
+#[tauri::command]
+async fn install_task_center_update(
+    app: tauri::AppHandle,
+    expected_version: String,
+) -> Result<(), String> {
+    let update = app
+        .updater_builder()
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|_| "更新组件不可用".to_string())?
+        .check()
+        .await
+        .map_err(|_| "暂时无法重新核对任务中心更新".to_string())?
+        .ok_or_else(|| "当前已经是最新版".to_string())?;
+    validate_expected_update_version(&expected_version, &update.version.to_string())?;
+    update
+        .download_and_install(|_, _| {}, || {})
+        .await
+        .map_err(|_| "更新包下载或安全验证失败，当前版本未改变".to_string())?;
+    app.restart();
+}
+
 pub fn read_only_diagnostic() -> i32 {
     let root = default_task_root();
     match scan_metadata(&root) {
@@ -1903,6 +2582,7 @@ pub fn read_only_diagnostic() -> i32 {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             load_task_metadata,
             load_task_body,
@@ -1911,12 +2591,19 @@ pub fn run() {
             load_codex_thread_list,
             load_codex_thread_page,
             initialize_local_task_library,
+            load_saved_task_filters,
+            save_task_filter,
+            delete_task_filter,
             preview_priority_edit,
             apply_priority_edit,
             preview_task_field_edit,
             apply_task_field_edit,
             preview_create_task,
-            apply_create_task
+            apply_create_task,
+            preview_task_note,
+            apply_task_note,
+            check_task_center_update,
+            install_task_center_update
         ])
         .on_window_event(|window, event| {
             if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
@@ -2018,11 +2705,222 @@ verification_status: human_confirmed\n\
     }
 
     #[test]
+    fn saved_filters_round_trip_update_delete_and_reject_unknown_version() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config").join("saved-task-filters.json");
+        let draft = SavedTaskFilterDraft {
+            id: Some("filter_release".to_string()),
+            name: "发布任务".to_string(),
+            project_id: "prj_monitor".to_string(),
+            status: "doing".to_string(),
+            tag: "发布".to_string(),
+            show_archived: false,
+            view: "board".to_string(),
+        };
+        let saved = save_task_filter_at(&path, draft.clone()).unwrap();
+        assert_eq!(saved.id, "filter_release");
+        assert_eq!(read_saved_filters_at(&path).unwrap(), vec![saved.clone()]);
+        let serialized: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(serialized["filters"][0].get("query").is_none());
+
+        let updated = save_task_filter_at(
+            &path,
+            SavedTaskFilterDraft {
+                name: "发布任务（列表）".to_string(),
+                view: "list".to_string(),
+                ..draft
+            },
+        )
+        .unwrap();
+        assert_eq!(read_saved_filters_at(&path).unwrap(), vec![updated]);
+        delete_task_filter_at(&path, "filter_release").unwrap();
+        assert!(read_saved_filters_at(&path).unwrap().is_empty());
+
+        let unsupported = r#"{"version":2,"filters":[]}"#;
+        fs::write(&path, unsupported).unwrap();
+        let error = save_task_filter_at(
+            &path,
+            SavedTaskFilterDraft {
+                id: Some("filter_future".to_string()),
+                name: "未来配置".to_string(),
+                project_id: String::new(),
+                status: "all".to_string(),
+                tag: String::new(),
+                show_archived: false,
+                view: "board".to_string(),
+            },
+        )
+        .unwrap_err();
+        assert!(error.contains("版本"));
+        assert_eq!(fs::read_to_string(path).unwrap(), unsupported);
+    }
+
+    fn note_request(preview: TaskNotePreview, confirmed: bool) -> TaskNoteRequest {
+        TaskNoteRequest {
+            file_token: preview.file_token,
+            task_id: preview.task_id,
+            kind: preview.kind,
+            text: preview.text,
+            author: preview.author,
+            occurred_at: preview.occurred_at,
+            expected_task_hash: preview.expected_task_hash,
+            expected_event_hash: preview.expected_event_hash,
+            confirmed,
+        }
+    }
+
+    #[test]
+    fn note_preview_cancel_and_confirm_are_append_only_with_readback() {
+        let dir = tempdir().unwrap();
+        let task_root = dir.path().join("任务");
+        let events = dir.path().join("事件");
+        fs::create_dir_all(&task_root).unwrap();
+        let task_path = task_root.join("tsk_write_test.md");
+        let original = writable_task("medium");
+        fs::write(&task_path, &original).unwrap();
+        let preview = preview_task_note_at(
+            &task_root,
+            &events,
+            "tsk_write_test.md",
+            "comment",
+            "  已核验评论  ",
+            " 本人 ",
+            "2026-08-24T08:00:00Z",
+        )
+        .unwrap();
+        assert_eq!(preview.text, "已核验评论");
+        assert_eq!(preview.author, "本人");
+        assert!(!events.exists());
+        assert_eq!(fs::read_to_string(&task_path).unwrap(), original);
+
+        let cancelled =
+            apply_task_note_at(&task_root, &events, note_request(preview.clone(), false))
+                .unwrap_err();
+        assert_eq!(cancelled.code, "confirmation_required");
+        assert!(!events.exists());
+
+        let receipt = apply_task_note_at(&task_root, &events, note_request(preview, true)).unwrap();
+        assert!(receipt.verified);
+        assert_eq!(fs::read_to_string(&task_path).unwrap(), original);
+        let event_text = fs::read_to_string(events.join("2026-08.jsonl")).unwrap();
+        let event: Value = serde_json::from_str(event_text.trim()).unwrap();
+        assert_eq!(event["event_type"], "comment_added");
+        assert_eq!(event["message"], "已核验评论");
+        assert_eq!(event["author"], "本人");
+        let loaded = read_events(&events, "tsk_write_test").unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].message.as_deref(), Some("已核验评论"));
+        assert_eq!(loaded[0].author.as_deref(), Some("本人"));
+    }
+
+    #[test]
+    fn note_conflicts_and_invalid_content_never_append() {
+        let dir = tempdir().unwrap();
+        let task_root = dir.path().join("任务");
+        let events = dir.path().join("事件");
+        fs::create_dir_all(&task_root).unwrap();
+        let task_path = task_root.join("tsk_write_test.md");
+        fs::write(&task_path, writable_task("medium")).unwrap();
+        let preview = preview_task_note_at(
+            &task_root,
+            &events,
+            "tsk_write_test.md",
+            "activity",
+            "完成本机验收",
+            "本人",
+            "2026-08-24T08:00:00Z",
+        )
+        .unwrap();
+        fs::write(
+            &task_path,
+            writable_task("medium").replace("keep-me", "external-change"),
+        )
+        .unwrap();
+        let task_conflict =
+            apply_task_note_at(&task_root, &events, note_request(preview, true)).unwrap_err();
+        assert_eq!(task_conflict.code, "conflict");
+        assert!(!events.exists());
+
+        fs::write(&task_path, writable_task("medium")).unwrap();
+        let preview = preview_task_note_at(
+            &task_root,
+            &events,
+            "tsk_write_test.md",
+            "activity",
+            "完成本机验收",
+            "本人",
+            "2026-08-24T08:00:00Z",
+        )
+        .unwrap();
+        fs::create_dir_all(&events).unwrap();
+        let external = "{\"id\":\"external\",\"task_id\":\"tsk_write_test\"}\n";
+        fs::write(events.join("2026-08.jsonl"), external).unwrap();
+        let event_conflict =
+            apply_task_note_at(&task_root, &events, note_request(preview, true)).unwrap_err();
+        assert_eq!(event_conflict.code, "event_conflict");
+        assert_eq!(
+            fs::read_to_string(events.join("2026-08.jsonl")).unwrap(),
+            external
+        );
+
+        let too_long = "字".repeat(MAX_NOTE_CHARS + 1);
+        assert_eq!(
+            preview_task_note_at(
+                &task_root,
+                &events,
+                "tsk_write_test.md",
+                "comment",
+                &too_long,
+                "本人",
+                "2026-08-24T08:00:00Z",
+            )
+            .unwrap_err()
+            .code,
+            "invalid_value"
+        );
+        assert_eq!(
+            fs::read_to_string(events.join("2026-08.jsonl")).unwrap(),
+            external
+        );
+    }
+
+    #[test]
+    fn event_reader_exposes_note_text_only_for_bounded_note_events() {
+        let dir = tempdir().unwrap();
+        let long_message = "字".repeat(MAX_NOTE_CHARS + 1);
+        let rows = [
+            serde_json::json!({"id":"comment","task_id":"tsk_one","event_type":"comment_added","occurred_at":"2026-08-24T08:00:00Z","privacy":"general","message":"可见评论","author":"本人"}),
+            serde_json::json!({"id":"status","task_id":"tsk_one","event_type":"status_changed","occurred_at":"2026-08-24T07:00:00Z","privacy":"general","message":"不得透传"}),
+            serde_json::json!({"id":"too-long","task_id":"tsk_one","event_type":"manual_activity_added","occurred_at":"2026-08-24T06:00:00Z","privacy":"general","message":long_message}),
+        ];
+        let content = rows
+            .iter()
+            .map(|row| serde_json::to_string(row).unwrap())
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
+        fs::write(dir.path().join("2026-08.jsonl"), content).unwrap();
+        let loaded = read_events(dir.path(), "tsk_one").unwrap();
+        assert_eq!(loaded.len(), 3);
+        assert_eq!(loaded[0].message.as_deref(), Some("可见评论"));
+        assert!(loaded[1].message.is_none());
+        assert!(loaded[2].message.is_none());
+    }
+
+    #[test]
     fn project_mapping_requires_absolute_workdirs() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("projects.json");
         fs::write(&path, r#"[{"id":"p","name":"P","workdirs":["relative"]}]"#).unwrap();
         assert!(read_project_mappings(Some(&path)).is_err());
+    }
+
+    #[test]
+    fn updater_requires_the_exact_rechecked_version() {
+        assert!(validate_expected_update_version("1.2.0", "1.2.0").is_ok());
+        assert!(validate_expected_update_version("1.2.0", "1.2.1").is_err());
+        assert!(validate_expected_update_version("1.2.0\n", "1.2.0").is_err());
+        assert!(validate_expected_update_version("", "1.2.0").is_err());
     }
 
     #[test]
@@ -2369,6 +3267,12 @@ verification_status: human_confirmed\n\
             ("priority", serde_json::json!("low")),
             ("deadline", serde_json::json!("2026-09-30")),
             ("assignee", serde_json::json!("用户本人")),
+            ("tags", serde_json::json!(["发布", "P1"])),
+            ("parent_id", serde_json::json!("tsk_parent_task")),
+            (
+                "blocked_by_ids",
+                serde_json::json!(["tsk_blocker_one", "tsk_blocker_two"]),
+            ),
             (
                 "related_ids",
                 serde_json::json!(["tsk_relation_one", "tsk_relation_two"]),
@@ -2390,6 +3294,9 @@ verification_status: human_confirmed\n\
         assert!(written.contains("priority: low"));
         assert!(written.contains("deadline: 2026-09-30"));
         assert!(written.contains("assignee: \"用户本人\""));
+        assert!(written.contains("tags: [\"发布\",\"P1\"]"));
+        assert!(written.contains("parent_id: tsk_parent_task"));
+        assert!(written.contains("blocked_by_ids: [\"tsk_blocker_one\",\"tsk_blocker_two\"]"));
         assert!(written.contains("related_ids: [\"tsk_relation_one\",\"tsk_relation_two\"]"));
         assert!(written.contains("record_status: current"));
         assert!(written.contains("unknown_extension: keep-me"));
@@ -2402,8 +3309,8 @@ verification_status: human_confirmed\n\
         assert_eq!(event_rows.len(), expected_event_count);
         assert_eq!(event_rows[1]["previous_task_status"], "doing");
         assert_eq!(event_rows[1]["new_task_status"], "done");
-        assert_eq!(event_rows[6]["event_type"], "archived");
-        assert_eq!(event_rows[7]["event_type"], "restored");
+        assert_eq!(event_rows[9]["event_type"], "archived");
+        assert_eq!(event_rows[10]["event_type"], "restored");
     }
 
     #[test]
@@ -2421,6 +3328,17 @@ verification_status: human_confirmed\n\
             ("deadline", serde_json::json!("2026-02-30"), "invalid_value"),
             (
                 "related_ids",
+                serde_json::json!(["tsk_write_test"]),
+                "invalid_value",
+            ),
+            ("tags", serde_json::json!(["重复", "重复"]), "invalid_value"),
+            (
+                "parent_id",
+                serde_json::json!("tsk_write_test"),
+                "invalid_value",
+            ),
+            (
+                "blocked_by_ids",
                 serde_json::json!(["tsk_write_test"]),
                 "invalid_value",
             ),
@@ -2492,6 +3410,9 @@ verification_status: human_confirmed\n\
             priority: "medium".to_string(),
             assignee: "用户本人".to_string(),
             deadline: "2026-09-30".to_string(),
+            tags: vec!["发布".to_string(), "安全".to_string()],
+            parent_id: "tsk_parent_task".to_string(),
+            blocked_by_ids: vec!["tsk_blocker".to_string()],
             related_ids: vec!["tsk_existing_relation".to_string()],
         }
     }
@@ -2552,6 +3473,9 @@ verification_status: human_confirmed\n\
             "ai_status: human_confirmed",
             "approval_status: accepted",
             "source_refs: [\"task-center-ui\"]",
+            "tags: [\"发布\",\"安全\"]",
+            "parent_id: tsk_parent_task",
+            "blocked_by_ids: [\"tsk_blocker\"]",
         ] {
             assert!(content.contains(expected), "missing {expected}");
         }
