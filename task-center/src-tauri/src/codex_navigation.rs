@@ -1,11 +1,13 @@
 use crate::codex_history::{validate_thread_id, CodexHistoryError};
 use serde::Serialize;
+#[cfg(target_os = "macos")]
 use std::{
     io::Write,
     path::Path,
     process::{Command, Stdio},
 };
 
+#[cfg(target_os = "macos")]
 const CODEX_BUNDLE_ID: &str = "com.openai.codex";
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -31,13 +33,14 @@ pub(crate) fn open_codex_thread(thread_id: &str) -> Result<CodexOpenReceipt, Cod
 
 #[cfg(not(target_os = "macos"))]
 pub(crate) fn open_codex_thread(thread_id: &str) -> Result<CodexOpenReceipt, CodexHistoryError> {
-    validate_thread_id(thread_id)?;
+    let _ = thread_deep_link(thread_id)?;
     Err(CodexHistoryError::new(
         "platform_unsupported",
         "当前版本只支持在 macOS 中打开 Codex 任务",
     ))
 }
 
+#[cfg(target_os = "macos")]
 fn open_codex_thread_with_tools(
     thread_id: &str,
     open_tool: &Path,
@@ -80,6 +83,7 @@ fn open_codex_thread_with_tools(
     })
 }
 
+#[cfg(target_os = "macos")]
 fn copy_to_clipboard(copy_tool: &Path, value: &str) -> bool {
     let Ok(mut child) = Command::new(copy_tool)
         .stdin(Stdio::piped())
@@ -112,7 +116,7 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
+    #[cfg(target_os = "macos")]
     #[test]
     fn exact_deep_link_is_preferred_over_fallback() {
         let receipt = open_codex_thread_with_tools(
@@ -124,7 +128,7 @@ mod tests {
         assert_eq!(receipt.mode, "deepLink");
     }
 
-    #[cfg(unix)]
+    #[cfg(target_os = "macos")]
     #[test]
     fn fallback_opens_codex_and_copies_the_thread_id() {
         use std::{fs, os::unix::fs::PermissionsExt};
