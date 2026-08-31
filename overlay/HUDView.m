@@ -310,12 +310,17 @@
     _lockButton = [NSButton buttonWithImage:[NSImage imageWithSystemSymbolName:@"lock.open" accessibilityDescription:@"锁定位置和大小"] target:self action:@selector(togglePositionLock:)];
     _lockButton.bezelStyle = NSBezelStyleInline;
     _lockButton.bordered = NO;
+    _taskCenterButton = [NSButton buttonWithImage:[NSImage imageWithSystemSymbolName:@"rectangle.grid.2x2" accessibilityDescription:@"打开任务中心"] target:self action:@selector(openTaskCenter:)];
+    _taskCenterButton.bezelStyle = NSBezelStyleInline;
+    _taskCenterButton.bordered = NO;
+    _taskCenterButton.contentTintColor = [NSColor colorWithWhite:1 alpha:0.76];
+    _taskCenterButton.toolTip = @"打开任务中心";
     _settingsButton = [NSButton buttonWithImage:[NSImage imageWithSystemSymbolName:@"gearshape" accessibilityDescription:@"设置"] target:self action:@selector(showSettings:)];
     _settingsButton.bezelStyle = NSBezelStyleInline;
     _settingsButton.bordered = NO;
     _settingsButton.contentTintColor = [NSColor colorWithWhite:1 alpha:0.76];
     _settingsButton.toolTip = @"悬浮窗设置";
-    NSStackView *header = [NSStackView stackViewWithViews:@[_tabs, _minimizeButton, _pinButton, _lockButton, _settingsButton]];
+    NSStackView *header = [NSStackView stackViewWithViews:@[_tabs, _minimizeButton, _pinButton, _lockButton, _taskCenterButton, _settingsButton]];
     header.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     header.alignment = NSLayoutAttributeCenterY;
     header.distribution = NSStackViewDistributionFill;
@@ -323,6 +328,7 @@
     [_minimizeButton setContentHuggingPriority:NSLayoutPriorityRequired forOrientation:NSLayoutConstraintOrientationHorizontal];
     [_pinButton setContentHuggingPriority:NSLayoutPriorityRequired forOrientation:NSLayoutConstraintOrientationHorizontal];
     [_lockButton setContentHuggingPriority:NSLayoutPriorityRequired forOrientation:NSLayoutConstraintOrientationHorizontal];
+    [_taskCenterButton setContentHuggingPriority:NSLayoutPriorityRequired forOrientation:NSLayoutConstraintOrientationHorizontal];
     [_settingsButton setContentHuggingPriority:NSLayoutPriorityRequired forOrientation:NSLayoutConstraintOrientationHorizontal];
     [self setAlwaysOnTop:YES];
     [self setPositionLocked:NO];
@@ -514,6 +520,10 @@
     if (self.settingsRequested) { self.settingsRequested(); return; }
     NSMenu *menu = self.menuProvider ? self.menuProvider() : nil;
     if (menu) [menu popUpMenuPositioningItem:nil atLocation:NSMakePoint(NSMinX(sender.frame), NSMinY(sender.frame) - 4) inView:self];
+}
+
+- (void)openTaskCenter:(NSButton *)sender {
+    if (self.taskCenterRequested) self.taskCenterRequested();
 }
 
 - (void)togglePin:(NSButton *)sender {

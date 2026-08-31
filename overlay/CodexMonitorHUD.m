@@ -14,6 +14,8 @@
 static NSTimeInterval const HUDAutomaticUpdateCheckInterval = 24.0 * 60.0 * 60.0;
 static CGFloat const HUDMinimumWindowScale = 0.75;
 static CGFloat const HUDScreenEdgeMargin = 24.0;
+static NSString *const HUDTaskCenterBundleIdentifier = @"com.xiaoliedao.codex-monitor-task-center";
+static NSString *const HUDTaskCenterReleasePage = @"https://github.com/Ryuaaa/codex-monitor-hud/releases";
 static int HUDSingletonLockFD = -1;
 
 typedef NS_ENUM(NSInteger, HUDSingletonLockResult) {
@@ -367,6 +369,7 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
 @property(nonatomic) BOOL updateCheckInProgress;
 @property(nonatomic) BOOL updateInstalling;
 - (void)showSettingsWindow:(id)sender;
+- (void)openTaskCenter:(id)sender;
 - (NSView *)settingsContentView;
 - (NSSize)frameSizeForContentSize:(NSSize)contentSize;
 - (CGFloat)maximumWindowScaleForBaseSize:(NSSize)baseSize;
@@ -399,6 +402,8 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
     [appMenu addItem:NSMenuItem.separatorItem];
     NSMenuItem *show = [appMenu addItemWithTitle:@"显示悬浮窗" action:@selector(showHUD:) keyEquivalent:@""];
     show.target = self;
+    NSMenuItem *taskCenter = [appMenu addItemWithTitle:@"打开任务中心" action:@selector(openTaskCenter:) keyEquivalent:@""];
+    taskCenter.target = self;
     NSMenuItem *hide = [appMenu addItemWithTitle:@"隐藏 Codex Monitor HUD" action:@selector(hide:) keyEquivalent:@"h"];
     hide.target = NSApp;
     NSMenuItem *checkUpdates = [appMenu addItemWithTitle:@"检查更新…" action:@selector(checkForUpdatesManually:) keyEquivalent:@""];
@@ -538,6 +543,60 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
     if (self.panel.isMiniaturized) [self.panel deminiaturize:nil];
     [NSApp activateIgnoringOtherApps:YES];
     [self.panel orderFrontRegardless];
+}
+
+- (NSURL *)installedTaskCenterURL {
+    NSArray<NSString *> *fallbackPaths = @[
+        [NSHomeDirectory() stringByAppendingPathComponent:@"Applications/Codex Monitor Task Center.app"],
+        @"/Applications/Codex Monitor Task Center.app"
+    ];
+    for (NSString *path in fallbackPaths) {
+        NSBundle *bundle = [NSBundle bundleWithPath:path];
+        if ([bundle.bundleIdentifier isEqualToString:HUDTaskCenterBundleIdentifier]) {
+            return [NSURL fileURLWithPath:path isDirectory:YES];
+        }
+    }
+    NSURL *registeredURL = [NSWorkspace.sharedWorkspace URLForApplicationWithBundleIdentifier:HUDTaskCenterBundleIdentifier];
+    if (registeredURL && [NSFileManager.defaultManager fileExistsAtPath:registeredURL.path]) return registeredURL;
+    return nil;
+}
+
+- (void)presentTaskCenterLaunchFailure:(NSString *)detail {
+    NSAlert *alert = [NSAlert new];
+    alert.messageText = @"暂时无法打开任务中心";
+    alert.informativeText = detail.length > 0 ? detail : @"尚未找到已安装的 Codex Monitor 任务中心。悬浮窗会继续正常运行。";
+    [alert addButtonWithTitle:@"打开下载页"];
+    [alert addButtonWithTitle:@"取消"];
+    void (^handleResponse)(NSModalResponse) = ^(NSModalResponse response) {
+        if (response == NSAlertFirstButtonReturn) {
+            [NSWorkspace.sharedWorkspace openURL:[NSURL URLWithString:HUDTaskCenterReleasePage]];
+        }
+    };
+    if (self.panel.visible && !self.panel.miniaturized) {
+        [alert beginSheetModalForWindow:self.panel completionHandler:handleResponse];
+    } else {
+        [NSApp activateIgnoringOtherApps:YES];
+        handleResponse([alert runModal]);
+    }
+}
+
+- (void)openTaskCenter:(id)sender {
+    NSURL *applicationURL = [self installedTaskCenterURL];
+    if (!applicationURL) {
+        [self presentTaskCenterLaunchFailure:nil];
+        return;
+    }
+
+    NSWorkspaceOpenConfiguration *configuration = [NSWorkspaceOpenConfiguration configuration];
+    configuration.activates = YES;
+    __weak typeof(self) weakSelf = self;
+    [NSWorkspace.sharedWorkspace openApplicationAtURL:applicationURL configuration:configuration completionHandler:^(__unused NSRunningApplication *application, NSError *error) {
+        if (!error) return;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            NSString *message = [NSString stringWithFormat:@"任务中心已找到，但启动失败：%@", error.localizedDescription ?: @"未知错误"];
+            [weakSelf presentTaskCenterLaunchFailure:message];
+        });
+    }];
 }
 
 - (NSColor *)accentColor {
@@ -710,6 +769,7 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
     __weak typeof(self) weakSelf = self;
     self.hudView.menuProvider = ^NSMenu *{ return [weakSelf settingsMenu]; };
     self.hudView.settingsRequested = ^{ [weakSelf showSettingsWindow:nil]; };
+    self.hudView.taskCenterRequested = ^{ [weakSelf openTaskCenter:nil]; };
     self.hudView.pageChanged = ^(NSInteger page) {
         weakSelf.currentPage = page;
         [NSUserDefaults.standardUserDefaults setInteger:page forKey:@"currentPage"];
@@ -2052,6 +2112,12 @@ static int RunUIDiagnostic(void) {
     scalePass = scalePass && fabs(wideResize.width - 501.0) < 0.01 && fabs(tallResize.height - 317.0) < 0.01;
     scalePass = scalePass && maximumResize.width > 645.0 && maximumResize.height > 390.0;
     delegate.hudView = [[HUDView alloc] initWithFrame:NSMakeRect(0, 0, 430, 260)];
+    __block BOOL taskCenterRequested = NO;
+    delegate.hudView.taskCenterRequested = ^{ taskCenterRequested = YES; };
+    [delegate.hudView.taskCenterButton performClick:nil];
+    [delegate.hudView layoutSubtreeIfNeeded];
+    BOOL taskCenterButtonLayoutPass = delegate.hudView.taskCenterButton.frame.size.width > 0 && delegate.hudView.taskCenterButton.frame.size.height > 0 && NSMaxX(delegate.hudView.taskCenterButton.frame) <= NSMinX(delegate.hudView.settingsButton.frame) + 1.0;
+    BOOL taskCenterEntryPass = taskCenterRequested && taskCenterButtonLayoutPass && [delegate.hudView.taskCenterButton.toolTip isEqualToString:@"打开任务中心"] && delegate.hudView.taskCenterButton.image != nil;
     [delegate.hudView setHomeFiveHourVisible:NO]; [delegate.hudView setFiveHourQuotaVisible:NO];
     [delegate.hudView setHomePlanVisible:NO]; [delegate.hudView setPlanVisible:NO];
     [delegate.hudView setHomeWeeklyVisible:YES]; [delegate.hudView setWeeklyQuotaVisible:YES];
@@ -2170,6 +2236,7 @@ static int RunUIDiagnostic(void) {
     printf("settings_visibility_test=%s\n", settingsPass ? "pass" : "fail");
     if (!settingsPass) printf("settings_visibility_details=checkboxes:%ld five_hour_off:%ld plan_off:%ld optional_history_off:%ld reset_buttons:%ld codex_order:%ld computer_order:%ld\n", (long)checkboxCount, (long)hiddenFiveHourCount, (long)hiddenPlanCount, (long)optionalHistoryOffCount, (long)resetButtonCount, (long)delegate.settingsOrderControllers[0].items.count, (long)delegate.settingsOrderControllers[1].items.count);
     printf("home_module_order_test=%s\n", orderPass ? "pass" : "fail");
+    printf("task_center_entry_test=%s\n", taskCenterEntryPass ? "pass" : "fail");
     printf("home_full_layout_test=%s\n", homeLayoutPass ? "pass" : "fail");
     printf("long_text_card_layout_test=%s\n", longTextLayoutPass ? "pass" : "fail");
     printf("adaptive_refresh_test=%s\n", refreshPolicyPass ? "pass" : "fail");
@@ -2182,7 +2249,7 @@ static int RunUIDiagnostic(void) {
     printf("timer_tolerance_test=%s\n", timerTolerancePass ? "pass" : "fail");
     printf("timer_tolerance_seconds=%.2f\n", timerTolerance);
     printf("hidden_content_test=%s\n", cardVisibilityPass && hiddenContentPass ? "pass" : "fail");
-    return settingsPass && orderPass && homeLayoutPass && longTextLayoutPass && refreshPolicyPass && stateFallbackPass && migrationPresentationPass && scalePass && positionLockPass && hiddenSamplingPass && hiddenServiceStatusPass && timerTolerancePass && cardVisibilityPass && hiddenContentPass ? 0 : 5;
+    return settingsPass && orderPass && taskCenterEntryPass && homeLayoutPass && longTextLayoutPass && refreshPolicyPass && stateFallbackPass && migrationPresentationPass && scalePass && positionLockPass && hiddenSamplingPass && hiddenServiceStatusPass && timerTolerancePass && cardVisibilityPass && hiddenContentPass ? 0 : 5;
 }
 
 static int RunDiagnostic(void) {

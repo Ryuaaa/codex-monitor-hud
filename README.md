@@ -1,6 +1,6 @@
 # Codex 电脑轻量监测器
 
-> 同仓库的第二个独立应用“Codex Monitor 任务中心”正在 `task-center/` 开发。它按需启动、关闭后退出，P1 只读，不会链接到或改变本 HUD 的常驻运行层。架构与验收记录见 `docs/task-center/`。
+> 同仓库的第二个独立应用“Codex Monitor 任务中心”位于 `task-center/`。HUD 顶栏和应用菜单可按需打开它；任务中心关闭后退出，不会链接到或改变 HUD 的常驻运行层。架构与验收记录见 `docs/task-center/`。
 
 > macOS正式版：1.1.0，使用Developer ID签名并通过Apple公证。Windows x64的1.1.0未签名预览版已通过GitHub Windows虚拟机的编译、完整测试、安装、卸载和旧版升级验证；正式安装包仍在等待SignPath.io与SignPath Foundation可信签名。
 

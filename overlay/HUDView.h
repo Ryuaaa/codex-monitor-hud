@@ -47,6 +47,7 @@
 @property(nonatomic, strong) NSButton *minimizeButton;
 @property(nonatomic, strong) NSButton *pinButton;
 @property(nonatomic, strong) NSButton *lockButton;
+@property(nonatomic, strong) NSButton *taskCenterButton;
 @property(nonatomic, strong) NSButton *settingsButton;
 @property(nonatomic, strong) NSStackView *homeStack;
 @property(nonatomic, strong) NSTextField *homeCodexStatusLabel;
@@ -124,6 +125,7 @@
 @property(nonatomic, strong) NSArray<NSTextField *> *detailLabels;
 @property(nonatomic, copy) NSMenu *(^menuProvider)(void);
 @property(nonatomic, copy) void (^settingsRequested)(void);
+@property(nonatomic, copy) void (^taskCenterRequested)(void);
 @property(nonatomic, copy) void (^pageChanged)(NSInteger page);
 @property(nonatomic, copy) void (^topmostChanged)(BOOL enabled);
 @property(nonatomic, copy) void (^positionLockChanged)(BOOL enabled);
