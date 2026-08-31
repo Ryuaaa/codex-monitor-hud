@@ -20,7 +20,7 @@ if (!signature || signature.length > 4096 || signature.includes("\0")) {
 const url = `https://api.github.com/repos/Ryuaaa/codex-monitor-hud/releases/assets/${assetId}`;
 const manifest = {
   version,
-  notes: "新增标签与保存筛选、父子/阻塞/相关关系、评论与人工活动，并加入独立安全更新通道。",
+  notes: "可从任务中心安全继续官方 Codex 任务，并可准确打开对应 Codex 任务；保留按需运行、显式确认和失败隔离。",
   pub_date: new Date().toISOString(),
   platforms: {
     "darwin-aarch64": { signature, url },

@@ -1,6 +1,6 @@
 [package]
 name = "codex-monitor-task-center"
-version = "1.2.1"
+version = "1.3.0"
 description = "On-demand task center with explicit safe writes for the Codex Monitor product family"
 authors = ["Ryua"]
 edition = "2021"

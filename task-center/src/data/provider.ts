@@ -244,7 +244,7 @@ export const taskDataProvider: TaskDataProvider = {
   async checkTaskCenterUpdate() {
     return isTauri()
       ? invoke<TaskCenterUpdateInfo>("check_task_center_update")
-      : { currentVersion: "1.2.1", available: false };
+      : { currentVersion: "1.3.0", available: false };
   },
   async installTaskCenterUpdate(expectedVersion) {
     if (!isTauri()) throw new Error("浏览器合成预览不安装更新");
