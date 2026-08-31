@@ -1,4 +1,5 @@
 mod codex_history;
+mod codex_navigation;
 mod codex_turn;
 
 use serde::{Deserialize, Serialize};
@@ -2439,6 +2440,17 @@ async fn load_codex_thread_list(
 }
 
 #[tauri::command]
+async fn open_codex_thread(
+    thread_id: String,
+) -> Result<codex_navigation::CodexOpenReceipt, codex_history::CodexHistoryError> {
+    tauri::async_runtime::spawn_blocking(move || codex_navigation::open_codex_thread(&thread_id))
+        .await
+        .map_err(|_| {
+            codex_history::CodexHistoryError::new("worker_failed", "打开 Codex 的任务异常结束")
+        })?
+}
+
+#[tauri::command]
 fn start_codex_turn(
     manager: tauri::State<'_, codex_turn::CodexTurnManager>,
     thread_id: String,
@@ -2700,6 +2712,7 @@ pub fn run() {
             load_project_mappings,
             load_codex_thread_list,
             load_codex_thread_page,
+            open_codex_thread,
             start_codex_turn,
             get_codex_turn_status,
             respond_codex_turn_approval,

@@ -7,6 +7,7 @@ import type {
   CodexThreadPage,
   CodexThreadListPage,
   CodexThreadListRequest,
+  CodexOpenReceipt,
   CodexTurnSnapshot,
   CodexApprovalDecision,
   CreateTaskPreview,
@@ -33,6 +34,7 @@ export interface TaskDataProvider {
   loadProjectMappings(): Promise<ProjectMapping[]>;
   loadCodexThreadList(request: CodexThreadListRequest): Promise<CodexThreadListPage>;
   loadCodexThreadPage(threadId: string, cursor?: string): Promise<CodexThreadPage>;
+  openCodexThread(threadId: string): Promise<CodexOpenReceipt>;
   startCodexTurn(threadId: string, input: string): Promise<CodexTurnSnapshot>;
   getCodexTurnStatus(sessionId: string): Promise<CodexTurnSnapshot>;
   respondCodexTurnApproval(sessionId: string, requestId: string, decision: CodexApprovalDecision): Promise<CodexTurnSnapshot>;
@@ -131,6 +133,11 @@ export const taskDataProvider: TaskDataProvider = {
     return isTauri()
       ? invoke<CodexThreadPage>("load_codex_thread_page", { threadId, cursor: cursor ?? null })
       : demoCodexPage(threadId, cursor);
+  },
+  async openCodexThread(threadId) {
+    return isTauri()
+      ? invoke<CodexOpenReceipt>("open_codex_thread", { threadId })
+      : { mode: "deepLink", message: `已在 Codex 中打开 ${threadId}` };
   },
   async startCodexTurn(threadId, input) {
     if (isTauri()) return invoke<CodexTurnSnapshot>("start_codex_turn", { threadId, input });

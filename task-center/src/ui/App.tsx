@@ -4,6 +4,7 @@ import type {
   PriorityEditPreview,
   PriorityEditReceipt,
   CodexHistoryFailure,
+  CodexOpenReceipt,
   CodexThreadListPage,
   CodexThreadListRequest,
   CodexThreadSourceGroup,
@@ -109,6 +110,9 @@ export function App({ provider = taskDataProvider }: { provider?: TaskDataProvid
   const [codexTurnOwner, setCodexTurnOwner] = useState<CodexThreadSummary>();
   const [codexTurnFailure, setCodexTurnFailure] = useState<CodexHistoryFailure>();
   const [codexPollFailures, setCodexPollFailures] = useState(0);
+  const [codexOpenBusy, setCodexOpenBusy] = useState(false);
+  const [codexOpenReceipt, setCodexOpenReceipt] = useState<CodexOpenReceipt>();
+  const [codexOpenFailure, setCodexOpenFailure] = useState<CodexHistoryFailure>();
   const [priorityDraft, setPriorityDraft] = useState<"high" | "medium" | "low">();
   const [writePreview, setWritePreview] = useState<PriorityEditPreview>();
   const [writeReceipt, setWriteReceipt] = useState<PriorityEditReceipt>();
@@ -372,7 +376,23 @@ export function App({ provider = taskDataProvider }: { provider?: TaskDataProvid
     setCodexContinueDraft("");
     setCodexContinuePreview(undefined);
     setCodexTurnFailure(undefined);
+    setCodexOpenReceipt(undefined);
+    setCodexOpenFailure(undefined);
     setSelectedCodex(thread);
+  }
+
+  async function openSelectedThreadInCodex() {
+    if (!selectedCodex || codexOpenBusy) return;
+    setCodexOpenBusy(true);
+    setCodexOpenReceipt(undefined);
+    setCodexOpenFailure(undefined);
+    try {
+      setCodexOpenReceipt(await provider.openCodexThread(selectedCodex.threadId));
+    } catch (error) {
+      setCodexOpenFailure(normalizeCodexHistoryError(error));
+    } finally {
+      setCodexOpenBusy(false);
+    }
   }
 
   function previewCodexContinuation() {
@@ -1016,7 +1036,11 @@ export function App({ provider = taskDataProvider }: { provider?: TaskDataProvid
         continuePreview={codexContinuePreview}
         turn={codexTurn?.threadId === selectedCodex.threadId ? codexTurn : undefined}
         turnFailure={codexTurnFailure}
+        openBusy={codexOpenBusy}
+        openReceipt={codexOpenReceipt}
+        openFailure={codexOpenFailure}
         onLoad={loadCodexHistory}
+        onOpenInCodex={openSelectedThreadInCodex}
         onContinueDraft={(value) => {
           setCodexContinueDraft(value);
           setCodexContinuePreview(undefined);
@@ -1109,8 +1133,8 @@ function CodexActivity({
 }
 
 function CodexActivityDetail({
-  thread, history, continueDraft, continuePreview, turn, turnFailure,
-  onLoad, onContinueDraft, onPreviewContinue, onConfirmContinue, onCancelContinue, onClose,
+  thread, history, continueDraft, continuePreview, turn, turnFailure, openBusy, openReceipt, openFailure,
+  onLoad, onOpenInCodex, onContinueDraft, onPreviewContinue, onConfirmContinue, onCancelContinue, onClose,
   onApproval, onInterrupt, onRetryStatus,
 }: {
   thread: CodexThreadSummary;
@@ -1119,7 +1143,11 @@ function CodexActivityDetail({
   continuePreview?: string;
   turn?: CodexTurnSnapshot;
   turnFailure?: CodexHistoryFailure;
+  openBusy: boolean;
+  openReceipt?: CodexOpenReceipt;
+  openFailure?: CodexHistoryFailure;
   onLoad: (threadId: string, cursor?: string) => void;
+  onOpenInCodex: () => void;
   onContinueDraft: (value: string) => void;
   onPreviewContinue: () => void;
   onConfirmContinue: () => void;
@@ -1144,7 +1172,10 @@ function CodexActivityDetail({
         <div><dt>最近活动</dt><dd>{formatUnixTime(thread.updatedAt ?? thread.createdAt)}</dd></div>
         <div><dt>记录状态</dt><dd>{thread.archived ? "已归档" : codexReportedStatus(thread.reportedStatus)}</dd></div>
       </dl>
-      <section><h3>任务编号</h3><p className="thread-id-copy">{thread.threadId}</p></section>
+      <section className="codex-open-section"><div className="section-title"><h3>任务编号</h3><button disabled={openBusy} onClick={onOpenInCodex}>{openBusy ? "正在打开…" : "在 Codex 中打开"}</button></div><p className="thread-id-copy">{thread.threadId}</p>
+        {openReceipt && <p className="codex-open-message" aria-live="polite">{openReceipt.message}</p>}
+        {openFailure && <div className="write-failure" role="alert"><strong>{openFailure.message}</strong><small>{openFailure.code}</small></div>}
+      </section>
       <section className="codex-continue" aria-label="继续 Codex 任务">
         <div className="section-title"><h3>继续这个任务</h3><span className="on-demand">官方接口</span></div>
         <p className="write-boundary">确认后会在原 Codex 任务中开始新一轮；不改动它的模型、目录或权限设置。</p>

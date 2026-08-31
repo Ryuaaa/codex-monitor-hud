@@ -66,6 +66,7 @@ function provider(): TaskDataProvider {
       historyState: "paged",
       observedAt: 201,
     })),
+    openCodexThread: vi.fn().mockResolvedValue({ mode: "deepLink", message: "已在 Codex 中打开这个任务" }),
     startCodexTurn: vi.fn().mockImplementation((threadId) => Promise.resolve({
       sessionId: "session-demo-1",
       threadId,
@@ -280,6 +281,15 @@ describe("任务中心核心流程", () => {
     fireEvent.click(screen.getByRole("button", { name: "读取历史" }));
     expect(await screen.findByText("按需分页")).toBeInTheDocument();
     expect(mock.loadCodexThreadPage).toHaveBeenCalledWith("019f-demo-running", undefined);
+  });
+
+  it("在 Codex 中打开只发送已选任务编号，并显示跳转结果", async () => {
+    const mock = provider();
+    render(<App provider={mock} />);
+    fireEvent.click(await screen.findByRole("button", { name: /合成 Codex 任务/ }));
+    fireEvent.click(screen.getByRole("button", { name: "在 Codex 中打开" }));
+    await waitFor(() => expect(mock.openCodexThread).toHaveBeenCalledWith("019f-demo-running"));
+    expect(await screen.findByText("已在 Codex 中打开这个任务")).toBeInTheDocument();
   });
 
   it("继续 Codex 任务必须先预览再确认，并显示官方运行结果", async () => {

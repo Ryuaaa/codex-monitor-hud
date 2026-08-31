@@ -261,6 +261,11 @@ export interface CodexThreadListPage {
   observedAt: number;
 }
 
+export interface CodexOpenReceipt {
+  mode: "deepLink" | "openedAndCopied" | "openedOnly" | string;
+  message: string;
+}
+
 export interface CodexThreadPage {
   threadId: string;
   name?: string;
