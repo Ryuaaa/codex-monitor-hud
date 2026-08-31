@@ -5,8 +5,12 @@ import type {
   PriorityEditReceipt,
   CodexHistoryFailure,
   CodexThreadListPage,
+  CodexThreadListRequest,
+  CodexThreadSourceGroup,
   CodexThreadPage,
   CodexThreadSummary,
+  CodexTurnSnapshot,
+  CodexApprovalDecision,
   CodexTurnSummary,
   CreateTaskPreview,
   CreateTaskReceipt,
@@ -74,6 +78,9 @@ export function App({ provider = taskDataProvider }: { provider?: TaskDataProvid
   const [view, setView] = useState<"board" | "list">("board");
   const [query, setQuery] = useState("");
   const [codexQuery, setCodexQuery] = useState("");
+  const [codexAppliedSearch, setCodexAppliedSearch] = useState("");
+  const [codexSourceGroup, setCodexSourceGroup] = useState<CodexThreadSourceGroup>("interactive");
+  const [codexArchived, setCodexArchived] = useState(false);
   const [statusFilter, setStatusFilter] = useState<TaskStatus | "all">("all");
   const [tagFilter, setTagFilter] = useState("");
   const [savedFilters, setSavedFilters] = useState<SavedTaskFilter[]>([]);
@@ -96,6 +103,12 @@ export function App({ provider = taskDataProvider }: { provider?: TaskDataProvid
   const [codexListLoading, setCodexListLoading] = useState(false);
   const [codexListFailure, setCodexListFailure] = useState<CodexHistoryFailure>();
   const [selectedCodex, setSelectedCodex] = useState<CodexThreadSummary>();
+  const [codexContinueDraft, setCodexContinueDraft] = useState("");
+  const [codexContinuePreview, setCodexContinuePreview] = useState<string>();
+  const [codexTurn, setCodexTurn] = useState<CodexTurnSnapshot>();
+  const [codexTurnOwner, setCodexTurnOwner] = useState<CodexThreadSummary>();
+  const [codexTurnFailure, setCodexTurnFailure] = useState<CodexHistoryFailure>();
+  const [codexPollFailures, setCodexPollFailures] = useState(0);
   const [priorityDraft, setPriorityDraft] = useState<"high" | "medium" | "low">();
   const [writePreview, setWritePreview] = useState<PriorityEditPreview>();
   const [writeReceipt, setWriteReceipt] = useState<PriorityEditReceipt>();
@@ -147,6 +160,30 @@ export function App({ provider = taskDataProvider }: { provider?: TaskDataProvid
     }
   }, [section, managedLoadState]);
 
+  useEffect(() => {
+    if (!codexTurn || codexPollFailures >= 3 || ["completed", "failed", "interrupted", "timedOut"].includes(codexTurn.state)) return;
+    let cancelled = false;
+    const timer = window.setTimeout(async () => {
+      try {
+        const next = await provider.getCodexTurnStatus(codexTurn.sessionId);
+        if (!cancelled) {
+          setCodexTurn(next);
+          setCodexTurnFailure(undefined);
+          setCodexPollFailures(0);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setCodexTurnFailure(normalizeCodexHistoryError(error));
+          setCodexPollFailures((current) => current + 1);
+        }
+      }
+    }, 700);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [codexTurn, codexPollFailures, provider]);
+
   const filtered = useMemo(() => {
     const normalized = query.trim().toLowerCase();
     return tasks.filter((task) => {
@@ -163,12 +200,7 @@ export function App({ provider = taskDataProvider }: { provider?: TaskDataProvid
   const allTags = useMemo(() => [...new Set(tasks.flatMap((task) => task.tags))]
     .sort((left, right) => left.localeCompare(right, "zh-CN")), [tasks]);
 
-  const filteredCodexThreads = useMemo(() => {
-    const normalized = codexQuery.trim().toLowerCase();
-    if (!normalized) return codexThreads;
-    return codexThreads.filter((thread) => [thread.name, thread.workspaceName, thread.sourceLabel, thread.threadId]
-      .filter(Boolean).join(" ").toLowerCase().includes(normalized));
-  }, [codexThreads, codexQuery]);
+  const filteredCodexThreads = codexThreads;
 
   const projectOptions = useMemo(() => {
     const mapped = projects.map((project) => ({ id: project.id, name: project.name, workdirs: project.workdirs }));
@@ -178,7 +210,11 @@ export function App({ provider = taskDataProvider }: { provider?: TaskDataProvid
     return [...mapped, ...domains];
   }, [projects, tasks]);
 
-  async function loadCodexThreads(cursor?: string, replace = false) {
+  async function loadCodexThreads(
+    cursor?: string,
+    replace = false,
+    overrides: Partial<Omit<CodexThreadListRequest, "cursor">> = {},
+  ) {
     const generation = codexListGeneration.current + 1;
     codexListGeneration.current = generation;
     setCodexListLoading(true);
@@ -188,7 +224,15 @@ export function App({ provider = taskDataProvider }: { provider?: TaskDataProvid
       setCodexListPage(undefined);
     }
     try {
-      const page = await provider.loadCodexThreadList(cursor);
+      const request: CodexThreadListRequest = {
+        cursor,
+        archived: overrides.archived ?? codexArchived,
+        sourceGroup: overrides.sourceGroup ?? codexSourceGroup,
+        searchTerm: Object.prototype.hasOwnProperty.call(overrides, "searchTerm")
+          ? overrides.searchTerm
+          : (codexAppliedSearch || undefined),
+      };
+      const page = await provider.loadCodexThreadList(request);
       if (generation !== codexListGeneration.current) return;
       setCodexThreads((current) => {
         const previous = replace ? [] : current;
@@ -202,6 +246,24 @@ export function App({ provider = taskDataProvider }: { provider?: TaskDataProvid
     } finally {
       if (generation === codexListGeneration.current) setCodexListLoading(false);
     }
+  }
+
+  function applyCodexSearch() {
+    const searchTerm = codexQuery.trim();
+    setCodexAppliedSearch(searchTerm);
+    void loadCodexThreads(undefined, true, { searchTerm: searchTerm || undefined });
+  }
+
+  function changeCodexSourceGroup(sourceGroup: CodexThreadSourceGroup) {
+    setCodexSourceGroup(sourceGroup);
+    closeDetails();
+    void loadCodexThreads(undefined, true, { sourceGroup });
+  }
+
+  function changeCodexArchive(archived: boolean) {
+    setCodexArchived(archived);
+    closeDetails();
+    void loadCodexThreads(undefined, true, { archived });
   }
 
   async function loadManagedTasks() {
@@ -307,7 +369,73 @@ export function App({ provider = taskDataProvider }: { provider?: TaskDataProvid
   function openCodexThread(thread: CodexThreadSummary) {
     codexHistoryGeneration.current += 1;
     setCodexHistory({});
+    setCodexContinueDraft("");
+    setCodexContinuePreview(undefined);
+    setCodexTurnFailure(undefined);
     setSelectedCodex(thread);
+  }
+
+  function previewCodexContinuation() {
+    const value = codexContinueDraft.trim();
+    if (!value) return;
+    setCodexContinuePreview(value);
+    setCodexTurnFailure(undefined);
+  }
+
+  async function confirmCodexContinuation() {
+    if (!selectedCodex || !codexContinuePreview) return;
+    setCodexTurnFailure(undefined);
+    try {
+      const next = await provider.startCodexTurn(selectedCodex.threadId, codexContinuePreview);
+      setCodexTurn(next);
+      setCodexTurnOwner(selectedCodex);
+      setCodexPollFailures(0);
+      // The application never persists the user's continuation text.
+      setCodexContinueDraft("");
+      setCodexContinuePreview(undefined);
+    } catch (error) {
+      setCodexTurnFailure(normalizeCodexHistoryError(error));
+    }
+  }
+
+  async function respondCodexApproval(decision: CodexApprovalDecision) {
+    if (!codexTurn?.pendingApproval) return;
+    setCodexTurnFailure(undefined);
+    try {
+      const next = await provider.respondCodexTurnApproval(
+        codexTurn.sessionId,
+        codexTurn.pendingApproval.requestId,
+        decision,
+      );
+      setCodexTurn(next);
+      setCodexPollFailures(0);
+    } catch (error) {
+      setCodexTurnFailure(normalizeCodexHistoryError(error));
+    }
+  }
+
+  async function interruptCodexContinuation() {
+    if (!codexTurn) return;
+    setCodexTurnFailure(undefined);
+    try {
+      setCodexTurn(await provider.interruptCodexTurn(codexTurn.sessionId));
+      setCodexPollFailures(0);
+    } catch (error) {
+      setCodexTurnFailure(normalizeCodexHistoryError(error));
+    }
+  }
+
+  function resetCodexContinuation() {
+    setCodexContinueDraft("");
+    setCodexContinuePreview(undefined);
+    setCodexTurnFailure(undefined);
+  }
+
+  function retryCodexTurnStatus() {
+    if (!codexTurn) return;
+    setCodexTurnFailure(undefined);
+    setCodexPollFailures(0);
+    setCodexTurn({ ...codexTurn });
   }
 
   function closeDetails() {
@@ -689,7 +817,7 @@ export function App({ provider = taskDataProvider }: { provider?: TaskDataProvid
       <header className="topbar">
         <div>
           <p className="eyebrow">CODEX MONITOR</p>
-          <h1>任务中心 <span>{section === "codex" ? "官方只读" : "安全写入"}</span></h1>
+          <h1>任务中心 <span>{section === "codex" ? "官方任务" : "安全写入"}</span></h1>
         </div>
         <div className="top-actions" aria-label="视图设置">
           {section === "codex" ? <button disabled={codexListLoading} onClick={() => loadCodexThreads(undefined, true)}>{codexListLoading ? "读取中…" : "刷新"}</button> : <>
@@ -707,7 +835,7 @@ export function App({ provider = taskDataProvider }: { provider?: TaskDataProvid
         <aside className="sidebar" aria-label="任务中心导航">
           <nav className="source-nav" aria-label="数据来源">
             <button className={section === "codex" ? "source-entry active" : "source-entry"} onClick={() => { closeDetails(); setLoadError(undefined); setSection("codex"); }}>
-              <span>Codex 活动<small>官方任务列表 · 自动读取</small></span><strong>{codexThreads.length}</strong>
+              <span>Codex 活动<small>官方任务 · 可继续</small></span><strong>{codexThreads.length}</strong>
             </button>
             <button className={section === "managed" ? "source-entry active" : "source-entry"} onClick={() => { closeDetails(); setLoadError(undefined); setSection("managed"); }}>
               <span>管理任务<small>可选本地任务库</small></span><strong>{managedLoadState === "ready" ? tasks.length : "—"}</strong>
@@ -732,6 +860,10 @@ export function App({ provider = taskDataProvider }: { provider?: TaskDataProvid
 
         <main>
           {updateMessage && <div role={updateFailed ? "alert" : "status"} className={updateFailed ? "alert update-message" : "update-message"}>{updateMessage}</div>}
+          {codexTurn && codexTurnOwner && <div className={`codex-global-turn ${codexTurn.state}`} aria-live="polite">
+            <div><strong>{["starting", "running", "waitingApproval", "interrupting"].includes(codexTurn.state) ? "Codex 正在运行" : "Codex 最近结果"}</strong><span>{codexTurnOwner.name ?? "未命名 Codex 任务"} · {codexTurnStateLabel(codexTurn.state)}</span></div>
+            <button onClick={() => { setSection("codex"); openCodexThread(codexTurnOwner); }}>查看任务</button>
+          </div>}
           {section === "codex" ? <CodexActivity
             threads={filteredCodexThreads}
             allThreads={codexThreads}
@@ -739,7 +871,13 @@ export function App({ provider = taskDataProvider }: { provider?: TaskDataProvid
             loading={codexListLoading}
             failure={codexListFailure}
             query={codexQuery}
+            appliedSearch={codexAppliedSearch}
+            sourceGroup={codexSourceGroup}
+            archived={codexArchived}
             onQuery={setCodexQuery}
+            onSearch={applyCodexSearch}
+            onSourceGroup={changeCodexSourceGroup}
+            onArchive={changeCodexArchive}
             onOpen={openCodexThread}
             onRetry={() => loadCodexThreads(undefined, true)}
             onMore={(cursor) => loadCodexThreads(cursor)}
@@ -874,7 +1012,22 @@ export function App({ provider = taskDataProvider }: { provider?: TaskDataProvid
       {selectedCodex && <CodexActivityDetail
         thread={selectedCodex}
         history={codexHistory[selectedCodex.threadId]}
+        continueDraft={codexContinueDraft}
+        continuePreview={codexContinuePreview}
+        turn={codexTurn?.threadId === selectedCodex.threadId ? codexTurn : undefined}
+        turnFailure={codexTurnFailure}
         onLoad={loadCodexHistory}
+        onContinueDraft={(value) => {
+          setCodexContinueDraft(value);
+          setCodexContinuePreview(undefined);
+          setCodexTurnFailure(undefined);
+        }}
+        onPreviewContinue={previewCodexContinuation}
+        onConfirmContinue={confirmCodexContinuation}
+        onCancelContinue={resetCodexContinuation}
+        onApproval={respondCodexApproval}
+        onInterrupt={interruptCodexContinuation}
+        onRetryStatus={retryCodexTurnStatus}
         onClose={closeDetails}
       />}
       {createOpen && <CreateTaskDialog
@@ -893,8 +1046,8 @@ export function App({ provider = taskDataProvider }: { provider?: TaskDataProvid
 }
 
 function CodexActivity({
-  threads, allThreads, page, loading, failure, query,
-  onQuery, onOpen, onRetry, onMore,
+  threads, allThreads, page, loading, failure, query, appliedSearch, sourceGroup, archived,
+  onQuery, onSearch, onSourceGroup, onArchive, onOpen, onRetry, onMore,
 }: {
   threads: CodexThreadSummary[];
   allThreads: CodexThreadSummary[];
@@ -902,7 +1055,13 @@ function CodexActivity({
   loading: boolean;
   failure?: CodexHistoryFailure;
   query: string;
+  appliedSearch: string;
+  sourceGroup: CodexThreadSourceGroup;
+  archived: boolean;
   onQuery: (value: string) => void;
+  onSearch: () => void;
+  onSourceGroup: (value: CodexThreadSourceGroup) => void;
+  onArchive: (value: boolean) => void;
   onOpen: (thread: CodexThreadSummary) => void;
   onRetry: () => void;
   onMore: (cursor: string) => void;
@@ -911,7 +1070,7 @@ function CodexActivity({
   return <>
     <section className="source-intro">
       <div><p className="eyebrow">DEFAULT DATA SOURCE</p><h2>Codex 活动</h2></div>
-      <p>直接读取本机官方任务列表，不需要个人任务目录。只显示任务名称与必要元数据，不使用对话预览作为标题。</p>
+      <p>直接读取本机官方任务列表，支持原任务继续执行。列表仍只显示名称与必要元数据，不展示或保存对话正文。</p>
     </section>
     <section className="summary" aria-label="Codex 活动概况">
       <Metric label="已读取任务" value={allThreads.length} tone="blue" />
@@ -919,13 +1078,20 @@ function CodexActivity({
       <Metric label="置顶任务" value={allThreads.filter((thread) => thread.isPinned).length} tone="orange" />
       <Metric label="工作目录" value={workspaces.size} tone="muted" />
     </section>
-    <section className="toolbar" aria-label="Codex 活动搜索">
-      <label className="search"><span>搜索</span><input value={query} onChange={(event) => onQuery(event.target.value)} placeholder="任务名称、项目、来源…" /></label>
+    <form className="toolbar codex-toolbar" aria-label="Codex 任务筛选" onSubmit={(event) => { event.preventDefault(); onSearch(); }}>
+      <label className="search"><span>官方标题搜索</span><input maxLength={200} value={query} onChange={(event) => onQuery(event.target.value)} placeholder="输入任务名称后按回车" /></label>
+      <button className="codex-filter-action" type="submit" disabled={loading}>{loading ? "读取中…" : "搜索"}</button>
+      <label><span>来源分类</span><select aria-label="Codex 来源分类" value={sourceGroup} onChange={(event) => onSourceGroup(event.target.value as CodexThreadSourceGroup)}>
+        <option value="interactive">主要任务</option><option value="all">全部记录（含子任务）</option><option value="automation">自动化与批处理</option><option value="subagents">子智能体</option>
+      </select></label>
+      <label><span>归档状态</span><select aria-label="Codex 归档状态" value={archived ? "archived" : "current"} onChange={(event) => onArchive(event.target.value === "archived")}>
+        <option value="current">未归档</option><option value="archived">已归档</option>
+      </select></label>
       <div className="result-count">{threads.length} 项</div>
-    </section>
+    </form>
     {failure && <div role="alert" className="alert codex-list-error"><span>{failure.message}</span><button disabled={loading} onClick={onRetry}>重新读取</button></div>}
     {loading && !allThreads.length && <div className="empty-state" role="status"><strong>正在读取 Codex 官方任务…</strong><p>完成后接口进程会立即退出。</p></div>}
-    {!loading && !failure && !allThreads.length && <div className="empty-state"><strong>没有可显示的 Codex 任务</strong><p>Codex 未安装、未登录或尚无任务时都可能出现此状态。</p></div>}
+    {!loading && !failure && !allThreads.length && <div className="empty-state"><strong>{appliedSearch ? "没有匹配的 Codex 任务" : archived ? "没有已归档的 Codex 任务" : "没有可显示的 Codex 任务"}</strong><p>{appliedSearch ? `官方标题搜索：${appliedSearch}` : "Codex 未安装、未登录或尚无任务时都可能出现此状态。"}</p></div>}
     {allThreads.length > 0 && <section className="codex-activity-list" aria-label="Codex 官方任务列表">
       <div className="codex-list-head"><span>任务</span><span>来源</span><span>项目</span><span>最近活动</span><span>属性</span></div>
       {threads.map((thread) => <button key={thread.threadId} className="codex-activity-row" onClick={() => onOpen(thread)}>
@@ -933,23 +1099,37 @@ function CodexActivity({
         <span>{thread.sourceLabel}</span>
         <span>{thread.workspaceName ?? "—"}</span>
         <span>{formatUnixTime(thread.updatedAt ?? thread.createdAt)}</span>
-        <span>{thread.isPinned ? "已置顶" : "普通"}</span>
+        <span>{thread.archived ? "已归档" : thread.isPinned ? "已置顶" : "普通"}</span>
       </button>)}
       {!threads.length && <p className="no-search-result">没有匹配当前搜索的任务。</p>}
     </section>}
     {page?.nextCursor && <button className="load-more codex-list-more" disabled={loading} onClick={() => onMore(page.nextCursor!)}>{loading ? "正在加载…" : "加载更多官方任务"}</button>}
-    {page && <p className="observed-at">本轮读取：{formatUnixTime(page.observedAt)} · 官方记录不等于桌面版实时运行状态</p>}
+    {page && <p className="observed-at">本轮读取：{formatUnixTime(page.observedAt)} · {appliedSearch ? `官方标题搜索“${appliedSearch}” · ` : ""}按游标分页，不会高频扫描</p>}
   </>;
 }
 
 function CodexActivityDetail({
-  thread, history, onLoad, onClose,
+  thread, history, continueDraft, continuePreview, turn, turnFailure,
+  onLoad, onContinueDraft, onPreviewContinue, onConfirmContinue, onCancelContinue, onClose,
+  onApproval, onInterrupt, onRetryStatus,
 }: {
   thread: CodexThreadSummary;
   history?: CodexHistoryView;
+  continueDraft: string;
+  continuePreview?: string;
+  turn?: CodexTurnSnapshot;
+  turnFailure?: CodexHistoryFailure;
   onLoad: (threadId: string, cursor?: string) => void;
+  onContinueDraft: (value: string) => void;
+  onPreviewContinue: () => void;
+  onConfirmContinue: () => void;
+  onCancelContinue: () => void;
+  onApproval: (decision: CodexApprovalDecision) => void;
+  onInterrupt: () => void;
+  onRetryStatus: () => void;
   onClose: () => void;
 }) {
+  const turnActive = Boolean(turn && ["starting", "running", "waitingApproval", "interrupting"].includes(turn.state));
   useEffect(() => {
     const closeOnEscape = (event: KeyboardEvent) => event.key === "Escape" && onClose();
     window.addEventListener("keydown", closeOnEscape);
@@ -962,9 +1142,37 @@ function CodexActivityDetail({
         <div><dt>来源</dt><dd>{thread.sourceLabel}</dd></div>
         <div><dt>项目</dt><dd>{thread.workspaceName ?? "—"}</dd></div>
         <div><dt>最近活动</dt><dd>{formatUnixTime(thread.updatedAt ?? thread.createdAt)}</dd></div>
-        <div><dt>记录状态</dt><dd>{codexReportedStatus(thread.reportedStatus)}</dd></div>
+        <div><dt>记录状态</dt><dd>{thread.archived ? "已归档" : codexReportedStatus(thread.reportedStatus)}</dd></div>
       </dl>
       <section><h3>任务编号</h3><p className="thread-id-copy">{thread.threadId}</p></section>
+      <section className="codex-continue" aria-label="继续 Codex 任务">
+        <div className="section-title"><h3>继续这个任务</h3><span className="on-demand">官方接口</span></div>
+        <p className="write-boundary">确认后会在原 Codex 任务中开始新一轮；不改动它的模型、目录或权限设置。</p>
+        {!turnActive && <div className="continue-editor">
+          <label><span>要交给 Codex 的内容</span><textarea aria-label="继续任务内容" maxLength={16000} value={continueDraft} onChange={(event) => onContinueDraft(event.target.value)} placeholder="例如：从上次断点继续，先完成未闭合的测试。" /></label>
+          {!continuePreview && <div className="write-actions"><button disabled={!continueDraft.trim()} onClick={onPreviewContinue}>生成继续确认</button></div>}
+          {continuePreview && <div className="write-preview continue-preview" role="region" aria-label="继续任务确认">
+            <strong>即将发送给原 Codex 任务</strong>
+            <p className="continue-preview-text">{continuePreview}</p>
+            <p>这会立即启动新一轮执行，不只是保存草稿。</p>
+            <div className="write-actions"><button className="confirm-write" onClick={onConfirmContinue}>确认并继续</button><button className="secondary" onClick={onCancelContinue}>取消</button></div>
+          </div>}
+        </div>}
+        {turn && <div className={`turn-status ${turn.state}`} role="status">
+          <strong>{codexTurnStateLabel(turn.state)}</strong>
+          <span>{turn.turnId ? `轮次 ${turn.turnId}` : "正在建立官方连接"}</span>
+          {turn.errorMessage && <small>{turn.errorMessage}</small>}
+          {turn.pendingApproval && <div className="approval-card" aria-label="Codex 操作授权">
+            <strong>{turn.pendingApproval.label}</strong>
+            {turn.pendingApproval.summary && <p>{turn.pendingApproval.summary}</p>}
+            {turn.pendingApproval.reason && <small>原因：{turn.pendingApproval.reason}</small>}
+            <div className="approval-actions">{turn.pendingApproval.availableDecisions.map((decision) => <button key={decision} className={decision === "accept" || decision === "acceptForSession" ? "approve" : "decline"} onClick={() => onApproval(decision)}>{codexApprovalDecisionLabel(decision)}</button>)}</div>
+          </div>}
+          {turnActive && turn.state !== "interrupting" && <button className="interrupt-turn" onClick={onInterrupt}>中断本轮</button>}
+        </div>}
+        {turnActive && <p className="turn-close-warning">关闭整个任务中心会中断它启动的本轮任务，并回收官方接口进程。</p>}
+        {turnFailure && <div className="write-failure turn-poll-failure" role="alert"><strong>{turnFailure.message}</strong><small>{turnFailure.code}</small>{turnActive && <button onClick={onRetryStatus}>重试状态</button>}</div>}
+      </section>
       <section><h3>Codex 历史 <span className="on-demand">按需读取</span></h3><CodexThreadHistory threadId={thread.threadId} view={history} onLoad={onLoad} /></section>
     </aside>
   </div>;
@@ -1201,6 +1409,30 @@ function codexTurnStatus(status: string): string {
     failed: "失败",
   };
   return labels[status] ?? "未知";
+}
+
+function codexTurnStateLabel(state: CodexTurnSnapshot["state"]): string {
+  const labels: Record<CodexTurnSnapshot["state"], string> = {
+    starting: "正在连接原 Codex 任务",
+    running: "Codex 正在执行",
+    waitingApproval: "等待操作授权",
+    interrupting: "正在中断本轮",
+    completed: "本轮已完成",
+    failed: "本轮执行失败",
+    interrupted: "本轮已中断",
+    timedOut: "本轮等待超时",
+  };
+  return labels[state];
+}
+
+function codexApprovalDecisionLabel(decision: CodexApprovalDecision): string {
+  const labels: Record<CodexApprovalDecision, string> = {
+    accept: "本次允许",
+    acceptForSession: "本次任务期间允许",
+    decline: "拒绝",
+    cancel: "取消操作",
+  };
+  return labels[decision];
 }
 
 function formatUnixTime(value?: number): string {

@@ -19,8 +19,8 @@ function provider(): TaskDataProvider {
     loadProjectMappings: vi.fn().mockResolvedValue(fixtureProjects),
     loadBody: vi.fn().mockResolvedValue("# 按需正文"),
     loadEvents: vi.fn().mockResolvedValue(fixtureEvents),
-    loadCodexThreadList: vi.fn().mockImplementation((cursor) => Promise.resolve({
-      threads: cursor ? [{
+    loadCodexThreadList: vi.fn().mockImplementation((request) => Promise.resolve({
+      threads: request.cursor ? [{
         threadId: "019f-demo-older",
         name: "较早的 Codex 任务",
         sourceKind: "cli",
@@ -30,6 +30,7 @@ function provider(): TaskDataProvider {
         updatedAt: 60,
         workspaceName: "older-project",
         isPinned: false,
+        archived: request.archived,
       }] : [{
         threadId: "019f-demo-running",
         name: "合成 Codex 任务",
@@ -40,8 +41,9 @@ function provider(): TaskDataProvider {
         updatedAt: 200,
         workspaceName: "codex-monitor",
         isPinned: true,
+        archived: request.archived,
       }],
-      nextCursor: cursor ? undefined : "next-list-page",
+      nextCursor: request.cursor ? undefined : "next-list-page",
       observedAt: 201,
     })),
     loadCodexThreadPage: vi.fn().mockImplementation((threadId, cursor) => Promise.resolve({
@@ -63,6 +65,36 @@ function provider(): TaskDataProvider {
       nextCursor: cursor ? undefined : "older-cursor",
       historyState: "paged",
       observedAt: 201,
+    })),
+    startCodexTurn: vi.fn().mockImplementation((threadId) => Promise.resolve({
+      sessionId: "session-demo-1",
+      threadId,
+      turnId: "turn-demo-1",
+      state: "starting",
+      startedAt: 201,
+    })),
+    getCodexTurnStatus: vi.fn().mockResolvedValue({
+      sessionId: "session-demo-1",
+      threadId: "019f-demo-running",
+      turnId: "turn-demo-1",
+      state: "completed",
+      startedAt: 201,
+      finishedAt: 202,
+    }),
+    respondCodexTurnApproval: vi.fn().mockImplementation((sessionId) => Promise.resolve({
+      sessionId,
+      threadId: "019f-demo-running",
+      turnId: "turn-demo-1",
+      state: "running",
+      startedAt: 201,
+    })),
+    interruptCodexTurn: vi.fn().mockImplementation((sessionId) => Promise.resolve({
+      sessionId,
+      threadId: "019f-demo-running",
+      turnId: "turn-demo-1",
+      state: "interrupted",
+      startedAt: 201,
+      finishedAt: 202,
     })),
     initializeLocalTaskLibrary: vi.fn().mockResolvedValue(undefined),
     loadSavedFilters: vi.fn().mockImplementation(() => Promise.resolve([...savedFilters.values()])),
@@ -185,8 +217,13 @@ describe("任务中心核心流程", () => {
     const mock = provider();
     render(<App provider={mock} />);
     expect(await screen.findByText("合成 Codex 任务")).toBeInTheDocument();
-    expect(screen.getByText("直接读取本机官方任务列表，不需要个人任务目录。只显示任务名称与必要元数据，不使用对话预览作为标题。")).toBeInTheDocument();
-    expect(mock.loadCodexThreadList).toHaveBeenCalledWith(undefined);
+    expect(screen.getByText("直接读取本机官方任务列表，支持原任务继续执行。列表仍只显示名称与必要元数据，不展示或保存对话正文。")).toBeInTheDocument();
+    expect(mock.loadCodexThreadList).toHaveBeenCalledWith({
+      cursor: undefined,
+      archived: false,
+      sourceGroup: "interactive",
+      searchTerm: undefined,
+    });
     expect(mock.loadMetadata).not.toHaveBeenCalled();
     expect(mock.loadProjectMappings).not.toHaveBeenCalled();
   });
@@ -197,7 +234,41 @@ describe("任务中心核心流程", () => {
     await screen.findByText("合成 Codex 任务");
     fireEvent.click(screen.getByRole("button", { name: "加载更多官方任务" }));
     expect(await screen.findByText("较早的 Codex 任务")).toBeInTheDocument();
-    expect(mock.loadCodexThreadList).toHaveBeenNthCalledWith(2, "next-list-page");
+    expect(mock.loadCodexThreadList).toHaveBeenNthCalledWith(2, {
+      cursor: "next-list-page",
+      archived: false,
+      sourceGroup: "interactive",
+      searchTerm: undefined,
+    });
+  });
+
+  it("Codex 搜索、来源和归档都由官方列表接口重新查询", async () => {
+    const mock = provider();
+    render(<App provider={mock} />);
+    await screen.findByText("合成 Codex 任务");
+    fireEvent.change(screen.getByPlaceholderText("输入任务名称后按回车"), { target: { value: "监控" } });
+    fireEvent.click(screen.getByRole("button", { name: "搜索" }));
+    await waitFor(() => expect(mock.loadCodexThreadList).toHaveBeenNthCalledWith(2, {
+      cursor: undefined,
+      archived: false,
+      sourceGroup: "interactive",
+      searchTerm: "监控",
+    }));
+    fireEvent.change(screen.getByLabelText("Codex 来源分类"), { target: { value: "subagents" } });
+    await waitFor(() => expect(mock.loadCodexThreadList).toHaveBeenNthCalledWith(3, {
+      cursor: undefined,
+      archived: false,
+      sourceGroup: "subagents",
+      searchTerm: "监控",
+    }));
+    fireEvent.change(screen.getByLabelText("Codex 归档状态"), { target: { value: "archived" } });
+    await waitFor(() => expect(mock.loadCodexThreadList).toHaveBeenNthCalledWith(4, {
+      cursor: undefined,
+      archived: true,
+      sourceGroup: "subagents",
+      searchTerm: "监控",
+    }));
+    expect(within(await screen.findByLabelText("Codex 官方任务列表")).getByText("已归档")).toBeInTheDocument();
   });
 
   it("Codex 活动详情仍需用户点击才读取轮次历史", async () => {
@@ -209,6 +280,83 @@ describe("任务中心核心流程", () => {
     fireEvent.click(screen.getByRole("button", { name: "读取历史" }));
     expect(await screen.findByText("按需分页")).toBeInTheDocument();
     expect(mock.loadCodexThreadPage).toHaveBeenCalledWith("019f-demo-running", undefined);
+  });
+
+  it("继续 Codex 任务必须先预览再确认，并显示官方运行结果", async () => {
+    const mock = provider();
+    render(<App provider={mock} />);
+    fireEvent.click(await screen.findByRole("button", { name: /合成 Codex 任务/ }));
+    fireEvent.change(screen.getByLabelText("继续任务内容"), { target: { value: "从断点继续并运行测试" } });
+    expect(mock.startCodexTurn).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "生成继续确认" }));
+    expect(screen.getByRole("region", { name: "继续任务确认" })).toHaveTextContent("这会立即启动新一轮执行");
+    expect(mock.startCodexTurn).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "确认并继续" }));
+    await waitFor(() => expect(mock.startCodexTurn).toHaveBeenCalledWith("019f-demo-running", "从断点继续并运行测试"));
+    expect(await screen.findByRole("status")).toHaveTextContent("正在连接原 Codex 任务");
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("本轮已完成"), { timeout: 2000 });
+    expect(mock.getCodexTurnStatus).toHaveBeenCalledWith("session-demo-1");
+  });
+
+  it("Codex 命令授权只显示官方允许的选项并需用户点击", async () => {
+    const mock = provider();
+    vi.mocked(mock.startCodexTurn).mockResolvedValue({
+      sessionId: "session-approval",
+      threadId: "019f-demo-running",
+      turnId: "turn-approval",
+      state: "waitingApproval",
+      startedAt: 201,
+      pendingApproval: {
+        requestId: "approval-1",
+        kind: "command",
+        label: "Codex 请求执行命令",
+        summary: "npm test",
+        availableDecisions: ["accept", "decline"],
+      },
+    });
+    render(<App provider={mock} />);
+    fireEvent.click(await screen.findByRole("button", { name: /合成 Codex 任务/ }));
+    fireEvent.change(screen.getByLabelText("继续任务内容"), { target: { value: "继续测试" } });
+    fireEvent.click(screen.getByRole("button", { name: "生成继续确认" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认并继续" }));
+    expect(await screen.findByLabelText("Codex 操作授权")).toHaveTextContent("npm test");
+    expect(screen.getByRole("button", { name: "本次允许" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "本次任务期间允许" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "拒绝" }));
+    await waitFor(() => expect(mock.respondCodexTurnApproval).toHaveBeenCalledWith("session-approval", "approval-1", "decline"));
+  });
+
+  it("运行中可明确中断，不会只关闭详情界面", async () => {
+    const mock = provider();
+    render(<App provider={mock} />);
+    fireEvent.click(await screen.findByRole("button", { name: /合成 Codex 任务/ }));
+    fireEvent.change(screen.getByLabelText("继续任务内容"), { target: { value: "继续执行" } });
+    fireEvent.click(screen.getByRole("button", { name: "生成继续确认" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认并继续" }));
+    fireEvent.click(await screen.findByRole("button", { name: "中断本轮" }));
+    await waitFor(() => expect(mock.interruptCodexTurn).toHaveBeenCalledWith("session-demo-1"));
+    expect(await screen.findByRole("status")).toHaveTextContent("本轮已中断");
+  });
+
+  it("关闭详情后仍保留全局运行入口", async () => {
+    const mock = provider();
+    vi.mocked(mock.getCodexTurnStatus).mockResolvedValue({
+      sessionId: "session-demo-1",
+      threadId: "019f-demo-running",
+      turnId: "turn-demo-1",
+      state: "running",
+      startedAt: 100,
+    });
+    render(<App provider={mock} />);
+    fireEvent.click(await screen.findByRole("button", { name: /合成 Codex 任务/ }));
+    fireEvent.change(screen.getByLabelText("继续任务内容"), { target: { value: "继续执行" } });
+    fireEvent.click(screen.getByRole("button", { name: "生成继续确认" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认并继续" }));
+    expect(await screen.findByText("Codex 正在运行")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "关闭 Codex 详情" }));
+    expect(screen.getByRole("button", { name: "查看任务" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "查看任务" }));
+    expect(screen.getByRole("heading", { name: "合成 Codex 任务" })).toBeInTheDocument();
   });
 
   it("Codex 列表失败不会触发个人任务目录读取", async () => {

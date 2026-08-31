@@ -6,6 +6,9 @@ import type {
   PriorityEditRequest,
   CodexThreadPage,
   CodexThreadListPage,
+  CodexThreadListRequest,
+  CodexTurnSnapshot,
+  CodexApprovalDecision,
   CreateTaskPreview,
   CreateTaskReceipt,
   NewTaskDraft,
@@ -28,8 +31,12 @@ export interface TaskDataProvider {
   loadBody(fileToken: string): Promise<string>;
   loadEvents(taskId: string): Promise<TaskEvent[]>;
   loadProjectMappings(): Promise<ProjectMapping[]>;
-  loadCodexThreadList(cursor?: string): Promise<CodexThreadListPage>;
+  loadCodexThreadList(request: CodexThreadListRequest): Promise<CodexThreadListPage>;
   loadCodexThreadPage(threadId: string, cursor?: string): Promise<CodexThreadPage>;
+  startCodexTurn(threadId: string, input: string): Promise<CodexTurnSnapshot>;
+  getCodexTurnStatus(sessionId: string): Promise<CodexTurnSnapshot>;
+  respondCodexTurnApproval(sessionId: string, requestId: string, decision: CodexApprovalDecision): Promise<CodexTurnSnapshot>;
+  interruptCodexTurn(sessionId: string): Promise<CodexTurnSnapshot>;
   initializeLocalTaskLibrary(): Promise<void>;
   loadSavedFilters(): Promise<SavedTaskFilter[]>;
   saveTaskFilter(draft: SavedTaskFilterDraft): Promise<SavedTaskFilter>;
@@ -71,8 +78,8 @@ const demoCodexPage = (threadId: string, cursor?: string): CodexThreadPage => ({
   observedAt: 1787616060,
 });
 
-const demoCodexList = (cursor?: string): CodexThreadListPage => ({
-  threads: cursor ? [{
+const demoCodexList = (request: CodexThreadListRequest): CodexThreadListPage => ({
+  threads: request.cursor ? [{
     threadId: "019f-demo-older",
     name: "较早的 Codex 任务",
     sourceKind: "cli",
@@ -82,6 +89,7 @@ const demoCodexList = (cursor?: string): CodexThreadListPage => ({
     updatedAt: 1787529900,
     workspaceName: "demo-project",
     isPinned: false,
+    archived: request.archived,
   }] : [{
     threadId: "019f-demo-running",
     name: "合成 Codex 任务",
@@ -92,12 +100,14 @@ const demoCodexList = (cursor?: string): CodexThreadListPage => ({
     updatedAt: 1787616000,
     workspaceName: "codex-monitor",
     isPinned: true,
+    archived: request.archived,
   }],
-  nextCursor: cursor ? undefined : "demo-next-page",
+  nextCursor: request.cursor ? undefined : "demo-next-page",
   observedAt: 1787616060,
 });
 
 let demoSavedFilters: SavedTaskFilter[] = [];
+let demoTurn: CodexTurnSnapshot | undefined;
 
 export const taskDataProvider: TaskDataProvider = {
   async loadMetadata() {
@@ -112,15 +122,51 @@ export const taskDataProvider: TaskDataProvider = {
   async loadProjectMappings() {
     return isTauri() ? invoke<ProjectMapping[]>("load_project_mappings") : fixtureProjects;
   },
-  async loadCodexThreadList(cursor) {
+  async loadCodexThreadList(request) {
     return isTauri()
-      ? invoke<CodexThreadListPage>("load_codex_thread_list", { cursor: cursor ?? null })
-      : demoCodexList(cursor);
+      ? invoke<CodexThreadListPage>("load_codex_thread_list", { request })
+      : demoCodexList(request);
   },
   async loadCodexThreadPage(threadId, cursor) {
     return isTauri()
       ? invoke<CodexThreadPage>("load_codex_thread_page", { threadId, cursor: cursor ?? null })
       : demoCodexPage(threadId, cursor);
+  },
+  async startCodexTurn(threadId, input) {
+    if (isTauri()) return invoke<CodexTurnSnapshot>("start_codex_turn", { threadId, input });
+    demoTurn = {
+      sessionId: `demo-turn-${Date.now()}`,
+      threadId,
+      turnId: "demo-turn-id",
+      state: "completed",
+      startedAt: Math.floor(Date.now() / 1000),
+      finishedAt: Math.floor(Date.now() / 1000),
+    };
+    return demoTurn;
+  },
+  async getCodexTurnStatus(sessionId) {
+    if (isTauri()) return invoke<CodexTurnSnapshot>("get_codex_turn_status", { sessionId });
+    if (!demoTurn || demoTurn.sessionId !== sessionId) throw new Error("没有找到合成继续任务");
+    return demoTurn;
+  },
+  async respondCodexTurnApproval(sessionId, requestId, decision) {
+    if (isTauri()) {
+      return invoke<CodexTurnSnapshot>("respond_codex_turn_approval", { sessionId, requestId, decision });
+    }
+    if (!demoTurn || demoTurn.sessionId !== sessionId) throw new Error("没有找到合成继续任务");
+    demoTurn = { ...demoTurn, state: "running", pendingApproval: undefined };
+    return demoTurn;
+  },
+  async interruptCodexTurn(sessionId) {
+    if (isTauri()) return invoke<CodexTurnSnapshot>("interrupt_codex_turn", { sessionId });
+    if (!demoTurn || demoTurn.sessionId !== sessionId) throw new Error("没有找到合成继续任务");
+    demoTurn = {
+      ...demoTurn,
+      state: "interrupted",
+      finishedAt: Math.floor(Date.now() / 1000),
+      pendingApproval: undefined,
+    };
+    return demoTurn;
   },
   async initializeLocalTaskLibrary() {
     if (!isTauri()) return;

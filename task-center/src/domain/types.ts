@@ -243,6 +243,16 @@ export interface CodexThreadSummary {
   updatedAt?: number;
   workspaceName?: string;
   isPinned: boolean;
+  archived: boolean;
+}
+
+export type CodexThreadSourceGroup = "all" | "interactive" | "automation" | "subagents";
+
+export interface CodexThreadListRequest {
+  cursor?: string;
+  archived: boolean;
+  sourceGroup: CodexThreadSourceGroup;
+  searchTerm?: string;
 }
 
 export interface CodexThreadListPage {
@@ -270,4 +280,36 @@ export interface CodexThreadPage {
 export interface CodexHistoryFailure {
   code: string;
   message: string;
+}
+
+export type CodexTurnState =
+  | "starting"
+  | "running"
+  | "waitingApproval"
+  | "interrupting"
+  | "completed"
+  | "failed"
+  | "interrupted"
+  | "timedOut";
+
+export type CodexApprovalDecision = "accept" | "acceptForSession" | "decline" | "cancel";
+
+export interface CodexApprovalPrompt {
+  requestId: string;
+  kind: "command" | "fileChange" | string;
+  label: string;
+  summary?: string;
+  reason?: string;
+  availableDecisions: CodexApprovalDecision[];
+}
+
+export interface CodexTurnSnapshot {
+  sessionId: string;
+  threadId: string;
+  turnId?: string;
+  state: CodexTurnState;
+  startedAt: number;
+  finishedAt?: number;
+  errorMessage?: string;
+  pendingApproval?: CodexApprovalPrompt;
 }

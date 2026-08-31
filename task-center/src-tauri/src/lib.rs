@@ -1,4 +1,5 @@
 mod codex_history;
+mod codex_turn;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -2428,13 +2429,48 @@ async fn load_codex_thread_page(
 
 #[tauri::command]
 async fn load_codex_thread_list(
-    cursor: Option<String>,
+    request: codex_history::CodexThreadListRequest,
 ) -> Result<codex_history::CodexThreadListPage, codex_history::CodexHistoryError> {
-    tauri::async_runtime::spawn_blocking(move || codex_history::load_thread_list(cursor.as_deref()))
+    tauri::async_runtime::spawn_blocking(move || codex_history::load_thread_list(request))
         .await
         .map_err(|_| {
             codex_history::CodexHistoryError::new("worker_failed", "Codex 任务列表读取异常结束")
         })?
+}
+
+#[tauri::command]
+fn start_codex_turn(
+    manager: tauri::State<'_, codex_turn::CodexTurnManager>,
+    thread_id: String,
+    input: String,
+) -> Result<codex_turn::CodexTurnSnapshot, codex_history::CodexHistoryError> {
+    manager.start(thread_id, input)
+}
+
+#[tauri::command]
+fn get_codex_turn_status(
+    manager: tauri::State<'_, codex_turn::CodexTurnManager>,
+    session_id: String,
+) -> Result<codex_turn::CodexTurnSnapshot, codex_history::CodexHistoryError> {
+    manager.status(&session_id)
+}
+
+#[tauri::command]
+fn respond_codex_turn_approval(
+    manager: tauri::State<'_, codex_turn::CodexTurnManager>,
+    session_id: String,
+    request_id: String,
+    decision: String,
+) -> Result<codex_turn::CodexTurnSnapshot, codex_history::CodexHistoryError> {
+    manager.respond_approval(&session_id, request_id, decision)
+}
+
+#[tauri::command]
+fn interrupt_codex_turn(
+    manager: tauri::State<'_, codex_turn::CodexTurnManager>,
+    session_id: String,
+) -> Result<codex_turn::CodexTurnSnapshot, codex_history::CodexHistoryError> {
+    manager.interrupt(&session_id)
 }
 
 #[tauri::command]
@@ -2655,6 +2691,7 @@ pub fn read_only_diagnostic() -> i32 {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .manage(codex_turn::CodexTurnManager::default())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             load_task_metadata,
@@ -2663,6 +2700,10 @@ pub fn run() {
             load_project_mappings,
             load_codex_thread_list,
             load_codex_thread_page,
+            start_codex_turn,
+            get_codex_turn_status,
+            respond_codex_turn_approval,
+            interrupt_codex_turn,
             initialize_local_task_library,
             load_saved_task_filters,
             save_task_filter,
@@ -2680,6 +2721,10 @@ pub fn run() {
         ])
         .on_window_event(|window, event| {
             if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
+                window
+                    .app_handle()
+                    .state::<codex_turn::CodexTurnManager>()
+                    .shutdown_all();
                 window.app_handle().exit(0);
             }
         })

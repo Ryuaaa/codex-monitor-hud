@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
     env, fs,
@@ -16,6 +16,30 @@ const MAX_LINE_BYTES: usize = 1024 * 1024;
 const MAX_CURSOR_BYTES: usize = 4096;
 const TURN_PAGE_SIZE: u64 = 20;
 const THREAD_LIST_PAGE_SIZE: u64 = 25;
+const MAX_SEARCH_CHARS: usize = 200;
+const MAX_SEARCH_BYTES: usize = 512;
+
+const ALL_SOURCE_KINDS: [&str; 10] = [
+    "cli",
+    "vscode",
+    "exec",
+    "appServer",
+    "subAgent",
+    "subAgentReview",
+    "subAgentCompact",
+    "subAgentThreadSpawn",
+    "subAgentOther",
+    "unknown",
+];
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct CodexThreadListRequest {
+    cursor: Option<String>,
+    archived: bool,
+    source_group: String,
+    search_term: Option<String>,
+}
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -29,6 +53,7 @@ pub(crate) struct CodexThreadSummary {
     updated_at: Option<i64>,
     workspace_name: Option<String>,
     is_pinned: bool,
+    archived: bool,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -88,15 +113,26 @@ enum ReaderEvent {
     Eof,
 }
 
-struct AppServer {
+pub(crate) struct AppServer {
     child: Child,
     stdin: Option<ChildStdin>,
-    receiver: Receiver<ReaderEvent>,
+    receiver: Option<Receiver<ReaderEvent>>,
     reader: Option<JoinHandle<()>>,
 }
 
 impl AppServer {
     fn start(executable: &Path) -> Result<Self, CodexHistoryError> {
+        Self::start_with_response_limit(executable, Some(MAX_RESPONSE_BYTES))
+    }
+
+    pub(crate) fn start_streaming(executable: &Path) -> Result<Self, CodexHistoryError> {
+        Self::start_with_response_limit(executable, None)
+    }
+
+    fn start_with_response_limit(
+        executable: &Path,
+        response_limit: Option<usize>,
+    ) -> Result<Self, CodexHistoryError> {
         let mut command = Command::new(executable);
         command
             .arg("app-server")
@@ -118,7 +154,8 @@ impl AppServer {
         let stdout = child.stdout.take().ok_or_else(|| {
             CodexHistoryError::new("provider_start_failed", "Codex 官方接口输出管道不可用")
         })?;
-        let (sender, receiver) = mpsc::channel();
+        // A bounded queue prevents a noisy provider from growing this process without limit.
+        let (sender, receiver) = mpsc::sync_channel(256);
         let reader = thread::spawn(move || {
             let mut reader = BufReader::new(stdout);
             let mut total = 0usize;
@@ -131,7 +168,9 @@ impl AppServer {
                     }
                     Ok(_) => {
                         total = total.saturating_add(bytes.len());
-                        if bytes.len() > MAX_LINE_BYTES || total > MAX_RESPONSE_BYTES {
+                        if bytes.len() > MAX_LINE_BYTES
+                            || response_limit.is_some_and(|limit| total > limit)
+                        {
                             let _ = sender.send(ReaderEvent::Error(CodexHistoryError::new(
                                 "response_too_large",
                                 "Codex 官方接口响应超过安全上限",
@@ -172,12 +211,12 @@ impl AppServer {
         Ok(Self {
             child,
             stdin: Some(stdin),
-            receiver,
+            receiver: Some(receiver),
             reader: Some(reader),
         })
     }
 
-    fn send(&mut self, value: &Value) -> Result<(), CodexHistoryError> {
+    pub(crate) fn send(&mut self, value: &Value) -> Result<(), CodexHistoryError> {
         let stdin = self
             .stdin
             .as_mut()
@@ -191,13 +230,17 @@ impl AppServer {
     }
 
     fn wait_for(&self, ids: &[i64], deadline: Instant) -> Result<Vec<Value>, CodexHistoryError> {
+        let receiver = self
+            .receiver
+            .as_ref()
+            .ok_or_else(|| CodexHistoryError::new("provider_exited", "Codex 官方接口连接已关闭"))?;
         let mut responses: Vec<Option<Value>> = vec![None; ids.len()];
         while responses.iter().any(Option::is_none) {
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
                 return Err(CodexHistoryError::new("timeout", "Codex 官方接口读取超时"));
             }
-            match self.receiver.recv_timeout(remaining) {
+            match receiver.recv_timeout(remaining) {
                 Ok(ReaderEvent::Line(line)) => {
                     let value: Value = serde_json::from_str(&line).map_err(|_| {
                         CodexHistoryError::new("protocol_changed", "Codex 官方接口响应格式已变化")
@@ -230,8 +273,31 @@ impl AppServer {
         Ok(responses.into_iter().flatten().collect())
     }
 
-    fn stop(mut self) {
+    pub(crate) fn receive(&self, timeout: Duration) -> Result<Option<Value>, CodexHistoryError> {
+        let receiver = self
+            .receiver
+            .as_ref()
+            .ok_or_else(|| CodexHistoryError::new("provider_exited", "Codex 官方接口连接已关闭"))?;
+        match receiver.recv_timeout(timeout) {
+            Ok(ReaderEvent::Line(line)) => serde_json::from_str(&line).map(Some).map_err(|_| {
+                CodexHistoryError::new("protocol_changed", "Codex 官方接口响应格式已变化")
+            }),
+            Ok(ReaderEvent::Error(error)) => Err(error),
+            Ok(ReaderEvent::Eof) => Err(CodexHistoryError::new(
+                "provider_exited",
+                "Codex 官方接口提前退出",
+            )),
+            Err(RecvTimeoutError::Timeout) => Ok(None),
+            Err(RecvTimeoutError::Disconnected) => Err(CodexHistoryError::new(
+                "provider_exited",
+                "Codex 官方接口连接已关闭",
+            )),
+        }
+    }
+
+    pub(crate) fn stop(mut self) {
         self.stdin.take();
+        self.receiver.take();
         let _ = self.child.kill();
         let _ = self.child.wait();
         if let Some(reader) = self.reader.take() {
@@ -243,6 +309,7 @@ impl AppServer {
 impl Drop for AppServer {
     fn drop(&mut self) {
         self.stdin.take();
+        self.receiver.take();
         let _ = self.child.kill();
         let _ = self.child.wait();
         if let Some(reader) = self.reader.take() {
@@ -251,7 +318,7 @@ impl Drop for AppServer {
     }
 }
 
-fn validate_thread_id(thread_id: &str) -> Result<(), CodexHistoryError> {
+pub(crate) fn validate_thread_id(thread_id: &str) -> Result<(), CodexHistoryError> {
     if thread_id.is_empty()
         || thread_id.len() > 128
         || !thread_id
@@ -276,6 +343,64 @@ fn validate_cursor(cursor: Option<&str>) -> Result<(), CodexHistoryError> {
     Ok(())
 }
 
+fn source_kinds(source_group: &str) -> Result<Vec<&'static str>, CodexHistoryError> {
+    let values = match source_group {
+        "all" => ALL_SOURCE_KINDS.to_vec(),
+        "interactive" => vec!["cli", "vscode"],
+        "automation" => vec!["exec", "appServer"],
+        "subagents" => vec![
+            "subAgent",
+            "subAgentReview",
+            "subAgentCompact",
+            "subAgentThreadSpawn",
+            "subAgentOther",
+        ],
+        _ => {
+            return Err(CodexHistoryError::new(
+                "invalid_source_group",
+                "Codex 任务来源筛选无效",
+            ))
+        }
+    };
+    Ok(values)
+}
+
+fn validated_search_term(value: Option<&str>) -> Result<Option<String>, CodexHistoryError> {
+    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    if value.len() > MAX_SEARCH_BYTES
+        || value.chars().count() > MAX_SEARCH_CHARS
+        || value.chars().any(char::is_control)
+    {
+        return Err(CodexHistoryError::new(
+            "invalid_search_term",
+            "Codex 任务搜索内容无效或过长",
+        ));
+    }
+    Ok(Some(value.to_string()))
+}
+
+fn thread_list_request_value(request: &CodexThreadListRequest) -> Result<Value, CodexHistoryError> {
+    validate_cursor(request.cursor.as_deref())?;
+    let kinds = source_kinds(&request.source_group)?;
+    let search_term = validated_search_term(request.search_term.as_deref())?;
+    Ok(json!({
+        "id": 2,
+        "method": "thread/list",
+        "params": {
+            "cursor": request.cursor,
+            "limit": THREAD_LIST_PAGE_SIZE,
+            "sortKey": "recency_at",
+            "sortDirection": "desc",
+            "sourceKinds": kinds,
+            "archived": request.archived,
+            "useStateDbOnly": false,
+            "searchTerm": search_term
+        }
+    }))
+}
+
 fn path_is_executable(path: &Path) -> bool {
     let Ok(metadata) = fs::metadata(path) else {
         return false;
@@ -294,7 +419,7 @@ fn path_is_executable(path: &Path) -> bool {
     }
 }
 
-fn codex_executable() -> Result<PathBuf, CodexHistoryError> {
+pub(crate) fn codex_executable() -> Result<PathBuf, CodexHistoryError> {
     if let Some(configured) = env::var_os("CODEX_TASK_CENTER_CODEX_EXECUTABLE") {
         let path = PathBuf::from(configured);
         return if path_is_executable(&path) {
@@ -357,7 +482,7 @@ fn response_error(value: &Value) -> Option<(i64, String)> {
     ))
 }
 
-fn checked_result(value: &Value) -> Result<&Value, CodexHistoryError> {
+pub(crate) fn checked_result(value: &Value) -> Result<&Value, CodexHistoryError> {
     if let Some((code, message)) = response_error(value) {
         let category = if code == -32601 {
             "method_unsupported"
@@ -395,7 +520,13 @@ fn source_descriptor(value: Option<&Value>) -> (String, String) {
             "cli" => "Codex 命令行",
             "vscode" => "Codex 桌面版或编辑器",
             "exec" => "Codex 批处理",
+            "mcp" => "Codex MCP",
             "appServer" => "Codex App Server",
+            "subAgent" => "Codex 子智能体",
+            "subAgentReview" => "Codex 子智能体审查",
+            "subAgentCompact" => "Codex 记忆整理",
+            "subAgentThreadSpawn" => "Codex 子任务启动",
+            "subAgentOther" => "Codex 其他子智能体",
             "unknown" => "未知来源",
             _ => "其他 Codex 来源",
         };
@@ -409,8 +540,20 @@ fn source_descriptor(value: Option<&Value>) -> (String, String) {
             label.to_string(),
         );
     }
-    if value.get("subAgent").is_some() {
-        return ("subAgent".to_string(), "Codex 子智能体".to_string());
+    if let Some(source) = value.get("subagent").or_else(|| value.get("subAgent")) {
+        let (kind, label) = match source.as_str() {
+            Some("review") => ("subAgentReview", "Codex 子智能体审查"),
+            Some("compact" | "memory_consolidation") => ("subAgentCompact", "Codex 记忆整理"),
+            _ if source.get("thread_spawn").is_some() => {
+                ("subAgentThreadSpawn", "Codex 子任务启动")
+            }
+            _ if source.get("other").is_some() => ("subAgentOther", "Codex 其他子智能体"),
+            _ => ("subAgent", "Codex 子智能体"),
+        };
+        return (kind.to_string(), label.to_string());
+    }
+    if value.get("internal").is_some() {
+        return ("subAgentCompact".to_string(), "Codex 记忆整理".to_string());
     }
     if value.get("custom").is_some() {
         return ("custom".to_string(), "自定义 Codex 来源".to_string());
@@ -431,7 +574,7 @@ fn status_kind(value: Option<&Value>) -> String {
     }
 }
 
-fn bounded_text(value: &str, limit: usize) -> Option<String> {
+pub(crate) fn bounded_text(value: &str, limit: usize) -> Option<String> {
     let text: String = value
         .chars()
         .filter(|character| !character.is_control())
@@ -449,14 +592,17 @@ fn workspace_name(value: Option<&Value>) -> Option<String> {
         .and_then(|name| bounded_text(name, 96))
 }
 
-fn observed_at() -> i64 {
+pub(crate) fn observed_at() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs() as i64)
         .unwrap_or_default()
 }
 
-fn parse_thread_list(response: &Value) -> Result<CodexThreadListPage, CodexHistoryError> {
+fn parse_thread_list(
+    response: &Value,
+    archived: bool,
+) -> Result<CodexThreadListPage, CodexHistoryError> {
     let result = checked_result(response)?;
     let data = result
         .get("data")
@@ -487,6 +633,7 @@ fn parse_thread_list(response: &Value) -> Result<CodexThreadListPage, CodexHisto
                 .get("isPinned")
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
+            archived,
         });
     }
     let next_cursor = result
@@ -590,9 +737,9 @@ fn parse_thread_page(
 }
 
 pub(crate) fn load_thread_list(
-    cursor: Option<&str>,
+    request: CodexThreadListRequest,
 ) -> Result<CodexThreadListPage, CodexHistoryError> {
-    validate_cursor(cursor)?;
+    let list_request = thread_list_request_value(&request)?;
     let executable = codex_executable()?;
     let mut server = AppServer::start(&executable)?;
     let deadline = Instant::now() + RESPONSE_TIMEOUT;
@@ -615,20 +762,9 @@ pub(crate) fn load_thread_list(
         let initialize = server.wait_for(&[1], deadline)?;
         checked_result(&initialize[0])?;
         server.send(&json!({"method": "initialized", "params": {}}))?;
-        server.send(&json!({
-            "id": 2,
-            "method": "thread/list",
-            "params": {
-                "cursor": cursor,
-                "limit": THREAD_LIST_PAGE_SIZE,
-                "sortKey": "recency_at",
-                "sortDirection": "desc",
-                "archived": false,
-                "useStateDbOnly": true
-            }
-        }))?;
+        server.send(&list_request)?;
         let responses = server.wait_for(&[2], deadline)?;
-        parse_thread_list(&responses[0])
+        parse_thread_list(&responses[0], request.archived)
     })();
     server.stop();
     result
@@ -708,23 +844,26 @@ mod tests {
 
     #[test]
     fn thread_list_exposes_only_bounded_metadata() {
-        let page = parse_thread_list(&json!({
-            "id": 2,
-            "result": {
-                "data": [{
-                    "id": "thread_public",
-                    "name": "公开标题",
-                    "preview": "绝不能跨过 Rust 边界的对话预览",
-                    "cwd": "/Users/example/private-project",
-                    "source": "vscode",
-                    "status": {"type": "notLoaded"},
-                    "createdAt": 10,
-                    "updatedAt": 20,
-                    "isPinned": true
-                }],
-                "nextCursor": "next-page"
-            }
-        }))
+        let page = parse_thread_list(
+            &json!({
+                "id": 2,
+                "result": {
+                    "data": [{
+                        "id": "thread_public",
+                        "name": "公开标题",
+                        "preview": "绝不能跨过 Rust 边界的对话预览",
+                        "cwd": "/Users/example/private-project",
+                        "source": "vscode",
+                        "status": {"type": "notLoaded"},
+                        "createdAt": 10,
+                        "updatedAt": 20,
+                        "isPinned": true
+                    }],
+                    "nextCursor": "next-page"
+                }
+            }),
+            false,
+        )
         .unwrap();
         assert_eq!(page.threads.len(), 1);
         assert_eq!(page.threads[0].name.as_deref(), Some("公开标题"));
@@ -740,16 +879,19 @@ mod tests {
 
     #[test]
     fn thread_list_skips_invalid_ids_and_accepts_future_sources() {
-        let page = parse_thread_list(&json!({
-            "id": 2,
-            "result": {
-                "data": [
-                    {"id": "../unsafe", "source": "cli"},
-                    {"id": "thread_future", "source": "futureAgent", "status": "futureStatus"}
-                ],
-                "nextCursor": null
-            }
-        }))
+        let page = parse_thread_list(
+            &json!({
+                "id": 2,
+                "result": {
+                    "data": [
+                        {"id": "../unsafe", "source": "cli"},
+                        {"id": "thread_future", "source": "futureAgent", "status": "futureStatus"}
+                    ],
+                    "nextCursor": null
+                }
+            }),
+            false,
+        )
         .unwrap();
         assert_eq!(page.threads.len(), 1);
         assert_eq!(page.threads[0].source_kind, "futureAgent");
@@ -787,12 +929,17 @@ mod tests {
 
     #[test]
     fn accepts_subagent_and_future_sources_without_closed_enum() {
-        let subagent = source_descriptor(Some(&json!({"subAgent": {"other": "future"}})));
+        let subagent = source_descriptor(Some(&json!({"subagent": {"other": "future"}})));
+        let review = source_descriptor(Some(&json!({"subagent": "review"})));
         let future = source_descriptor(Some(&json!("guardian_review_future")));
         assert_eq!(
             subagent,
-            ("subAgent".to_string(), "Codex 子智能体".to_string())
+            (
+                "subAgentOther".to_string(),
+                "Codex 其他子智能体".to_string()
+            )
         );
+        assert_eq!(review.0, "subAgentReview");
         assert_eq!(future.0, "guardian_review_future");
         assert_eq!(future.1, "其他 Codex 来源");
     }
@@ -831,6 +978,52 @@ mod tests {
     }
 
     #[test]
+    fn thread_list_request_uses_official_search_source_archive_and_cursor_fields() {
+        let value = thread_list_request_value(&CodexThreadListRequest {
+            cursor: Some("opaque-cursor".to_string()),
+            archived: true,
+            source_group: "subagents".to_string(),
+            search_term: Some("  目标审查  ".to_string()),
+        })
+        .unwrap();
+        assert_eq!(value["method"], "thread/list");
+        assert_eq!(value["params"]["cursor"], "opaque-cursor");
+        assert_eq!(value["params"]["archived"], true);
+        assert_eq!(value["params"]["useStateDbOnly"], false);
+        assert_eq!(value["params"]["searchTerm"], "目标审查");
+        assert_eq!(
+            value["params"]["sourceKinds"],
+            json!([
+                "subAgent",
+                "subAgentReview",
+                "subAgentCompact",
+                "subAgentThreadSpawn",
+                "subAgentOther"
+            ])
+        );
+    }
+
+    #[test]
+    fn thread_list_request_rejects_unknown_groups_and_unbounded_search() {
+        let unknown = thread_list_request_value(&CodexThreadListRequest {
+            cursor: None,
+            archived: false,
+            source_group: "future-group".to_string(),
+            search_term: None,
+        })
+        .unwrap_err();
+        assert_eq!(unknown.code, "invalid_source_group");
+        let too_long = thread_list_request_value(&CodexThreadListRequest {
+            cursor: None,
+            archived: false,
+            source_group: "all".to_string(),
+            search_term: Some("x".repeat(MAX_SEARCH_CHARS + 1)),
+        })
+        .unwrap_err();
+        assert_eq!(too_long.code, "invalid_search_term");
+    }
+
+    #[test]
     #[ignore = "requires an installed, logged-in Codex and an explicit local thread id"]
     fn live_official_history_smoke() {
         let thread_id = env::var("CODEX_TASK_CENTER_LIVE_THREAD_ID")
@@ -846,7 +1039,13 @@ mod tests {
     #[test]
     #[ignore = "requires an installed and logged-in Codex"]
     fn live_official_thread_list_smoke() {
-        let page = load_thread_list(None).expect("official thread list page");
+        let page = load_thread_list(CodexThreadListRequest {
+            cursor: None,
+            archived: false,
+            source_group: "all".to_string(),
+            search_term: None,
+        })
+        .expect("official thread list page");
         assert!(page.threads.len() <= THREAD_LIST_PAGE_SIZE as usize);
     }
 }
