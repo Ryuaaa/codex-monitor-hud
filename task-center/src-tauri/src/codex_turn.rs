@@ -359,7 +359,9 @@ fn initialize_request() -> Value {
                 "version": env!("CARGO_PKG_VERSION")
             },
             "capabilities": {
-                "experimentalApi": false,
+                // `thread/resume.excludeTurns` is deliberately used so resuming a task does not
+                // load its full conversation into the always-lightweight task center process.
+                "experimentalApi": true,
                 "optOutNotificationMethods": [
                     "item/agentMessage/delta",
                     "item/started",
@@ -829,6 +831,12 @@ mod tests {
 
     #[test]
     fn continuation_requests_follow_the_official_protocol() {
+        let initialize = initialize_request();
+        assert_eq!(
+            initialize["params"]["capabilities"]["experimentalApi"],
+            true
+        );
+
         let resume = resume_request("thread_123");
         assert_eq!(resume["method"], "thread/resume");
         assert_eq!(resume["params"]["threadId"], "thread_123");
@@ -991,7 +999,9 @@ mod tests {
         let initial = manager
             .start_with_executable(&executable, "thread_test".to_string(), "继续".to_string())
             .unwrap();
-        let deadline = Instant::now() + Duration::from_secs(2);
+        // The full test suite creates several temporary processes in parallel. Give the fake
+        // provider enough startup time on a loaded release builder while still failing quickly.
+        let deadline = Instant::now() + Duration::from_secs(5);
         loop {
             if manager.status(&initial.session_id).unwrap().state == "running" {
                 break;
@@ -1054,5 +1064,211 @@ mod tests {
         let serialized = serde_json::to_string(&completed).unwrap();
         assert!(!serialized.contains("must-not-cross-boundary"));
         manager.shutdown_all();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn provider_crash_is_isolated_as_a_failed_turn() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        let executable = directory.path().join("fake-codex-crash");
+        let script = "#!/bin/sh\n\
+            while IFS= read -r line; do\n\
+              case \"$line\" in\n\
+                *'\"method\":\"initialize\"'*) echo '{\"id\":1,\"result\":{}}' ;;\n\
+                *'\"method\":\"thread/resume\"'*) echo '{\"id\":2,\"result\":{\"thread\":{\"id\":\"thread_test\"}}}' ;;\n\
+                *'\"method\":\"turn/start\"'*)\n\
+                  echo '{\"id\":3,\"result\":{\"turn\":{\"id\":\"turn_test\",\"status\":\"inProgress\"}}}'\n\
+                  exit 17 ;;\n\
+              esac\n\
+            done\n";
+        std::fs::write(&executable, script).unwrap();
+        let mut permissions = std::fs::metadata(&executable).unwrap().permissions();
+        permissions.set_mode(0o700);
+        std::fs::set_permissions(&executable, permissions).unwrap();
+
+        let manager = CodexTurnManager::default();
+        let initial = manager
+            .start_with_executable(&executable, "thread_test".to_string(), "继续".to_string())
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let failed = loop {
+            let current = manager.status(&initial.session_id).unwrap();
+            if current.is_terminal() {
+                break current;
+            }
+            assert!(Instant::now() < deadline, "provider crash was not isolated");
+            thread::sleep(Duration::from_millis(10));
+        };
+        assert_eq!(failed.state, "failed");
+        assert!(failed.pending_approval.is_none());
+        manager.shutdown_all();
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore = "creates and archives one real Codex test thread; run only for an explicit release acceptance"]
+    fn live_official_continuation_smoke() {
+        let executable = codex_executable().expect("installed Codex executable");
+        let workdir = tempfile::tempdir().expect("temporary test workspace");
+        let thread_id = create_live_test_thread(&executable, workdir.path())
+            .expect("create official test thread");
+
+        let result = (|| -> Result<(), CodexHistoryError> {
+            let manager = CodexTurnManager::default();
+            let initial = manager.start_with_executable(
+                &executable,
+                thread_id.clone(),
+                "这是 Codex Monitor Task Center 的受控验收。请只回复 TEST_OK，不要调用任何工具。"
+                    .to_string(),
+            )?;
+            let deadline = Instant::now() + Duration::from_secs(180);
+            loop {
+                let current = manager.status(&initial.session_id)?;
+                if current.is_terminal() {
+                    manager.shutdown_all();
+                    return if current.state == "completed" {
+                        Ok(())
+                    } else {
+                        Err(CodexHistoryError::new(
+                            "live_turn_failed",
+                            current
+                                .error_message
+                                .as_deref()
+                                .unwrap_or("真实 Codex 继续任务未完成"),
+                        ))
+                    };
+                }
+                if Instant::now() >= deadline {
+                    let _ = manager.interrupt(&initial.session_id);
+                    manager.shutdown_all();
+                    return Err(CodexHistoryError::new(
+                        "live_turn_timeout",
+                        "真实 Codex 继续任务验收超时",
+                    ));
+                }
+                thread::sleep(Duration::from_millis(250));
+            }
+        })();
+
+        let archived = archive_live_test_thread(&executable, &thread_id);
+        result.expect("official continuation completed");
+        archived.expect("archive the release test thread");
+    }
+
+    #[cfg(target_os = "macos")]
+    fn create_live_test_thread(
+        executable: &Path,
+        workdir: &Path,
+    ) -> Result<String, CodexHistoryError> {
+        let mut server = AppServer::start_streaming(executable)?;
+        let (_control_tx, control) = mpsc::channel();
+        let deadline = Instant::now() + Duration::from_secs(30);
+        server.send(&initialize_request())?;
+        checked_result(&wait_response(&server, 1, deadline, &control)?)?;
+        server.send(&json!({"method": "initialized", "params": {}}))?;
+        server.send(&json!({
+            "id": 2,
+            "method": "thread/start",
+            "params": {
+                "cwd": workdir,
+                "approvalPolicy": "never",
+                "sandbox": "read-only",
+                "serviceName": "codex-monitor-task-center-live-test"
+            }
+        }))?;
+        let started = wait_response(&server, 2, deadline, &control)?;
+        let thread_id = checked_result(&started)?
+            .get("thread")
+            .and_then(|thread| thread.get("id"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| protocol_error("真实验收未返回 Codex 任务编号"))?
+            .to_string();
+        server.send(&json!({
+            "id": 3,
+            "method": "thread/name/set",
+            "params": {
+                "threadId": thread_id,
+                "name": "[测试] Codex Monitor Task Center 继续任务验收"
+            }
+        }))?;
+        checked_result(&wait_response(&server, 3, deadline, &control)?)?;
+        server.send(&json!({
+            "id": 4,
+            "method": "turn/start",
+            "params": {
+                "threadId": thread_id,
+                "input": [{
+                    "type": "text",
+                    "text": "这是受控验收的初始轮次。请只回复 SEED_OK，不要调用任何工具。",
+                    "text_elements": []
+                }]
+            }
+        }))?;
+        let started = wait_response(
+            &server,
+            4,
+            Instant::now() + Duration::from_secs(30),
+            &control,
+        )?;
+        let turn_id = checked_result(&started)?
+            .get("turn")
+            .and_then(|turn| turn.get("id"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| protocol_error("真实验收初始轮次缺少编号"))?
+            .to_string();
+        let completion_deadline = Instant::now() + Duration::from_secs(180);
+        loop {
+            if Instant::now() >= completion_deadline {
+                return Err(CodexHistoryError::new(
+                    "live_seed_timeout",
+                    "真实验收初始轮次超时",
+                ));
+            }
+            let Some(message) = server.receive(Duration::from_millis(250))? else {
+                continue;
+            };
+            if message.get("method").and_then(Value::as_str) != Some("turn/completed") {
+                continue;
+            }
+            let params = message.get("params").unwrap_or(&Value::Null);
+            let turn = params.get("turn").unwrap_or(&Value::Null);
+            if params.get("threadId").and_then(Value::as_str) != Some(thread_id.as_str())
+                || turn.get("id").and_then(Value::as_str) != Some(turn_id.as_str())
+            {
+                continue;
+            }
+            if turn.get("status").and_then(Value::as_str) != Some("completed") {
+                return Err(CodexHistoryError::new(
+                    "live_seed_failed",
+                    "真实验收初始轮次未完成",
+                ));
+            }
+            break;
+        }
+        server.stop();
+        Ok(thread_id)
+    }
+
+    #[cfg(target_os = "macos")]
+    fn archive_live_test_thread(
+        executable: &Path,
+        thread_id: &str,
+    ) -> Result<(), CodexHistoryError> {
+        let mut server = AppServer::start_streaming(executable)?;
+        let (_control_tx, control) = mpsc::channel();
+        let deadline = Instant::now() + Duration::from_secs(30);
+        server.send(&initialize_request())?;
+        checked_result(&wait_response(&server, 1, deadline, &control)?)?;
+        server.send(&json!({"method": "initialized", "params": {}}))?;
+        server.send(&json!({
+            "id": 2,
+            "method": "thread/archive",
+            "params": {"threadId": thread_id}
+        }))?;
+        checked_result(&wait_response(&server, 2, deadline, &control)?)?;
+        server.stop();
+        Ok(())
     }
 }
