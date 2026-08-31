@@ -2,6 +2,10 @@
 
 这是与 HUD 严格隔离的第二个应用。生产运行时不需要 Node，不监听端口，不创建托盘或后台服务；关闭主窗口即退出。
 
+## 下载
+
+[macOS 1.3.0 正式版](https://github.com/Ryuaaa/codex-monitor-hud/releases/tag/task-center-v1.3.0)提供 Apple Silicon 与 Intel 通用的 `.app.zip`。应用已使用 Developer ID 签名并通过 Apple 公证；解压后移到“应用程序”即可使用。1.2.1 及后续版本也可在应用内检查并一键升级。
+
 默认首页是“Codex 活动”：应用启动后通过本机官方 `thread/list` 自动读取最近 25 个交互式 Codex 任务，优先只读状态数据库并按最近活动排序。它只把任务编号、用户设置的名称、来源、时间、置顶状态和工作目录末级名称传给前端；不使用或保存 `preview` 对话预览，也不传递完整本机路径。请求结束后短期 `codex app-server` 子进程立即退出。
 
 “管理任务”是可选入口。用户没有进入该页时，应用不会检测或读取正式任务目录；没有现成目录时，只有点击“创建本地任务库”才会在系统应用数据目录创建透明的 Markdown 任务与 JSONL 事件目录。现有个人正式任务目录仍自动兼容，也可通过 `CODEX_TASK_CENTER_TASK_ROOT` 指向其他明确的 `任务/` 目录。

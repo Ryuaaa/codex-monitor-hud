@@ -92,6 +92,7 @@ Token增量缓存和额度预测样本位于：
 不想自行构建时，可从GitHub发布页下载：
 
 - [macOS 1.1.0](https://github.com/Ryuaaa/codex-monitor-hud/releases/tag/v1.1.0)：`Codex-Monitor-HUD.app.zip`。解压后把应用移到“应用程序”文件夹并打开；文件已经Developer ID签名并通过Apple公证。
+- [macOS 任务中心 1.3.0](https://github.com/Ryuaaa/codex-monitor-hud/releases/tag/task-center-v1.3.0)：下载通用版 `.app.zip`，可查看、继续并在 Codex 中准确打开官方任务；应用按需运行，关闭后退出。
 - [Windows 1.1.0未签名预览版](https://github.com/Ryuaaa/codex-monitor-hud/releases/tag/windows-preview-v1.1.0)：可下载便携ZIP和MSI安装包；Windows会显示“未知发布者”。该预发布不进入应用内自动更新通道。Windows 1.1.0正式安装包会在可信签名完成后发布。
 
 macOS 与 Windows 使用独立更新通道：macOS 读取 `v版本号`，Windows 读取 `windows-v版本号`。两个平台不会把对方的发布当成自己的新版。
