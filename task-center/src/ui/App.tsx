@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties } from "react";
 import { codexThreadIds, deriveAttention, parseTask } from "../domain/task";
 import type {
   PriorityEditPreview,
@@ -13,6 +14,12 @@ import type {
   CodexTurnSnapshot,
   CodexApprovalDecision,
   CodexTurnSummary,
+  CodexRuntimeCapabilities,
+  CodexGlobalSettingsRequest,
+  CodexGlobalSettingsPreview,
+  CodexGlobalSettingsReceipt,
+  CodexThreadRuntimeSetting,
+  CodexThreadRuntimeOverride,
   CreateTaskPreview,
   CreateTaskReceipt,
   NewTaskDraft,
@@ -47,7 +54,125 @@ const columns: TaskStatus[] = ["todo", "doing", "long_term", "done", "cancelled"
 const priorityLabels = { high: "高", medium: "中", low: "低", unknown: "未知" } as const;
 const updateCheckStorageKey = "codex-monitor-task-center.last-update-check";
 const updateCheckIntervalMs = 24 * 60 * 60 * 1000;
+const onboardingStorageKey = "codex-monitor-task-center.onboarding-completed.v1";
+const appearanceStorageKey = "codex-monitor-task-center.appearance.v1";
+const runtimeRestoreStorageKey = "codex-monitor-task-center.runtime-restore.v1";
+const runtimeActiveStorageKey = "codex-monitor-task-center.runtime-active.v1";
 const fallbackUpdateError = "更新未安装；当前版本保持不变。请稍后重试。";
+
+type AppearanceTheme = "midnight" | "slate" | "light" | "highContrast";
+type AppearanceFont = "system" | "rounded" | "serif" | "mono";
+type AppearanceDensity = "comfortable" | "compact" | "relaxed";
+type AppearanceLineSpacing = "compact" | "comfortable" | "relaxed";
+
+interface AppearanceSettings {
+  theme: AppearanceTheme;
+  accent: string;
+  font: AppearanceFont;
+  fontScale: number;
+  density: AppearanceDensity;
+  lineSpacing: AppearanceLineSpacing;
+  reduceMotion: boolean;
+}
+
+const defaultAppearance: AppearanceSettings = {
+  theme: "midnight",
+  accent: "#4fa9ff",
+  font: "system",
+  fontScale: 100,
+  density: "comfortable",
+  lineSpacing: "comfortable",
+  reduceMotion: false,
+};
+
+const fontStacks: Record<AppearanceFont, string> = {
+  system: 'Inter, "SF Pro Display", "PingFang SC", system-ui, sans-serif',
+  rounded: 'ui-rounded, "SF Pro Rounded", "PingFang SC", system-ui, sans-serif',
+  serif: '"New York", "Songti SC", "STSong", serif',
+  mono: '"SFMono-Regular", Menlo, Monaco, "PingFang SC", monospace',
+};
+
+function loadAppearance(): AppearanceSettings {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(appearanceStorageKey) ?? "null") as Partial<AppearanceSettings> | null;
+    if (!parsed || typeof parsed !== "object") return defaultAppearance;
+    return {
+      theme: ["midnight", "slate", "light", "highContrast"].includes(String(parsed.theme)) ? parsed.theme as AppearanceTheme : defaultAppearance.theme,
+      accent: typeof parsed.accent === "string" && /^#[0-9a-f]{6}$/i.test(parsed.accent) ? parsed.accent : defaultAppearance.accent,
+      font: ["system", "rounded", "serif", "mono"].includes(String(parsed.font)) ? parsed.font as AppearanceFont : defaultAppearance.font,
+      fontScale: typeof parsed.fontScale === "number" && parsed.fontScale >= 80 && parsed.fontScale <= 160 ? parsed.fontScale : defaultAppearance.fontScale,
+      density: ["comfortable", "compact", "relaxed"].includes(String(parsed.density)) ? parsed.density as AppearanceDensity : defaultAppearance.density,
+      lineSpacing: ["compact", "comfortable", "relaxed"].includes(String(parsed.lineSpacing)) ? parsed.lineSpacing as AppearanceLineSpacing : defaultAppearance.lineSpacing,
+      reduceMotion: typeof parsed.reduceMotion === "boolean" ? parsed.reduceMotion : defaultAppearance.reduceMotion,
+    };
+  } catch {
+    return defaultAppearance;
+  }
+}
+
+function loadRuntimeRestore(): CodexThreadRuntimeSetting[] {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(runtimeRestoreStorageKey) ?? "[]") as unknown;
+    if (!Array.isArray(parsed) || parsed.length > 500) return [];
+    return parsed.filter((item): item is CodexThreadRuntimeSetting => {
+      if (!item || typeof item !== "object") return false;
+      const value = item as Record<string, unknown>;
+      return typeof value.threadId === "string" && typeof value.model === "string"
+        && (value.effort === null || typeof value.effort === "string")
+        && (value.serviceTier === null || typeof value.serviceTier === "string")
+        && typeof value.effortChanged === "boolean"
+        && typeof value.serviceTierChanged === "boolean";
+    });
+  } catch {
+    return [];
+  }
+}
+
+function loadRuntimeOverrides(): CodexThreadRuntimeOverride[] {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(runtimeActiveStorageKey) ?? "[]") as unknown;
+    if (!Array.isArray(parsed) || parsed.length > 500) return [];
+    return parsed.filter((item): item is CodexThreadRuntimeOverride => {
+      if (!item || typeof item !== "object") return false;
+      const value = item as Record<string, unknown>;
+      return typeof value.threadId === "string"
+        && typeof value.effortSet === "boolean"
+        && (value.effort === null || typeof value.effort === "string")
+        && typeof value.serviceTierSet === "boolean"
+        && (value.serviceTier === null || typeof value.serviceTier === "string");
+    });
+  } catch {
+    return [];
+  }
+}
+
+function mergeRuntimeOverrides(
+  current: CodexThreadRuntimeOverride[],
+  updates: CodexThreadRuntimeOverride[],
+): CodexThreadRuntimeOverride[] {
+  const byThread = new Map(current.map((item) => [item.threadId, item]));
+  for (const update of updates) {
+    const previous = byThread.get(update.threadId);
+    const merged: CodexThreadRuntimeOverride = {
+      threadId: update.threadId,
+      effortSet: update.effortSet || Boolean(previous?.effortSet),
+      effort: update.effortSet ? update.effort : (previous?.effort ?? null),
+      serviceTierSet: update.serviceTierSet || Boolean(previous?.serviceTierSet),
+      serviceTier: update.serviceTierSet ? update.serviceTier : (previous?.serviceTier ?? null),
+    };
+    if (merged.effortSet || merged.serviceTierSet) byThread.set(update.threadId, merged);
+    else byThread.delete(update.threadId);
+  }
+  return [...byThread.values()].slice(-500);
+}
+
+function contrastText(color: string): "#071018" | "#ffffff" {
+  const red = Number.parseInt(color.slice(1, 3), 16);
+  const green = Number.parseInt(color.slice(3, 5), 16);
+  const blue = Number.parseInt(color.slice(5, 7), 16);
+  const luminance = (0.2126 * red + 0.7152 * green + 0.0722 * blue) / 255;
+  return luminance > 0.58 ? "#071018" : "#ffffff";
+}
 
 function safeUpdateError(error: unknown): string {
   if (
@@ -90,7 +215,8 @@ export function App({ provider = taskDataProvider }: { provider?: TaskDataProvid
   const [filterEditorOpen, setFilterEditorOpen] = useState(false);
   const [filterSaving, setFilterSaving] = useState(false);
   const [filterFailure, setFilterFailure] = useState<string>();
-  const [compact, setCompact] = useState(false);
+  const [appearance, setAppearance] = useState<AppearanceSettings>(loadAppearance);
+  const [appearanceOpen, setAppearanceOpen] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
   const [selected, setSelected] = useState<TaskRecord>();
   const [body, setBody] = useState<string>();
@@ -129,6 +255,24 @@ export function App({ provider = taskDataProvider }: { provider?: TaskDataProvid
   const [updateBusy, setUpdateBusy] = useState(false);
   const [updateMessage, setUpdateMessage] = useState<string>();
   const [updateFailed, setUpdateFailed] = useState(false);
+  const [onboardingOpen, setOnboardingOpen] = useState(() => {
+    try { return localStorage.getItem(onboardingStorageKey) !== "1"; } catch { return true; }
+  });
+  const [runtimeOpen, setRuntimeOpen] = useState(false);
+  const [runtimeCapabilities, setRuntimeCapabilities] = useState<CodexRuntimeCapabilities>();
+  const [runtimeRequest, setRuntimeRequest] = useState<CodexGlobalSettingsRequest>({
+    scope: "allActive",
+    threadIds: [],
+    reasoningSelection: "keep",
+    speedSelection: "keep",
+  });
+  const [runtimePreview, setRuntimePreview] = useState<CodexGlobalSettingsPreview>();
+  const [runtimeReceipt, setRuntimeReceipt] = useState<CodexGlobalSettingsReceipt>();
+  const [runtimeRestore, setRuntimeRestore] = useState<CodexThreadRuntimeSetting[]>(loadRuntimeRestore);
+  const [runtimeOverrides, setRuntimeOverrides] = useState<CodexThreadRuntimeOverride[]>(loadRuntimeOverrides);
+  const [runtimeRestoreArmed, setRuntimeRestoreArmed] = useState(false);
+  const [runtimeBusy, setRuntimeBusy] = useState(false);
+  const [runtimeFailure, setRuntimeFailure] = useState<string>();
   const [createOpen, setCreateOpen] = useState(false);
   const [createDraft, setCreateDraft] = useState<NewTaskDraft>({
     title: "", domain: "task_hub", taskStatus: "todo", priority: "medium",
@@ -157,6 +301,10 @@ export function App({ provider = taskDataProvider }: { provider?: TaskDataProvid
       taskDetailGeneration.current += 1;
     };
   }, [provider]);
+
+  useEffect(() => {
+    try { localStorage.setItem(appearanceStorageKey, JSON.stringify(appearance)); } catch { /* 本机偏好不可写时仅本次会话生效 */ }
+  }, [appearance]);
 
   useEffect(() => {
     if (section === "managed" && managedLoadState === "idle") {
@@ -205,6 +353,28 @@ export function App({ provider = taskDataProvider }: { provider?: TaskDataProvid
     .sort((left, right) => left.localeCompare(right, "zh-CN")), [tasks]);
 
   const filteredCodexThreads = codexThreads;
+
+  const appearanceStyle = useMemo(() => {
+    const scale = appearance.fontScale / 100;
+    const scaled = (value: number) => `${Math.round(value * scale * 100) / 100}px`;
+    return ({
+    "--user-accent": appearance.accent,
+    "--accent-contrast": contrastText(appearance.accent),
+    "--user-font": fontStacks[appearance.font],
+    "--content-leading": appearance.lineSpacing === "compact" ? "1.35" : appearance.lineSpacing === "relaxed" ? "1.8" : "1.58",
+    "--font-9": scaled(9),
+    "--font-10": scaled(10),
+    "--font-11": scaled(11),
+    "--font-12": scaled(12),
+    "--font-13": scaled(13),
+    "--font-14": scaled(14),
+    "--font-16": scaled(16),
+    "--font-20": scaled(20),
+    "--font-22": scaled(22),
+    "--font-24": scaled(24),
+    "--font-25": scaled(25),
+  } as CSSProperties);
+  }, [appearance]);
 
   const projectOptions = useMemo(() => {
     const mapped = projects.map((project) => ({ id: project.id, name: project.name, workdirs: project.workdirs }));
@@ -406,7 +576,16 @@ export function App({ provider = taskDataProvider }: { provider?: TaskDataProvid
     if (!selectedCodex || !codexContinuePreview) return;
     setCodexTurnFailure(undefined);
     try {
-      const next = await provider.startCodexTurn(selectedCodex.threadId, codexContinuePreview);
+      const savedRuntime = runtimeOverrides.find((item) => item.threadId === selectedCodex.threadId);
+      const runtime = savedRuntime ? {
+        effortSet: savedRuntime.effortSet,
+        effort: savedRuntime.effort,
+        serviceTierSet: savedRuntime.serviceTierSet,
+        serviceTier: savedRuntime.serviceTier,
+      } : undefined;
+      const next = runtime
+        ? await provider.startCodexTurn(selectedCodex.threadId, codexContinuePreview, runtime)
+        : await provider.startCodexTurn(selectedCodex.threadId, codexContinuePreview);
       setCodexTurn(next);
       setCodexTurnOwner(selectedCodex);
       setCodexPollFailures(0);
@@ -832,32 +1011,165 @@ export function App({ provider = taskDataProvider }: { provider?: TaskDataProvid
     }
   }
 
+  function updateAppearance(patch: Partial<AppearanceSettings>) {
+    setAppearance((current) => ({ ...current, ...patch }));
+  }
+
+  async function openRuntimeSettings() {
+    setRuntimeOpen(true);
+    setRuntimeFailure(undefined);
+    setRuntimePreview(undefined);
+    setRuntimeReceipt(undefined);
+    setRuntimeRestoreArmed(false);
+    if (runtimeCapabilities || runtimeBusy) return;
+    setRuntimeBusy(true);
+    try {
+      setRuntimeCapabilities(await provider.loadCodexRuntimeCapabilities());
+    } catch (error) {
+      setRuntimeFailure(normalizeCodexHistoryError(error).message);
+    } finally {
+      setRuntimeBusy(false);
+    }
+  }
+
+  function updateRuntimeRequest(patch: Partial<CodexGlobalSettingsRequest>) {
+    setRuntimeRequest((current) => ({ ...current, ...patch }));
+    setRuntimePreview(undefined);
+    setRuntimeReceipt(undefined);
+    setRuntimeFailure(undefined);
+    setRuntimeRestoreArmed(false);
+  }
+
+  async function previewRuntimeSettings() {
+    setRuntimeBusy(true);
+    setRuntimeFailure(undefined);
+    setRuntimeReceipt(undefined);
+    setRuntimeRestoreArmed(false);
+    try {
+      const request: CodexGlobalSettingsRequest = {
+        ...runtimeRequest,
+        threadIds: runtimeRequest.scope === "currentView"
+          ? filteredCodexThreads.map((thread) => thread.threadId)
+          : [],
+      };
+      setRuntimePreview(await provider.previewCodexGlobalSettings(request));
+    } catch (error) {
+      setRuntimePreview(undefined);
+      setRuntimeFailure(normalizeCodexHistoryError(error).message);
+    } finally {
+      setRuntimeBusy(false);
+    }
+  }
+
+  async function applyRuntimeSettings() {
+    if (!runtimePreview) return;
+    setRuntimeBusy(true);
+    setRuntimeFailure(undefined);
+    try {
+      const receipt = await provider.applyCodexGlobalSettings(runtimePreview.previewId);
+      setRuntimeReceipt(receipt);
+      setRuntimePreview(undefined);
+      if (receipt.previous.length) {
+        setRuntimeRestore(receipt.previous);
+        try { localStorage.setItem(runtimeRestoreStorageKey, JSON.stringify(receipt.previous)); } catch { /* 当前会话仍可恢复 */ }
+      }
+      if (receipt.applied.length) {
+        setRuntimeOverrides((current) => {
+          const next = mergeRuntimeOverrides(current, receipt.applied);
+          try { localStorage.setItem(runtimeActiveStorageKey, JSON.stringify(next)); } catch { /* 当前会话仍会应用 */ }
+          return next;
+        });
+      }
+    } catch (error) {
+      setRuntimeFailure(normalizeCodexHistoryError(error).message);
+      setRuntimePreview(undefined);
+    } finally {
+      setRuntimeBusy(false);
+    }
+  }
+
+  async function restoreRuntimeSettings() {
+    if (!runtimeRestore.length) return;
+    if (!runtimeRestoreArmed) {
+      setRuntimeRestoreArmed(true);
+      setRuntimeFailure(undefined);
+      return;
+    }
+    setRuntimeBusy(true);
+    setRuntimeFailure(undefined);
+    try {
+      const receipt = await provider.restoreCodexGlobalSettings(runtimeRestore);
+      setRuntimeRestore(receipt.remaining);
+      setRuntimeRestoreArmed(false);
+      if (receipt.remaining.length) {
+        try { localStorage.setItem(runtimeRestoreStorageKey, JSON.stringify(receipt.remaining)); } catch { /* 当前会话继续保留 */ }
+      } else {
+        try { localStorage.removeItem(runtimeRestoreStorageKey); } catch { /* 不影响恢复结果 */ }
+      }
+      if (receipt.restored.length) {
+        setRuntimeOverrides((current) => {
+          const next = mergeRuntimeOverrides(current, receipt.restored);
+          try { localStorage.setItem(runtimeActiveStorageKey, JSON.stringify(next)); } catch { /* 当前会话仍会应用 */ }
+          return next;
+        });
+      }
+      setRuntimeReceipt({
+        changedCount: receipt.restoredCount,
+        unchangedCount: 0,
+        failedCount: receipt.failedCount,
+        failures: receipt.failures,
+        previous: [],
+        applied: receipt.restored,
+        appliedAt: receipt.restoredAt,
+      });
+    } catch (error) {
+      setRuntimeFailure(normalizeCodexHistoryError(error).message);
+    } finally {
+      setRuntimeBusy(false);
+    }
+  }
+
+  function closeOnboarding() {
+    setOnboardingOpen(false);
+    try { localStorage.setItem(onboardingStorageKey, "1"); } catch { /* 本地偏好不可用时只影响下次是否再次显示 */ }
+  }
+
   return (
-    <div className={compact ? "app compact" : "app"}>
+    <div
+      className={`app density-${appearance.density}${appearance.density === "compact" ? " compact" : ""}`}
+      data-theme={appearance.theme}
+      data-reduce-motion={appearance.reduceMotion ? "true" : "false"}
+      style={appearanceStyle}
+    >
       <header className="topbar">
         <div>
           <p className="eyebrow">CODEX MONITOR</p>
           <h1>任务中心 <span>{section === "codex" ? "官方任务" : "安全写入"}</span></h1>
         </div>
         <div className="top-actions" aria-label="视图设置">
-          {section === "codex" ? <button disabled={codexListLoading} onClick={() => loadCodexThreads(undefined, true)}>{codexListLoading ? "读取中…" : "刷新"}</button> : <>
+          {section === "codex" ? <>
+            <button disabled={codexListLoading} onClick={() => loadCodexThreads(undefined, true)}>{codexListLoading ? "读取中…" : "刷新"}</button>
+            <button onClick={() => void openRuntimeSettings()}>运行配置</button>
+          </> : <>
             {managedLoadState === "ready" && <button className="create-entry" onClick={() => { resetCreateFlow(); setCreateOpen(true); }}>新建任务</button>}
             <button className={view === "board" ? "active" : ""} onClick={() => { setView("board"); clearSavedFilterSelection(); }}>看板</button>
             <button className={view === "list" ? "active" : ""} onClick={() => { setView("list"); clearSavedFilterSelection(); }}>列表</button>
             <button aria-pressed={showArchived} onClick={() => { setShowArchived((value) => !value); clearSavedFilterSelection(); }}>归档</button>
           </>}
-          <button aria-pressed={compact} onClick={() => setCompact((value) => !value)}>紧凑</button>
+          <button aria-pressed={appearance.density === "compact"} onClick={() => updateAppearance({ density: appearance.density === "compact" ? "comfortable" : "compact" })}>紧凑</button>
+          <button onClick={() => setAppearanceOpen(true)}>显示</button>
           <button className={updateInfo?.available ? "update-ready" : ""} disabled={updateBusy} onClick={() => updateInfo?.available ? installUpdate() : checkForUpdate(true)}>{updateBusy ? "更新处理中…" : updateInfo?.available && updateInfo.version ? `安装 ${updateInfo.version}` : "检查更新"}</button>
+          <button className="help-entry" aria-label="打开新手说明" title="新手说明" onClick={() => setOnboardingOpen(true)}>?</button>
         </div>
       </header>
 
       <div className="workspace">
         <aside className="sidebar" aria-label="任务中心导航">
           <nav className="source-nav" aria-label="数据来源">
-            <button className={section === "codex" ? "source-entry active" : "source-entry"} onClick={() => { closeDetails(); setLoadError(undefined); setSection("codex"); }}>
+            <button className={section === "codex" ? "source-entry active" : "source-entry"} title="查看本机 Codex 官方任务，可打开或继续执行" onClick={() => { closeDetails(); setLoadError(undefined); setSection("codex"); }}>
               <span>Codex 活动<small>官方任务 · 可继续</small></span><strong>{codexThreads.length}</strong>
             </button>
-            <button className={section === "managed" ? "source-entry active" : "source-entry"} onClick={() => { closeDetails(); setLoadError(undefined); setSection("managed"); }}>
+            <button className={section === "managed" ? "source-entry active" : "source-entry"} title="可选的本地任务库，写入前都会再次确认" onClick={() => { closeDetails(); setLoadError(undefined); setSection("managed"); }}>
               <span>管理任务<small>可选本地任务库</small></span><strong>{managedLoadState === "ready" ? tasks.length : "—"}</strong>
             </button>
           </nav>
@@ -1065,8 +1377,187 @@ export function App({ provider = taskDataProvider }: { provider?: TaskDataProvid
         onConfirm={confirmCreate}
         onClose={resetCreateFlow}
       />}
+      {onboardingOpen && <OnboardingDialog onClose={closeOnboarding} />}
+      {appearanceOpen && <AppearanceDialog
+        settings={appearance}
+        onChange={updateAppearance}
+        onReset={() => setAppearance(defaultAppearance)}
+        onClose={() => setAppearanceOpen(false)}
+      />}
+      {runtimeOpen && <RuntimeSettingsDialog
+        capabilities={runtimeCapabilities}
+        request={runtimeRequest}
+        preview={runtimePreview}
+        receipt={runtimeReceipt}
+        restoreCount={runtimeRestore.length}
+        restoreArmed={runtimeRestoreArmed}
+        currentViewCount={filteredCodexThreads.length}
+        busy={runtimeBusy}
+        failure={runtimeFailure}
+        onRequest={updateRuntimeRequest}
+        onPreview={previewRuntimeSettings}
+        onApply={applyRuntimeSettings}
+        onRestore={restoreRuntimeSettings}
+        onClose={() => setRuntimeOpen(false)}
+      />}
     </div>
   );
+}
+
+function OnboardingDialog({ onClose }: { onClose: () => void }) {
+  useEffect(() => {
+    const closeOnEscape = (event: KeyboardEvent) => event.key === "Escape" && onClose();
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [onClose]);
+
+  return <div className="scrim onboarding-scrim" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+    <section className="onboarding-dialog" role="dialog" aria-modal="true" aria-labelledby="onboarding-title">
+      <div className="onboarding-head">
+        <div><p className="eyebrow">QUICK START</p><h2 id="onboarding-title">三步开始使用任务中心</h2></div>
+        <button aria-label="关闭新手说明" onClick={onClose}>×</button>
+      </div>
+      <p className="onboarding-lead">默认页面只读取本机 Codex 官方任务；不读取或保存对话正文。</p>
+      <ol className="onboarding-steps">
+        <li><span>1</span><div><strong>找到任务</strong><p>在“Codex 活动”中搜索或筛选，点击任务名称查看详情。</p></div></li>
+        <li><span>2</span><div><strong>打开或继续</strong><p>“在 Codex 中打开”只负责定位；“继续这个任务”会先让你确认，再启动新一轮。</p></div></li>
+        <li><span>3</span><div><strong>按需管理</strong><p>“管理任务”是可选本地任务库。任何修改都会先预览，再由你确认。</p></div></li>
+      </ol>
+      <div className="onboarding-footer"><p>以后可点击右上角“？”再次查看。</p><button autoFocus onClick={onClose}>开始使用</button></div>
+    </section>
+  </div>;
+}
+
+function AppearanceDialog({
+  settings, onChange, onReset, onClose,
+}: {
+  settings: AppearanceSettings;
+  onChange: (patch: Partial<AppearanceSettings>) => void;
+  onReset: () => void;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    const closeOnEscape = (event: KeyboardEvent) => event.key === "Escape" && onClose();
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [onClose]);
+
+  return <div className="scrim settings-scrim" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+    <section className="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="appearance-title">
+      <div className="settings-head">
+        <div><p className="eyebrow">APPEARANCE</p><h2 id="appearance-title">显示设置</h2></div>
+        <button aria-label="关闭显示设置" onClick={onClose}>×</button>
+      </div>
+      <p className="settings-lead">所有设置只保存在这台电脑，调整时会立即预览，不增加后台读取。</p>
+
+      <div className="settings-grid">
+        <fieldset>
+          <legend>主题颜色</legend>
+          <div className="choice-grid theme-choices">
+            {([
+              ["midnight", "深蓝"], ["slate", "中性深色"], ["light", "浅色"], ["highContrast", "高对比"],
+            ] as Array<[AppearanceTheme, string]>).map(([value, label]) => <button
+              key={value}
+              className={settings.theme === value ? "selected" : ""}
+              aria-pressed={settings.theme === value}
+              onClick={() => onChange({ theme: value })}
+            >{label}</button>)}
+          </div>
+        </fieldset>
+
+        <label className="settings-field color-field"><span>强调色</span><div><input aria-label="强调色" type="color" value={settings.accent} onChange={(event) => onChange({ accent: event.target.value })} /><code>{settings.accent.toUpperCase()}</code></div></label>
+
+        <label className="settings-field"><span>字体</span><select aria-label="界面字体" value={settings.font} onChange={(event) => onChange({ font: event.target.value as AppearanceFont })}>
+          <option value="system">系统字体</option><option value="rounded">圆体</option><option value="serif">宋体 / 衬线</option><option value="mono">等宽字体</option>
+        </select></label>
+
+        <label className="settings-field range-field"><span>字体大小 <output>{settings.fontScale}%</output></span><input aria-label="字体大小" type="range" min="80" max="160" step="5" value={settings.fontScale} onChange={(event) => onChange({ fontScale: Number(event.target.value) })} /></label>
+
+        <label className="settings-field"><span>内容密度</span><select aria-label="内容密度" value={settings.density} onChange={(event) => onChange({ density: event.target.value as AppearanceDensity })}>
+          <option value="compact">紧凑</option><option value="comfortable">舒适</option><option value="relaxed">宽松</option>
+        </select></label>
+
+        <label className="settings-field"><span>行距</span><select aria-label="界面行距" value={settings.lineSpacing} onChange={(event) => onChange({ lineSpacing: event.target.value as AppearanceLineSpacing })}>
+          <option value="compact">紧凑</option><option value="comfortable">舒适</option><option value="relaxed">宽松</option>
+        </select></label>
+      </div>
+
+      <label className="check-row"><input type="checkbox" checked={settings.reduceMotion} onChange={(event) => onChange({ reduceMotion: event.target.checked })} /><span><strong>减少动态效果</strong><small>关闭悬停位移等非必要动画。</small></span></label>
+      <div className="settings-actions"><button className="secondary" onClick={onReset}>恢复默认</button><button onClick={onClose}>完成</button></div>
+    </section>
+  </div>;
+}
+
+function RuntimeSettingsDialog({
+  capabilities, request, preview, receipt, restoreCount, restoreArmed, currentViewCount,
+  busy, failure, onRequest, onPreview, onApply, onRestore, onClose,
+}: {
+  capabilities?: CodexRuntimeCapabilities;
+  request: CodexGlobalSettingsRequest;
+  preview?: CodexGlobalSettingsPreview;
+  receipt?: CodexGlobalSettingsReceipt;
+  restoreCount: number;
+  restoreArmed: boolean;
+  currentViewCount: number;
+  busy: boolean;
+  failure?: string;
+  onRequest: (patch: Partial<CodexGlobalSettingsRequest>) => void;
+  onPreview: () => void;
+  onApply: () => void;
+  onRestore: () => void;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    const closeOnEscape = (event: KeyboardEvent) => event.key === "Escape" && !busy && onClose();
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [busy, onClose]);
+
+  const noSelection = request.reasoningSelection === "keep" && request.speedSelection === "keep";
+  return <div className="scrim settings-scrim" onMouseDown={(event) => event.target === event.currentTarget && !busy && onClose()}>
+    <section className="settings-dialog runtime-dialog" role="dialog" aria-modal="true" aria-labelledby="runtime-settings-title">
+      <div className="settings-head">
+        <div><p className="eyebrow">CODEX RUNTIME</p><h2 id="runtime-settings-title">全局运行配置</h2></div>
+        <button aria-label="关闭全局运行配置" disabled={busy} onClick={onClose}>×</button>
+      </div>
+      <p className="settings-lead">统一切换任务的速度和推理强度。不会启动任务，也不会改变正在运行的回合。速度设置会在你从任务中心继续任务时再次带入；直接在 Codex 中继续时，以 Codex 当时的设置为准。</p>
+
+      {!capabilities && !failure && <div className="runtime-loading" role="status">正在读取当前 Codex 支持的配置…</div>}
+      {capabilities && <div className="runtime-form">
+        <label className="settings-field"><span>任务范围</span><select aria-label="全局配置任务范围" value={request.scope} onChange={(event) => onRequest({ scope: event.target.value as CodexGlobalSettingsRequest["scope"] })}>
+          <option value="allActive">全部未归档任务</option>
+          <option value="currentView">当前列表（{currentViewCount} 个）</option>
+          <option value="allIncludingArchived">全部任务（含归档）</option>
+        </select></label>
+        <label className="settings-field"><span>速度</span><select aria-label="全局速度" value={request.speedSelection} onChange={(event) => onRequest({ speedSelection: event.target.value })}>
+          <option value="keep">保持各任务当前速度</option>
+          <option value="standard">统一为标准速度</option>
+          {capabilities.speedTiers.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
+        </select></label>
+        <label className="settings-field"><span>推理强度</span><select aria-label="全局推理强度" value={request.reasoningSelection} onChange={(event) => onRequest({ reasoningSelection: event.target.value })}>
+          <option value="keep">保持各任务当前强度</option>
+          <option value="default">统一为各模型默认强度</option>
+          <option value="minimum">统一为各模型最低强度</option>
+          <option value="maximum">统一为各模型最高强度</option>
+          {capabilities.reasoningEfforts.map((option) => <option key={option.id} value={option.id}>{option.label}{option.id === "ultra" ? "（可能启用多智能体）" : ""}</option>)}
+        </select></label>
+        <p className="runtime-capability-note">当前从 {capabilities.modelCount} 个可用模型动态读取；模型不支持的选项会跳过并列明。</p>
+        {!preview && <button className="runtime-preview-button" disabled={busy || noSelection} onClick={onPreview}>{busy ? "正在检查任务…" : "预览批量修改"}</button>}
+      </div>}
+
+      {preview && <section className="runtime-preview" aria-label="全局运行配置确认">
+        <div className="runtime-metrics"><div><strong>{preview.changeableCount}</strong><span>将修改</span></div><div><strong>{preview.unchangedCount}</strong><span>无需修改</span></div><div><strong>{preview.skippedCount}</strong><span>跳过</span></div></div>
+        <p>已检查 {preview.discoveredCount} 个任务；涉及 {preview.models.map((item) => `${item.model} ${item.count}个`).join("、") || "暂无可读模型"}。</p>
+        {preview.warnings.map((warning) => <small key={warning}>{warning}</small>)}
+        <div className="settings-actions"><button className="secondary" disabled={busy} onClick={onPreview}>重新预览</button><button className="confirm-runtime" disabled={busy || preview.changeableCount === 0} onClick={onApply}>{busy ? "应用中…" : `确认应用到 ${preview.changeableCount} 个任务`}</button></div>
+      </section>}
+
+      {receipt && <div className={receipt.failedCount ? "runtime-receipt partial" : "runtime-receipt"} role="status"><strong>{receipt.previous.length ? "批量配置完成" : "恢复完成"}</strong><span>成功 {receipt.changedCount} 个，失败 {receipt.failedCount} 个。</span>{receipt.failedCount > 0 && <small>{receipt.failures.slice(0, 3).map((item) => item.message).join("；")}</small>}</div>}
+      {failure && <div className="write-failure" role="alert"><strong>{failure}</strong></div>}
+
+      {restoreCount > 0 && <div className="runtime-restore"><div><strong>可恢复上次批量修改</strong><small>已保存 {restoreCount} 个任务修改前的速度和强度。</small></div><button className={restoreArmed ? "confirm-runtime" : "secondary"} disabled={busy} onClick={onRestore}>{restoreArmed ? `确认恢复 ${restoreCount} 个任务` : "恢复上次设置"}</button></div>}
+    </section>
+  </div>;
 }
 
 function CodexActivity({
@@ -1172,13 +1663,14 @@ function CodexActivityDetail({
         <div><dt>最近活动</dt><dd>{formatUnixTime(thread.updatedAt ?? thread.createdAt)}</dd></div>
         <div><dt>记录状态</dt><dd>{thread.archived ? "已归档" : codexReportedStatus(thread.reportedStatus)}</dd></div>
       </dl>
-      <section className="codex-open-section"><div className="section-title"><h3>任务编号</h3><button disabled={openBusy} onClick={onOpenInCodex}>{openBusy ? "正在打开…" : "在 Codex 中打开"}</button></div><p className="thread-id-copy">{thread.threadId}</p>
+      <section className="codex-open-section"><div className="section-title"><h3>任务编号</h3><button disabled={openBusy} title="只在 Codex 中定位，不会发送新内容" onClick={onOpenInCodex}>{openBusy ? "正在打开…" : "在 Codex 中打开"}</button></div><p className="thread-id-copy">{thread.threadId}</p>
+        <p className="action-hint">只定位到这个现有任务，不会新建任务或发送内容。</p>
         {openReceipt && <p className="codex-open-message" aria-live="polite">{openReceipt.message}</p>}
         {openFailure && <div className="write-failure" role="alert"><strong>{openFailure.message}</strong><small>{openFailure.code}</small></div>}
       </section>
       <section className="codex-continue" aria-label="继续 Codex 任务">
         <div className="section-title"><h3>继续这个任务</h3><span className="on-demand">官方接口</span></div>
-        <p className="write-boundary">确认后会在原 Codex 任务中开始新一轮；不改动它的模型、目录或权限设置。</p>
+        <p className="write-boundary">先生成确认，再由你确认后在原 Codex 任务中开始新一轮；会带入已确认的全局速度和推理强度，但不会改动模型、目录或权限。</p>
         {!turnActive && <div className="continue-editor">
           <label><span>要交给 Codex 的内容</span><textarea aria-label="继续任务内容" maxLength={16000} value={continueDraft} onChange={(event) => onContinueDraft(event.target.value)} placeholder="例如：从上次断点继续，先完成未闭合的测试。" /></label>
           {!continuePreview && <div className="write-actions"><button disabled={!continueDraft.trim()} onClick={onPreviewContinue}>生成继续确认</button></div>}

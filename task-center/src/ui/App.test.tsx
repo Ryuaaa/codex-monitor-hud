@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fixtureEvents, fixtureProjects, fixtureSources } from "../data/fixtures";
 import type { TaskDataProvider } from "../data/provider";
 import { App } from "./App";
@@ -97,6 +97,53 @@ function provider(): TaskDataProvider {
       startedAt: 201,
       finishedAt: 202,
     })),
+    loadCodexRuntimeCapabilities: vi.fn().mockResolvedValue({
+      reasoningEfforts: [
+        { id: "low", label: "低" }, { id: "medium", label: "中等" },
+        { id: "high", label: "高" }, { id: "max", label: "最大" },
+      ],
+      speedTiers: [{ id: "priority", label: "快速（Fast）", description: "1.5 倍速度，额度消耗更高" }],
+      modelCount: 2,
+      observedAt: 201,
+    }),
+    previewCodexGlobalSettings: vi.fn().mockImplementation((request) => Promise.resolve({
+      previewId: "settings-preview-1",
+      request,
+      discoveredCount: request.scope === "currentView" ? request.threadIds.length : 8,
+      changeableCount: request.scope === "currentView" ? request.threadIds.length : 7,
+      unchangedCount: 1,
+      partialCount: 0,
+      skippedCount: 0,
+      models: [{ model: "GPT-5.6-Sol", count: 8 }],
+      warnings: ["正在运行的回合不会改变；新设置只用于后续回合。"],
+      expiresAt: 500,
+    })),
+    applyCodexGlobalSettings: vi.fn().mockResolvedValue({
+      changedCount: 7,
+      unchangedCount: 1,
+      failedCount: 0,
+      failures: [],
+      previous: [{
+        threadId: "019f-demo-running", model: "gpt-5.6-sol", effort: "medium", serviceTier: null,
+        effortChanged: true, serviceTierChanged: true,
+      }],
+      applied: [{ threadId: "019f-demo-running", effortSet: true, effort: "max", serviceTierSet: true, serviceTier: "priority" }],
+      appliedAt: 202,
+    }),
+    restoreCodexGlobalSettings: vi.fn().mockImplementation((previous: Parameters<TaskDataProvider["restoreCodexGlobalSettings"]>[0]) => Promise.resolve({
+      restoredCount: previous.length,
+      failedCount: 0,
+      failures: [],
+      remaining: [],
+      restored: previous.map((item) => ({
+        threadId: item.threadId,
+        effortSet: item.effortChanged,
+        effort: item.effort,
+        serviceTierSet: item.serviceTierChanged,
+        serviceTier: item.serviceTier,
+      })),
+      restoredAt: 203,
+    })),
     initializeLocalTaskLibrary: vi.fn().mockResolvedValue(undefined),
     loadSavedFilters: vi.fn().mockImplementation(() => Promise.resolve([...savedFilters.values()])),
     saveTaskFilter: vi.fn().mockImplementation((draft) => {
@@ -185,12 +232,89 @@ function switchToManagedTasks() {
   fireEvent.click(screen.getByRole("button", { name: /管理任务/ }));
 }
 
+beforeEach(() => {
+  localStorage.clear();
+  localStorage.setItem("codex-monitor-task-center.onboarding-completed.v1", "1");
+});
+
 async function enterManagedTasks() {
   switchToManagedTasks();
   await screen.findByText("统一个人 AI 规则与能力边界");
 }
 
 describe("任务中心核心流程", () => {
+  it("首次启动显示三步说明，关闭后不再自动出现且可从帮助入口重看", async () => {
+    localStorage.removeItem("codex-monitor-task-center.onboarding-completed.v1");
+    const first = render(<App provider={provider()} />);
+    expect(screen.getByRole("dialog", { name: "三步开始使用任务中心" })).toHaveTextContent("找到任务");
+    expect(screen.getByRole("dialog", { name: "三步开始使用任务中心" })).toHaveTextContent("打开或继续");
+    expect(screen.getByRole("dialog", { name: "三步开始使用任务中心" })).toHaveTextContent("按需管理");
+    fireEvent.click(screen.getByRole("button", { name: "开始使用" }));
+    expect(screen.queryByRole("dialog", { name: "三步开始使用任务中心" })).not.toBeInTheDocument();
+    expect(localStorage.getItem("codex-monitor-task-center.onboarding-completed.v1")).toBe("1");
+    first.unmount();
+
+    render(<App provider={provider()} />);
+    expect(screen.queryByRole("dialog", { name: "三步开始使用任务中心" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "打开新手说明" }));
+    expect(screen.getByRole("dialog", { name: "三步开始使用任务中心" })).toBeInTheDocument();
+  });
+
+  it("显示设置可实时调整主题字体与密度，并只保存在本机", async () => {
+    const first = render(<App provider={provider()} />);
+    fireEvent.click(screen.getByRole("button", { name: "显示" }));
+    const dialog = screen.getByRole("dialog", { name: "显示设置" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "浅色" }));
+    fireEvent.change(within(dialog).getByRole("slider", { name: "字体大小" }), { target: { value: "135" } });
+    fireEvent.change(within(dialog).getByLabelText("界面字体"), { target: { value: "rounded" } });
+    fireEvent.change(within(dialog).getByLabelText("内容密度"), { target: { value: "relaxed" } });
+    fireEvent.change(within(dialog).getByLabelText("强调色"), { target: { value: "#8b6cff" } });
+
+    const app = document.querySelector(".app") as HTMLElement;
+    expect(app).toHaveAttribute("data-theme", "light");
+    expect(app).toHaveClass("density-relaxed");
+    expect(app.style.getPropertyValue("--font-14")).toBe("18.9px");
+    expect(app.style.getPropertyValue("--user-accent")).toBe("#8b6cff");
+    await waitFor(() => expect(localStorage.getItem("codex-monitor-task-center.appearance.v1")).toContain('"fontScale":135'));
+    fireEvent.click(within(dialog).getByRole("button", { name: "完成" }));
+    first.unmount();
+
+    render(<App provider={provider()} />);
+    expect(document.querySelector(".app")).toHaveAttribute("data-theme", "light");
+    fireEvent.click(screen.getByRole("button", { name: "显示" }));
+    fireEvent.click(within(screen.getByRole("dialog", { name: "显示设置" })).getByRole("button", { name: "恢复默认" }));
+    expect(document.querySelector(".app")).toHaveAttribute("data-theme", "midnight");
+  });
+
+  it("全局运行配置可独立选择速度和推理强度，确认后可恢复", async () => {
+    const mock = provider();
+    render(<App provider={mock} />);
+    fireEvent.click(screen.getByRole("button", { name: "运行配置" }));
+    const dialog = await screen.findByRole("dialog", { name: "全局运行配置" });
+    await within(dialog).findByRole("option", { name: "快速（Fast）" });
+    fireEvent.change(within(dialog).getByLabelText("全局配置任务范围"), { target: { value: "currentView" } });
+    fireEvent.change(within(dialog).getByLabelText("全局速度"), { target: { value: "priority" } });
+    fireEvent.change(within(dialog).getByLabelText("全局推理强度"), { target: { value: "maximum" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "预览批量修改" }));
+
+    await waitFor(() => expect(mock.previewCodexGlobalSettings).toHaveBeenCalledWith(expect.objectContaining({
+      scope: "currentView",
+      speedSelection: "priority",
+      reasoningSelection: "maximum",
+      threadIds: ["019f-demo-running"],
+    })));
+    expect(await within(dialog).findByText("将修改")).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "确认应用到 1 个任务" }));
+    await waitFor(() => expect(mock.applyCodexGlobalSettings).toHaveBeenCalledWith("settings-preview-1"));
+    expect(await within(dialog).findByText("批量配置完成")).toBeInTheDocument();
+    expect(localStorage.getItem("codex-monitor-task-center.runtime-restore.v1")).toContain("019f-demo-running");
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "恢复上次设置" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "确认恢复 1 个任务" }));
+    await waitFor(() => expect(mock.restoreCodexGlobalSettings).toHaveBeenCalledTimes(1));
+    expect(localStorage.getItem("codex-monitor-task-center.runtime-restore.v1")).toBeNull();
+  });
+
   it("每天至多自动检查一次，并在安装前重新绑定用户看到的版本", async () => {
     localStorage.setItem("codex-monitor-task-center.last-update-check", String(Date.now()));
     const mock = provider();
@@ -306,6 +430,27 @@ describe("任务中心核心流程", () => {
     expect(await screen.findByRole("status")).toHaveTextContent("正在连接原 Codex 任务");
     await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("本轮已完成"), { timeout: 2000 });
     expect(mock.getCodexTurnStatus).toHaveBeenCalledWith("session-demo-1");
+  });
+
+  it("任务中心继续任务时重新带入已确认的速度和推理强度", async () => {
+    localStorage.setItem("codex-monitor-task-center.runtime-active.v1", JSON.stringify([{
+      threadId: "019f-demo-running",
+      effortSet: true,
+      effort: "max",
+      serviceTierSet: true,
+      serviceTier: "priority",
+    }]));
+    const mock = provider();
+    render(<App provider={mock} />);
+    fireEvent.click(await screen.findByRole("button", { name: /合成 Codex 任务/ }));
+    fireEvent.change(screen.getByLabelText("继续任务内容"), { target: { value: "按已保存配置继续" } });
+    fireEvent.click(screen.getByRole("button", { name: "生成继续确认" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认并继续" }));
+    await waitFor(() => expect(mock.startCodexTurn).toHaveBeenCalledWith(
+      "019f-demo-running",
+      "按已保存配置继续",
+      { effortSet: true, effort: "max", serviceTierSet: true, serviceTier: "priority" },
+    ));
   });
 
   it("Codex 命令授权只显示官方允许的选项并需用户点击", async () => {

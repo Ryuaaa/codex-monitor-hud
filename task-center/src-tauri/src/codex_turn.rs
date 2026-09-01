@@ -2,7 +2,7 @@ use crate::codex_history::{
     bounded_text, checked_result, codex_executable, observed_at, validate_thread_id, AppServer,
     CodexHistoryError,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
     path::Path,
@@ -25,6 +25,15 @@ const APPROVAL_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const INTERRUPT_GRACE: Duration = Duration::from_secs(5);
 
 static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct CodexTurnRuntimeOverride {
+    effort_set: bool,
+    effort: Option<String>,
+    service_tier_set: bool,
+    service_tier: Option<String>,
+}
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -114,19 +123,32 @@ impl CodexTurnManager {
         &self,
         thread_id: String,
         input: String,
+        runtime: Option<CodexTurnRuntimeOverride>,
     ) -> Result<CodexTurnSnapshot, CodexHistoryError> {
         let executable = codex_executable()?;
-        self.start_with_executable(executable.as_path(), thread_id, input)
+        self.start_with_executable_and_runtime(executable.as_path(), thread_id, input, runtime)
     }
 
+    #[cfg(test)]
     fn start_with_executable(
         &self,
         executable: &Path,
         thread_id: String,
         input: String,
     ) -> Result<CodexTurnSnapshot, CodexHistoryError> {
+        self.start_with_executable_and_runtime(executable, thread_id, input, None)
+    }
+
+    fn start_with_executable_and_runtime(
+        &self,
+        executable: &Path,
+        thread_id: String,
+        input: String,
+        runtime: Option<CodexTurnRuntimeOverride>,
+    ) -> Result<CodexTurnSnapshot, CodexHistoryError> {
         validate_thread_id(&thread_id)?;
         validate_turn_input(&input)?;
+        validate_runtime_override(runtime.as_ref())?;
 
         let mut current = self.current.lock().map_err(|_| {
             CodexHistoryError::new("runtime_unavailable", "Codex 继续任务状态不可用")
@@ -162,6 +184,7 @@ impl CodexTurnManager {
                 executable.as_path(),
                 &thread_id,
                 &input,
+                runtime.as_ref(),
                 &worker_snapshot,
                 control_rx,
             );
@@ -348,6 +371,40 @@ fn validate_turn_input(input: &str) -> Result<(), CodexHistoryError> {
     Ok(())
 }
 
+fn validate_runtime_override(
+    runtime: Option<&CodexTurnRuntimeOverride>,
+) -> Result<(), CodexHistoryError> {
+    let Some(runtime) = runtime else {
+        return Ok(());
+    };
+    for value in [
+        runtime
+            .effort_set
+            .then_some(runtime.effort.as_deref())
+            .flatten(),
+        runtime
+            .service_tier_set
+            .then_some(runtime.service_tier.as_deref())
+            .flatten(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if value.is_empty()
+            || value.len() > 80
+            || !value.chars().all(|character| {
+                character.is_ascii_alphanumeric() || matches!(character, '-' | '_')
+            })
+        {
+            return Err(CodexHistoryError::new(
+                "invalid_runtime_override",
+                "保存的 Codex 运行配置无效",
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn initialize_request() -> Value {
     json!({
         "id": 1,
@@ -392,19 +449,40 @@ fn resume_request(thread_id: &str) -> Value {
     })
 }
 
-fn start_request(thread_id: &str, input: &str) -> Value {
-    json!({
-        "id": 3,
-        "method": "turn/start",
-        "params": {
-            "threadId": thread_id,
-            "input": [{
-                "type": "text",
-                "text": input,
-                "text_elements": []
-            }]
+fn start_request(
+    thread_id: &str,
+    input: &str,
+    runtime: Option<&CodexTurnRuntimeOverride>,
+) -> Value {
+    let mut params = serde_json::Map::new();
+    params.insert("threadId".to_string(), Value::String(thread_id.to_string()));
+    params.insert(
+        "input".to_string(),
+        json!([{"type": "text", "text": input, "text_elements": []}]),
+    );
+    if let Some(runtime) = runtime {
+        if runtime.effort_set {
+            params.insert(
+                "effort".to_string(),
+                runtime
+                    .effort
+                    .clone()
+                    .map(Value::String)
+                    .unwrap_or(Value::Null),
+            );
         }
-    })
+        if runtime.service_tier_set {
+            params.insert(
+                "serviceTier".to_string(),
+                runtime
+                    .service_tier
+                    .clone()
+                    .map(Value::String)
+                    .unwrap_or(Value::Null),
+            );
+        }
+    }
+    json!({"id": 3, "method": "turn/start", "params": params})
 }
 
 fn contains_sensitive_marker(value: &str) -> bool {
@@ -631,6 +709,7 @@ fn run_turn_worker(
     executable: &Path,
     thread_id: &str,
     input: &str,
+    runtime: Option<&CodexTurnRuntimeOverride>,
     snapshot: &Arc<Mutex<CodexTurnSnapshot>>,
     control: Receiver<TurnControl>,
 ) {
@@ -654,7 +733,7 @@ fn run_turn_worker(
             return Err(protocol_error("Codex 恢复的任务编号不一致"));
         }
 
-        server.send(&start_request(thread_id, input))?;
+        server.send(&start_request(thread_id, input, runtime))?;
         let started = wait_response(&server, 3, startup_deadline, &control)?;
         let started = checked_result(&started)?;
         let turn_id = started
@@ -842,7 +921,7 @@ mod tests {
         assert_eq!(resume["params"]["threadId"], "thread_123");
         assert_eq!(resume["params"]["excludeTurns"], true);
 
-        let start = start_request("thread_123", "继续完成当前任务");
+        let start = start_request("thread_123", "继续完成当前任务", None);
         assert_eq!(start["method"], "turn/start");
         assert_eq!(start["params"]["threadId"], "thread_123");
         assert_eq!(start["params"]["input"][0]["type"], "text");
@@ -853,6 +932,31 @@ mod tests {
         assert!(!serialized.contains("approvalPolicy"));
         assert!(!serialized.contains("sandboxPolicy"));
         assert!(!serialized.contains("cwd"));
+    }
+
+    #[test]
+    fn continuation_can_apply_an_explicit_runtime_profile_without_changing_other_settings() {
+        let runtime = CodexTurnRuntimeOverride {
+            effort_set: true,
+            effort: Some("max".to_string()),
+            service_tier_set: true,
+            service_tier: Some("priority".to_string()),
+        };
+        let start = start_request("thread_123", "继续", Some(&runtime));
+        assert_eq!(start["params"]["effort"], "max");
+        assert_eq!(start["params"]["serviceTier"], "priority");
+        assert!(start["params"].get("model").is_none());
+        assert!(start["params"].get("cwd").is_none());
+
+        let standard = CodexTurnRuntimeOverride {
+            effort_set: false,
+            effort: None,
+            service_tier_set: true,
+            service_tier: None,
+        };
+        let standard_request = start_request("thread_123", "继续", Some(&standard));
+        assert!(standard_request["params"]["serviceTier"].is_null());
+        assert!(standard_request["params"].get("effort").is_none());
     }
 
     #[test]

@@ -10,6 +10,13 @@ import type {
   CodexOpenReceipt,
   CodexTurnSnapshot,
   CodexApprovalDecision,
+  CodexRuntimeCapabilities,
+  CodexGlobalSettingsRequest,
+  CodexGlobalSettingsPreview,
+  CodexGlobalSettingsReceipt,
+  CodexGlobalSettingsRestoreReceipt,
+  CodexThreadRuntimeSetting,
+  CodexTurnRuntimeOverride,
   CreateTaskPreview,
   CreateTaskReceipt,
   NewTaskDraft,
@@ -35,10 +42,14 @@ export interface TaskDataProvider {
   loadCodexThreadList(request: CodexThreadListRequest): Promise<CodexThreadListPage>;
   loadCodexThreadPage(threadId: string, cursor?: string): Promise<CodexThreadPage>;
   openCodexThread(threadId: string): Promise<CodexOpenReceipt>;
-  startCodexTurn(threadId: string, input: string): Promise<CodexTurnSnapshot>;
+  startCodexTurn(threadId: string, input: string, runtime?: CodexTurnRuntimeOverride): Promise<CodexTurnSnapshot>;
   getCodexTurnStatus(sessionId: string): Promise<CodexTurnSnapshot>;
   respondCodexTurnApproval(sessionId: string, requestId: string, decision: CodexApprovalDecision): Promise<CodexTurnSnapshot>;
   interruptCodexTurn(sessionId: string): Promise<CodexTurnSnapshot>;
+  loadCodexRuntimeCapabilities(): Promise<CodexRuntimeCapabilities>;
+  previewCodexGlobalSettings(request: CodexGlobalSettingsRequest): Promise<CodexGlobalSettingsPreview>;
+  applyCodexGlobalSettings(previewId: string): Promise<CodexGlobalSettingsReceipt>;
+  restoreCodexGlobalSettings(previous: CodexThreadRuntimeSetting[]): Promise<CodexGlobalSettingsRestoreReceipt>;
   initializeLocalTaskLibrary(): Promise<void>;
   loadSavedFilters(): Promise<SavedTaskFilter[]>;
   saveTaskFilter(draft: SavedTaskFilterDraft): Promise<SavedTaskFilter>;
@@ -110,6 +121,7 @@ const demoCodexList = (request: CodexThreadListRequest): CodexThreadListPage => 
 
 let demoSavedFilters: SavedTaskFilter[] = [];
 let demoTurn: CodexTurnSnapshot | undefined;
+let demoGlobalSettingsPreview: CodexGlobalSettingsPreview | undefined;
 
 export const taskDataProvider: TaskDataProvider = {
   async loadMetadata() {
@@ -139,8 +151,8 @@ export const taskDataProvider: TaskDataProvider = {
       ? invoke<CodexOpenReceipt>("open_codex_thread", { threadId })
       : { mode: "deepLink", message: `已在 Codex 中打开 ${threadId}` };
   },
-  async startCodexTurn(threadId, input) {
-    if (isTauri()) return invoke<CodexTurnSnapshot>("start_codex_turn", { threadId, input });
+  async startCodexTurn(threadId, input, runtime) {
+    if (isTauri()) return invoke<CodexTurnSnapshot>("start_codex_turn", { threadId, input, runtime: runtime ?? null });
     demoTurn = {
       sessionId: `demo-turn-${Date.now()}`,
       threadId,
@@ -174,6 +186,79 @@ export const taskDataProvider: TaskDataProvider = {
       pendingApproval: undefined,
     };
     return demoTurn;
+  },
+  async loadCodexRuntimeCapabilities() {
+    if (isTauri()) return invoke<CodexRuntimeCapabilities>("load_codex_runtime_capabilities");
+    return {
+      reasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"].map((id) => ({ id, label: id })),
+      speedTiers: [{ id: "priority", label: "快速（Fast）", description: "1.5 倍速度，额度消耗更高" }],
+      modelCount: 4,
+      observedAt: Math.floor(Date.now() / 1000),
+    };
+  },
+  async previewCodexGlobalSettings(request) {
+    if (isTauri()) return invoke<CodexGlobalSettingsPreview>("preview_codex_global_settings", { request });
+    const demoThreadIds = request.scope === "currentView"
+      ? request.threadIds
+      : Array.from({ length: request.scope === "allIncludingArchived" ? 12 : 10 }, (_, index) => `demo-thread-${index + 1}`);
+    const primaryModelCount = Math.max(demoThreadIds.length - (demoThreadIds.length >= 2 ? 2 : 0), 0);
+    demoGlobalSettingsPreview = {
+      previewId: `demo-settings-${Date.now()}`,
+      request,
+      discoveredCount: demoThreadIds.length,
+      changeableCount: demoThreadIds.length,
+      unchangedCount: 0,
+      partialCount: 0,
+      skippedCount: 0,
+      models: [
+        ...(primaryModelCount > 0 ? [{ model: "GPT-5.6", count: primaryModelCount }] : []),
+        ...(demoThreadIds.length - primaryModelCount > 0
+          ? [{ model: "Codex-Spark", count: demoThreadIds.length - primaryModelCount }]
+          : []),
+      ],
+      warnings: ["正在运行的回合不会改变；新设置只用于后续回合。"],
+      expiresAt: Math.floor(Date.now() / 1000) + 300,
+    };
+    return demoGlobalSettingsPreview;
+  },
+  async applyCodexGlobalSettings(previewId) {
+    if (isTauri()) return invoke<CodexGlobalSettingsReceipt>("apply_codex_global_settings", { previewId });
+    if (!demoGlobalSettingsPreview || demoGlobalSettingsPreview.previewId !== previewId) throw new Error("配置预览已失效");
+    const threadIds = demoGlobalSettingsPreview.request.scope === "currentView"
+      ? demoGlobalSettingsPreview.request.threadIds
+      : Array.from({ length: demoGlobalSettingsPreview.changeableCount }, (_, index) => `demo-thread-${index + 1}`);
+    const previous = threadIds.map((threadId) => ({
+      threadId, model: "gpt-5.6-sol", effort: "medium", serviceTier: null,
+      effortChanged: demoGlobalSettingsPreview?.request.reasoningSelection !== "keep",
+      serviceTierChanged: demoGlobalSettingsPreview?.request.speedSelection !== "keep",
+    }));
+    const request = demoGlobalSettingsPreview.request;
+    demoGlobalSettingsPreview = undefined;
+    return {
+      changedCount: previous.length, unchangedCount: 0, failedCount: 0, failures: [], previous,
+      applied: previous.map((item) => ({
+        threadId: item.threadId,
+        effortSet: request.reasoningSelection !== "keep",
+        effort: request.reasoningSelection === "maximum" ? "max" : request.reasoningSelection === "minimum" ? "low" : request.reasoningSelection === "default" ? "medium" : request.reasoningSelection === "keep" ? null : request.reasoningSelection,
+        serviceTierSet: request.speedSelection !== "keep",
+        serviceTier: request.speedSelection === "standard" || request.speedSelection === "keep" ? null : request.speedSelection,
+      })),
+      appliedAt: Math.floor(Date.now() / 1000),
+    };
+  },
+  async restoreCodexGlobalSettings(previous) {
+    if (isTauri()) return invoke<CodexGlobalSettingsRestoreReceipt>("restore_codex_global_settings", { previous });
+    return {
+      restoredCount: previous.length, failedCount: 0, failures: [], remaining: [],
+      restored: previous.map((item) => ({
+        threadId: item.threadId,
+        effortSet: item.effortChanged,
+        effort: item.effort,
+        serviceTierSet: item.serviceTierChanged,
+        serviceTier: item.serviceTier,
+      })),
+      restoredAt: Math.floor(Date.now() / 1000),
+    };
   },
   async initializeLocalTaskLibrary() {
     if (!isTauri()) return;

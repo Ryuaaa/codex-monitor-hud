@@ -1,5 +1,6 @@
 mod codex_history;
 mod codex_navigation;
+mod codex_settings;
 mod codex_turn;
 
 use serde::{Deserialize, Serialize};
@@ -2455,8 +2456,9 @@ fn start_codex_turn(
     manager: tauri::State<'_, codex_turn::CodexTurnManager>,
     thread_id: String,
     input: String,
+    runtime: Option<codex_turn::CodexTurnRuntimeOverride>,
 ) -> Result<codex_turn::CodexTurnSnapshot, codex_history::CodexHistoryError> {
-    manager.start(thread_id, input)
+    manager.start(thread_id, input, runtime)
 }
 
 #[tauri::command]
@@ -2483,6 +2485,55 @@ fn interrupt_codex_turn(
     session_id: String,
 ) -> Result<codex_turn::CodexTurnSnapshot, codex_history::CodexHistoryError> {
     manager.interrupt(&session_id)
+}
+
+#[tauri::command]
+async fn load_codex_runtime_capabilities(
+) -> Result<codex_settings::CodexRuntimeCapabilities, codex_history::CodexHistoryError> {
+    tauri::async_runtime::spawn_blocking(codex_settings::load_capabilities)
+        .await
+        .map_err(|_| {
+            codex_history::CodexHistoryError::new("worker_failed", "Codex 运行配置能力读取异常结束")
+        })?
+}
+
+#[tauri::command]
+async fn preview_codex_global_settings(
+    manager: tauri::State<'_, codex_settings::CodexSettingsManager>,
+    request: codex_settings::CodexGlobalSettingsRequest,
+) -> Result<codex_settings::CodexGlobalSettingsPreview, codex_history::CodexHistoryError> {
+    let manager = manager.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || manager.preview(request))
+        .await
+        .map_err(|_| {
+            codex_history::CodexHistoryError::new("worker_failed", "全局运行配置预览异常结束")
+        })?
+}
+
+#[tauri::command]
+async fn apply_codex_global_settings(
+    manager: tauri::State<'_, codex_settings::CodexSettingsManager>,
+    preview_id: String,
+) -> Result<codex_settings::CodexGlobalSettingsReceipt, codex_history::CodexHistoryError> {
+    let manager = manager.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || manager.apply(preview_id))
+        .await
+        .map_err(|_| {
+            codex_history::CodexHistoryError::new("worker_failed", "全局运行配置写入异常结束")
+        })?
+}
+
+#[tauri::command]
+async fn restore_codex_global_settings(
+    manager: tauri::State<'_, codex_settings::CodexSettingsManager>,
+    previous: Vec<codex_settings::CodexThreadRuntimeSetting>,
+) -> Result<codex_settings::CodexGlobalSettingsRestoreReceipt, codex_history::CodexHistoryError> {
+    let manager = manager.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || manager.restore(previous))
+        .await
+        .map_err(|_| {
+            codex_history::CodexHistoryError::new("worker_failed", "旧运行配置恢复异常结束")
+        })?
 }
 
 #[tauri::command]
@@ -2704,6 +2755,7 @@ pub fn read_only_diagnostic() -> i32 {
 pub fn run() {
     tauri::Builder::default()
         .manage(codex_turn::CodexTurnManager::default())
+        .manage(codex_settings::CodexSettingsManager::default())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             load_task_metadata,
@@ -2717,6 +2769,10 @@ pub fn run() {
             get_codex_turn_status,
             respond_codex_turn_approval,
             interrupt_codex_turn,
+            load_codex_runtime_capabilities,
+            preview_codex_global_settings,
+            apply_codex_global_settings,
+            restore_codex_global_settings,
             initialize_local_task_library,
             load_saved_task_filters,
             save_task_filter,

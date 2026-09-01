@@ -318,3 +318,91 @@ export interface CodexTurnSnapshot {
   errorMessage?: string;
   pendingApproval?: CodexApprovalPrompt;
 }
+
+export type CodexSettingsScope = "currentView" | "allActive" | "allIncludingArchived";
+
+export interface CodexRuntimeOption {
+  id: string;
+  label: string;
+  description?: string;
+}
+
+export interface CodexRuntimeCapabilities {
+  reasoningEfforts: CodexRuntimeOption[];
+  speedTiers: CodexRuntimeOption[];
+  modelCount: number;
+  observedAt: number;
+}
+
+export interface CodexGlobalSettingsRequest {
+  scope: CodexSettingsScope;
+  threadIds: string[];
+  reasoningSelection: string;
+  speedSelection: string;
+}
+
+export interface CodexGlobalSettingsModelCount {
+  model: string;
+  count: number;
+}
+
+export interface CodexGlobalSettingsPreview {
+  previewId: string;
+  request: CodexGlobalSettingsRequest;
+  discoveredCount: number;
+  changeableCount: number;
+  unchangedCount: number;
+  partialCount: number;
+  skippedCount: number;
+  models: CodexGlobalSettingsModelCount[];
+  warnings: string[];
+  expiresAt: number;
+}
+
+export interface CodexThreadRuntimeSetting {
+  threadId: string;
+  model: string;
+  effort: string | null;
+  serviceTier: string | null;
+  effortChanged: boolean;
+  serviceTierChanged: boolean;
+}
+
+export interface CodexThreadRuntimeOverride {
+  threadId: string;
+  effortSet: boolean;
+  effort: string | null;
+  serviceTierSet: boolean;
+  serviceTier: string | null;
+}
+
+export interface CodexTurnRuntimeOverride {
+  effortSet: boolean;
+  effort: string | null;
+  serviceTierSet: boolean;
+  serviceTier: string | null;
+}
+
+export interface CodexGlobalSettingsFailure {
+  threadId: string;
+  message: string;
+}
+
+export interface CodexGlobalSettingsReceipt {
+  changedCount: number;
+  unchangedCount: number;
+  failedCount: number;
+  failures: CodexGlobalSettingsFailure[];
+  previous: CodexThreadRuntimeSetting[];
+  applied: CodexThreadRuntimeOverride[];
+  appliedAt: number;
+}
+
+export interface CodexGlobalSettingsRestoreReceipt {
+  restoredCount: number;
+  failedCount: number;
+  failures: CodexGlobalSettingsFailure[];
+  remaining: CodexThreadRuntimeSetting[];
+  restored: CodexThreadRuntimeOverride[];
+  restoredAt: number;
+}

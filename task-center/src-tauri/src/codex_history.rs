@@ -121,7 +121,7 @@ pub(crate) struct AppServer {
 }
 
 impl AppServer {
-    fn start(executable: &Path) -> Result<Self, CodexHistoryError> {
+    pub(crate) fn start(executable: &Path) -> Result<Self, CodexHistoryError> {
         Self::start_with_response_limit(executable, Some(MAX_RESPONSE_BYTES))
     }
 
@@ -229,7 +229,11 @@ impl AppServer {
             .map_err(|_| CodexHistoryError::new("write_failed", "Codex 官方接口请求发送失败"))
     }
 
-    fn wait_for(&self, ids: &[i64], deadline: Instant) -> Result<Vec<Value>, CodexHistoryError> {
+    pub(crate) fn wait_for(
+        &self,
+        ids: &[i64],
+        deadline: Instant,
+    ) -> Result<Vec<Value>, CodexHistoryError> {
         let receiver = self
             .receiver
             .as_ref()
