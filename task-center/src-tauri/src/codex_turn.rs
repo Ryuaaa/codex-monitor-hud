@@ -129,7 +129,7 @@ impl CodexTurnManager {
         self.start_with_executable_and_runtime(executable.as_path(), thread_id, input, runtime)
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     fn start_with_executable(
         &self,
         executable: &Path,
