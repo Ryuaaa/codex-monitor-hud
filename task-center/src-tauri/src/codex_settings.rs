@@ -330,7 +330,7 @@ fn load_models(
 
 fn parse_model(value: &Value) -> Option<ModelCapability> {
     let model = value.get("model").and_then(Value::as_str)?;
-    if !safe_identifier(model) {
+    if !safe_model_identifier(model) {
         return None;
     }
     let display_name = value
@@ -657,7 +657,7 @@ fn resume_thread(
     let model = result
         .get("model")
         .and_then(Value::as_str)
-        .filter(|value| safe_identifier(value))
+        .filter(|value| safe_model_identifier(value))
         .ok_or_else(|| CodexHistoryError::new("protocol_changed", "Codex 任务设置缺少模型信息"))?;
     let effort = optional_identifier(result.get("reasoningEffort"))?;
     let service_tier = normalized_service_tier(result.get("serviceTier"))?;
@@ -1008,7 +1008,7 @@ fn validate_restore_settings(
     for setting in settings {
         validate_thread_id(&setting.thread_id)?;
         if !seen.insert(setting.thread_id.as_str())
-            || !safe_identifier(&setting.model)
+            || !safe_model_identifier(&setting.model)
             || setting
                 .effort
                 .as_deref()
@@ -1040,6 +1040,14 @@ fn safe_identifier(value: &str) -> bool {
         && value
             .chars()
             .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
+}
+
+fn safe_model_identifier(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 120
+        && value.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.' | '/' | ':')
+        })
 }
 
 fn optional_identifier(value: Option<&Value>) -> Result<Option<String>, CodexHistoryError> {
@@ -1110,6 +1118,14 @@ fn public_failure(thread_id: &str, error: CodexHistoryError) -> CodexGlobalSetti
 mod tests {
     use super::*;
 
+    #[test]
+    #[ignore = "requires an installed and logged-in Codex; reads model capabilities only"]
+    fn live_official_runtime_capabilities_smoke() {
+        let capabilities = load_capabilities().expect("load official Codex runtime capabilities");
+        assert!(capabilities.model_count > 0);
+        assert!(!capabilities.reasoning_efforts.is_empty());
+    }
+
     fn model() -> ModelCapability {
         ModelCapability {
             model: "gpt-5.6-sol".to_string(),
@@ -1137,6 +1153,27 @@ mod tests {
             .any(|option| option.id == "ultra" && option.description.is_some()));
         assert_eq!(capabilities.speed_tiers[0].id, "priority");
         assert_eq!(capabilities.speed_tiers[0].label, "快速（Fast）");
+    }
+
+    #[test]
+    fn official_dotted_model_ids_are_accepted() {
+        let value = json!({
+            "model": "gpt-5.6-sol",
+            "displayName": "GPT-5.6-Sol",
+            "supportedReasoningEfforts": [
+                {"reasoningEffort": "low", "description": "Low"},
+                {"reasoningEffort": "medium", "description": "Medium"},
+                {"reasoningEffort": "high", "description": "High"}
+            ],
+            "defaultReasoningEffort": "medium",
+            "serviceTiers": [
+                {"id": "priority", "name": "Fast", "description": "Fast mode"}
+            ]
+        });
+        let parsed = parse_model(&value).expect("parse current official model id");
+        assert_eq!(parsed.model, "gpt-5.6-sol");
+        assert_eq!(parsed.default_effort, "medium");
+        assert_eq!(parsed.speed_tiers[0].id, "priority");
     }
 
     #[test]

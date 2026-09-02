@@ -4,7 +4,7 @@
 
 ## 下载
 
-[macOS 1.3.0 正式版](https://github.com/Ryuaaa/codex-monitor-hud/releases/tag/task-center-v1.3.0)提供 Apple Silicon 与 Intel 通用的 `.app.zip`。应用已使用 Developer ID 签名并通过 Apple 公证；解压后移到“应用程序”即可使用。1.2.1 及后续版本也可在应用内检查并一键升级。
+[macOS 1.4.0 正式版](https://github.com/Ryuaaa/codex-monitor-hud/releases/tag/task-center-v1.4.0)提供 Apple Silicon 与 Intel 通用的 `.app.zip`。应用已使用 Developer ID 签名并通过 Apple 公证；解压后移到“应用程序”即可使用。1.2.1 及后续版本也可在应用内检查并一键升级。
 
 ## 快速开始
 
