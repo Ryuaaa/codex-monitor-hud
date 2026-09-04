@@ -863,6 +863,7 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
     CodexStatusSnapshot *snapshot = self.codexProvider.snapshot;
     BOOL hasError = snapshot.quotaErrorText.length > 0 || snapshot.accountErrorText.length > 0 || snapshot.usageErrorText.length > 0 || snapshot.recentTasksErrorText.length > 0;
     BOOL quotaLow = (snapshot.fiveHourAvailable && snapshot.fiveHourRemainingPercent <= 15) || (snapshot.weeklyAvailable && snapshot.weeklyRemainingPercent <= 15);
+    if (hasError && self.codexProvider.recommendedRetryInterval > 0) return self.codexProvider.recommendedRetryInterval;
     return hasError || (quotaLow && snapshot.activeTaskCount > 0) ? 60.0 : 300.0;
 }
 
@@ -901,7 +902,7 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
         [self.codexProvider refreshCostHistory]; self.lastCostHistoryFetchAt = now;
     }
     if ((needsAccountData || needsActivity) && now - self.lastCodexAccountFetchAt >= [self codexAccountRefreshInterval] - 0.5) {
-        [self.codexProvider start]; self.lastCodexAccountFetchAt = now;
+        [self.codexProvider refreshQuotaInBackground]; self.lastCodexAccountFetchAt = now;
     }
     [self scheduleCodexRefreshTimer];
 }
@@ -1167,11 +1168,12 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
 
 - (NSString *)visibleCodexStatus:(CodexStatusSnapshot *)s fiveHour:(BOOL)fiveHour weekly:(BOOL)weekly plan:(BOOL)plan usage:(BOOL)usage model:(BOOL)model activity:(BOOL)activity recent:(BOOL)recent {
     BOOL quotaVisible = fiveHour || weekly || model;
-    if (quotaVisible && s.quotaErrorText.length > 0) return @"额度更新失败，显示上次数据";
-    if (plan && s.accountErrorText.length > 0) return @"订阅信息更新失败";
-    if (usage && s.usageErrorText.length > 0) return @"Token用量更新失败";
+    if (quotaVisible && s.quotaErrorText.length > 0) return s.quotaErrorText;
+    if (plan && s.accountErrorText.length > 0) return s.accountErrorText;
+    if (usage && s.usageErrorText.length > 0) return s.usageErrorText;
     if (activity && s.activityErrorText.length > 0) return @"任务活动暂时无法可靠判断";
-    if (recent && s.recentTasksErrorText.length > 0) return @"最近任务更新失败，显示上次数据";
+    if (recent && s.recentTasksErrorText.length > 0) return s.recentTasksErrorText;
+    if (quotaVisible && s.ordinaryUsageAllowed && !s.ordinaryUsageAllowed.boolValue && !HUDTimestampIsStale(s.ordinaryUsageUpdatedAt, 900)) return @"官方：普通包含用量暂不可用";
     if (!s.quotaAvailable && !s.accountAvailable && !s.usageAvailable && !(activity && s.activityAvailable) && !(recent && s.recentTasksAvailable)) return s.statusText ?: @"正在连接本机Codex";
     if (fiveHour && !s.fiveHourAvailable) return @"5小时额度暂未返回";
     if (weekly && !s.weeklyAvailable) return @"每周额度暂未返回";
@@ -1355,6 +1357,7 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
     BOOL anyCostVisible = self.showLocalCost || self.homeShowLocalCost || self.showTokenWindows || self.homeShowTokenWindows;
     BOOL anyStale = (anyQuotaVisible && HUDTimestampIsStale(s.quotaUpdatedAt, 900)) || ((self.showPlan || self.homeShowPlan) && HUDTimestampIsStale(s.accountUpdatedAt, 900)) || ((pageUsesUsageData || homeUsesUsageData) && HUDTimestampIsStale(s.usageUpdatedAt, 900)) || ((self.showTaskActivity || self.homeShowTaskActivity) && HUDTimestampIsStale(s.activityUpdatedAt, 60)) || ((self.showRecentTasks || self.homeShowRecentTasks) && HUDTimestampIsStale(s.recentTasksUpdatedAt, 900)) || (anyCostVisible && HUDTimestampIsStale(s.localCostUpdatedAt, 900));
     BOOL anyError = ((self.showFiveHourQuota || self.showWeeklyQuota || self.showModelQuota || self.homeShowFiveHour || self.homeShowWeekly || self.homeShowModelQuota) && s.quotaErrorText.length > 0) || ((self.showPlan || self.homeShowPlan) && s.accountErrorText.length > 0) || ((pageUsesUsageData || homeUsesUsageData) && s.usageErrorText.length > 0) || ((self.showTaskActivity || self.homeShowTaskActivity) && s.activityErrorText.length > 0) || ((self.showRecentTasks || self.homeShowRecentTasks) && s.recentTasksErrorText.length > 0) || (anyCostVisible && s.localCostErrorText.length > 0);
+    BOOL ordinaryUsageBlocked = anyQuotaVisible && s.ordinaryUsageAllowed && !s.ordinaryUsageAllowed.boolValue && !HUDTimestampIsStale(s.ordinaryUsageUpdatedAt, 900);
     NSString *pageFreshness = [self freshnessText:s fiveHour:self.showFiveHourQuota weekly:self.showWeeklyQuota plan:self.showPlan usage:pageUsesUsageData model:self.showModelQuota activity:self.showTaskActivity recent:self.showRecentTasks];
     if (self.showLocalCost || self.showTokenWindows) {
         NSString *costFreshness = [NSString stringWithFormat:@"本机Token %@", FormatModuleState(s.localCostUpdatedAt, s.localCostErrorText, 900)];
@@ -1362,7 +1365,7 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
     }
     self.hudView.codexFreshnessLabel.stringValue = pageFreshness;
     self.hudView.codexFreshnessLabel.textColor = anyError ? NSColor.systemRedColor : (anyStale ? NSColor.systemOrangeColor : NSColor.tertiaryLabelColor);
-    self.hudView.codexStatusLabel.textColor = (anyError || anyStale) ? NSColor.systemOrangeColor : [self accentColor];
+    self.hudView.codexStatusLabel.textColor = (anyError || anyStale || ordinaryUsageBlocked) ? NSColor.systemOrangeColor : [self accentColor];
     self.hudView.homeCodexStatusLabel.textColor = self.hudView.codexStatusLabel.textColor;
     NSString *homeCodexFreshness = [self freshnessText:s fiveHour:self.homeShowFiveHour weekly:self.homeShowWeekly plan:self.homeShowPlan usage:homeUsesUsageData model:self.homeShowModelQuota activity:self.homeShowTaskActivity recent:self.homeShowRecentTasks];
     if (self.homeShowLocalCost || self.homeShowTokenWindows) {
@@ -1447,6 +1450,7 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
     if (s.rateLimitResetCreditsAvailable) [footer addObject:[NSString stringWithFormat:@"可用恢复次数%ld", (long)s.rateLimitResetCreditsCount]];
     else [footer addObject:@"恢复次数未返回"];
     if (s.rateLimitReachedType.length > 0) [footer addObject:[NSString stringWithFormat:@"官方触顶：%@", s.rateLimitReachedType]];
+    if (s.ordinaryUsageAllowed && !HUDTimestampIsStale(s.ordinaryUsageUpdatedAt, 900)) [footer addObject:s.ordinaryUsageAllowed.boolValue ? @"普通包含用量允许" : @"普通包含用量暂不可用"];
     NSString *footerText = [footer componentsJoinedByString:@" · "];
     [self.hudView.quotaDetailsCard updateRows:rows footer:footerText];
     [self.hudView.homeQuotaDetailsCard updateRows:rows footer:footerText];
@@ -2229,6 +2233,14 @@ static int RunUIDiagnostic(void) {
     NSString *details = [visibleDetails componentsJoinedByString:@" | "];
     NSString *status = [delegate visibleCodexStatus:provider.snapshot fiveHour:NO weekly:YES plan:NO usage:NO model:NO activity:NO recent:NO];
     BOOL hiddenContentPass = [details containsString:@"每周"] && ![details containsString:@"5小时"] && ![details containsString:@"订阅"] && [status isEqualToString:@"Codex数据正常"];
+    provider.snapshot.ordinaryUsageAllowed = @NO; provider.snapshot.ordinaryUsageUpdatedAt = NSDate.date.timeIntervalSince1970;
+    NSString *allowanceVisible = [delegate visibleCodexStatus:provider.snapshot fiveHour:NO weekly:YES plan:NO usage:NO model:NO activity:NO recent:NO];
+    NSString *allowanceHidden = [delegate visibleCodexStatus:provider.snapshot fiveHour:NO weekly:NO plan:NO usage:NO model:NO activity:NO recent:NO];
+    BOOL allowancePass = [allowanceVisible containsString:@"普通包含用量暂不可用"] && ![allowanceHidden containsString:@"普通包含用量"];
+    provider.snapshot.ordinaryUsageUpdatedAt = 1;
+    allowancePass = allowancePass && ![[delegate visibleCodexStatus:provider.snapshot fiveHour:NO weekly:YES plan:NO usage:NO model:NO activity:NO recent:NO] containsString:@"普通包含用量"];
+    provider.snapshot.ordinaryUsageAllowed = nil;
+    allowancePass = allowancePass && ![[delegate visibleCodexStatus:provider.snapshot fiveHour:NO weekly:YES plan:NO usage:NO model:NO activity:NO recent:NO] containsString:@"普通包含用量"];
     delegate.showServiceStatus = NO; delegate.homeShowServiceStatus = NO;
     delegate.serviceStatusProvider = [HUDOpenAIServiceStatusProvider new];
     [delegate startServiceStatusIfNeeded];
@@ -2249,7 +2261,8 @@ static int RunUIDiagnostic(void) {
     printf("timer_tolerance_test=%s\n", timerTolerancePass ? "pass" : "fail");
     printf("timer_tolerance_seconds=%.2f\n", timerTolerance);
     printf("hidden_content_test=%s\n", cardVisibilityPass && hiddenContentPass ? "pass" : "fail");
-    return settingsPass && orderPass && taskCenterEntryPass && homeLayoutPass && longTextLayoutPass && refreshPolicyPass && stateFallbackPass && migrationPresentationPass && scalePass && positionLockPass && hiddenSamplingPass && hiddenServiceStatusPass && timerTolerancePass && cardVisibilityPass && hiddenContentPass ? 0 : 5;
+    printf("official_allowance_visibility_test=%s\n", allowancePass ? "pass" : "fail");
+    return settingsPass && orderPass && taskCenterEntryPass && homeLayoutPass && longTextLayoutPass && refreshPolicyPass && stateFallbackPass && migrationPresentationPass && scalePass && positionLockPass && hiddenSamplingPass && hiddenServiceStatusPass && timerTolerancePass && cardVisibilityPass && hiddenContentPass && allowancePass ? 0 : 5;
 }
 
 static int RunDiagnostic(void) {
@@ -2272,6 +2285,7 @@ static int RunCodexDiagnostic(void) {
     }
     CodexStatusSnapshot *s = provider.snapshot;
     printf("quota_available=%s\n", s.quotaAvailable ? "true" : "false");
+    printf("ordinary_usage_allowed=%s\n", s.ordinaryUsageAllowed ? (s.ordinaryUsageAllowed.boolValue ? "true" : "false") : "unavailable");
     if (s.quotaErrorText.length > 0) printf("quota_error=%s\n", s.quotaErrorText.UTF8String);
     printf("five_hour_available=%s\n", s.fiveHourAvailable ? "true" : "false");
     if (s.fiveHourAvailable) printf("five_hour_remaining=%.0f\n", s.fiveHourRemainingPercent);
@@ -2368,7 +2382,9 @@ static int RunUpdateDiagnostic(void) {
         @"assets": @[@{ @"name": @"CodexMonitorHUD-windows-x64-9.9.9.msi", @"browser_download_url": @"https://github.com/Ryuaaa/codex-monitor-hud/releases/download/windows-v9.9.9/CodexMonitorHUD-windows-x64-9.9.9.msi", @"digest": [@"sha256:" stringByAppendingString:digest] }]
     };
     NSError *channelError = nil;
-    HUDReleaseInfo *selectedMac = HUDLatestMacReleaseInfoFromArray(@[windowsJSON, releaseJSON], &channelError);
+    NSMutableDictionary *taskCenterJSON = [releaseJSON mutableCopy];
+    taskCenterJSON[@"tag_name"] = @"task-center-v9.9.9";
+    HUDReleaseInfo *selectedMac = HUDLatestMacReleaseInfoFromArray(@[taskCenterJSON, windowsJSON, releaseJSON], &channelError);
     NSURL *file = [NSURL fileURLWithPath:[NSTemporaryDirectory() stringByAppendingPathComponent:[NSString stringWithFormat:@"hud-update-test-%@", NSUUID.UUID.UUIDString]]];
     [@"abc" writeToURL:file atomically:YES encoding:NSUTF8StringEncoding error:nil];
     NSString *actualDigest = HUDSHA256ForFile(file);
