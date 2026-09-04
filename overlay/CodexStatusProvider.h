@@ -10,6 +10,9 @@ FOUNDATION_EXPORT NSDictionary<NSString *, id> *CodexScanRecentActivityAtRoot(NS
 @property(nonatomic) BOOL quotaAvailable;
 @property(nonatomic) NSTimeInterval quotaUpdatedAt;
 @property(nonatomic, copy) NSString *quotaErrorText;
+@property(nonatomic, copy) NSDictionary<NSString *, NSString *> *interfaceFailureKinds;
+@property(nonatomic, strong) NSNumber *ordinaryUsageAllowed;
+@property(nonatomic) NSTimeInterval ordinaryUsageUpdatedAt;
 @property(nonatomic) BOOL fiveHourAvailable;
 @property(nonatomic) double fiveHourRemainingPercent;
 @property(nonatomic) NSTimeInterval fiveHourResetAt;
@@ -103,12 +106,14 @@ FOUNDATION_EXPORT NSDictionary<NSString *, id> *CodexScanRecentActivityAtRoot(NS
 
 @interface CodexStatusProvider : NSObject
 @property(nonatomic, readonly) CodexStatusSnapshot *snapshot;
+@property(nonatomic, readonly) NSTimeInterval recommendedRetryInterval;
 @property(nonatomic, copy) void (^updateHandler)(void);
 @property(nonatomic) BOOL costHistoryEnabled;
 @property(nonatomic) BOOL quotaForecastEnabled;
 @property(nonatomic) BOOL accountDataEnabled;
 - (void)start;
 - (void)refreshQuota;
+- (void)refreshQuotaInBackground;
 - (void)refreshActivity;
 - (void)refreshCostHistory;
 - (void)stop;

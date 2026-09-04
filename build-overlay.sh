@@ -21,6 +21,7 @@ sign_identity="${CODE_SIGN_IDENTITY:--}"
   "$source_dir/overlay/HUDView.m" \
   "$source_dir/overlay/UpdateManager.m" \
   "$source_dir/overlay/CodexStatusProvider.m" \
+  "$source_dir/overlay/CodexProtocolCompatibility.m" \
   "$source_dir/overlay/CodexCostHistory.m" \
   "$source_dir/overlay/OpenAIServiceStatus.m" \
   "$source_dir/overlay/NativeSampler.m" \

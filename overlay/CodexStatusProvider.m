@@ -1,9 +1,11 @@
 #import "CodexStatusProvider.h"
 #import "CodexCostHistory.h"
+#import "CodexProtocolCompatibility.h"
 
 static NSTimeInterval const CodexActivityWindow = 120.0;
 static unsigned long long const CodexActivityTailBytes = 1024 * 1024;
 static NSUInteger const CodexActivityMaxCandidateFiles = 64;
+static NSUInteger const CodexProtocolBufferLimit = 4 * 1024 * 1024;
 
 static NSDate *CodexParseTimestamp(id value) {
     if (![value isKindOfClass:NSString.class] || [value length] == 0) return nil;
@@ -89,6 +91,8 @@ static NSString *CodexSessionIDFromFilename(NSString *filename) {
 
 NSDictionary<NSString *, id> *CodexNormalizedThreadMetadata(NSDictionary *thread) {
     if (![thread isKindOfClass:NSDictionary.class]) return @{};
+    // status/notLoaded, thread/closed and environments=null describe loading only.
+    // Do not turn them into task completion/failure or persist environment content.
     NSString *threadID = [thread[@"id"] isKindOfClass:NSString.class] ? [thread[@"id"] lowercaseString] : @"";
     NSString *name = [thread[@"name"] isKindOfClass:NSString.class] ? thread[@"name"] : @"";
     NSNumber *recencyAt = [thread[@"recencyAt"] isKindOfClass:NSNumber.class] ? thread[@"recencyAt"] : nil;
@@ -271,6 +275,14 @@ NSDictionary<NSString *, id> *CodexCalendarUsage(NSArray *buckets, NSDate *now) 
 @property(nonatomic) BOOL receivedUsage;
 @property(nonatomic) BOOL receivedThreads;
 @property(nonatomic) BOOL intentionalStop;
+@property(nonatomic) BOOL backgroundFetch;
+@property(nonatomic) BOOL lightweightQuotaRequest;
+@property(nonatomic) BOOL retriedLegacyQuota;
+@property(nonatomic) BOOL legacyQuotaParameters;
+@property(nonatomic) NSInteger quotaRequestID;
+@property(nonatomic, copy) NSString *executableIdentity;
+@property(nonatomic) NSUInteger consecutiveFetchFailures;
+@property(nonatomic, readwrite) NSTimeInterval recommendedRetryInterval;
 @property(nonatomic) BOOL activityRefreshInProgress;
 @property(nonatomic) BOOL activityRefreshPending;
 @property(nonatomic) BOOL costRefreshInProgress;
@@ -281,6 +293,9 @@ NSDictionary<NSString *, id> *CodexCalendarUsage(NSArray *buckets, NSDate *now) 
 - (void)finishFetch;
 - (void)maybeFinishFetch;
 - (void)consumeThreads:(NSDictionary *)result;
+- (void)startFetchInBackground:(BOOL)background;
+- (void)recordFailure:(NSString *)kind requestID:(NSInteger)requestID;
+- (void)failPendingRequests:(NSString *)kind;
 - (void)updateQuotaForecastWithSample:(NSDictionary<NSString *, id> *)sample;
 @end
 
@@ -293,6 +308,7 @@ NSDictionary<NSString *, id> *CodexCalendarUsage(NSArray *buckets, NSDate *now) 
     _snapshot.statusText = @"正在连接本机Codex";
     _snapshot.activeTaskNames = @[];
     _snapshot.recentTasks = @[];
+    _snapshot.interfaceFailureKinds = @{};
     _snapshot.localDailyTokenTrend = @[];
     _threadMetadataByID = @{};
     _outputBuffer = [NSMutableData data];
@@ -329,19 +345,29 @@ NSDictionary<NSString *, id> *CodexCalendarUsage(NSArray *buckets, NSDate *now) 
 }
 
 - (void)start {
+    [self startFetchInBackground:NO];
+}
+
+- (void)startFetchInBackground:(BOOL)background {
     if (!self.accountDataEnabled) return;
     if (self.task.running) return;
+    self.receivedQuota = self.receivedAccount = self.receivedUsage = self.receivedThreads = NO;
+    self.backgroundFetch = background;
+    self.retriedLegacyQuota = NO;
+    self.quotaRequestID = 2;
     NSString *executable = [self codexExecutable];
     if (!executable) {
-        self.snapshot.statusText = @"未找到Codex本机接口";
-        self.snapshot.quotaErrorText = @"未找到Codex本机接口";
-        self.snapshot.accountErrorText = @"未找到Codex本机接口";
-        self.snapshot.usageErrorText = @"未找到Codex本机接口";
-        self.snapshot.recentTasksErrorText = @"未找到Codex本机接口";
+        [self failPendingRequests:@"missing_executable"];
         self.snapshot.activityErrorText = @"未找到本机会话数据";
+        [self finishFetch];
         [self notifyUpdate];
         return;
     }
+    NSDictionary *attributes = [NSFileManager.defaultManager attributesOfItemAtPath:executable error:nil];
+    NSString *identity = [NSString stringWithFormat:@"%@:%@:%@", executable, attributes[NSFileSize], attributes[NSFileModificationDate]];
+    if (![identity isEqualToString:self.executableIdentity]) self.legacyQuotaParameters = NO;
+    self.executableIdentity = identity;
+    self.lightweightQuotaRequest = background && !self.legacyQuotaParameters;
 
     self.initialized = NO;
     self.receivedQuota = NO;
@@ -359,32 +385,27 @@ NSDictionary<NSString *, id> *CodexCalendarUsage(NSArray *buckets, NSDate *now) 
     self.task.standardOutput = self.outputPipe;
     self.task.standardError = [NSFileHandle fileHandleWithNullDevice];
     __weak typeof(self) weakSelf = self;
+    NSTask *fetchTask = self.task;
     self.outputPipe.fileHandleForReading.readabilityHandler = ^(NSFileHandle *handle) {
         NSData *data = handle.availableData;
         if (data.length == 0) return;
-        dispatch_async(dispatch_get_main_queue(), ^{ [weakSelf consumeData:data]; });
+        dispatch_async(dispatch_get_main_queue(), ^{ if (weakSelf.task == fetchTask) [weakSelf consumeData:data]; });
     };
     self.task.terminationHandler = ^(NSTask *task) {
         dispatch_async(dispatch_get_main_queue(), ^{
             if (weakSelf.task != task) return;
             weakSelf.initialized = NO;
             if (!weakSelf.intentionalStop) {
-                weakSelf.snapshot.statusText = @"Codex接口读取失败，稍后重试";
-                if (!weakSelf.receivedQuota) weakSelf.snapshot.quotaErrorText = @"更新失败，显示上次数据";
-                if (!weakSelf.receivedAccount) weakSelf.snapshot.accountErrorText = @"更新失败，显示上次数据";
-                if (!weakSelf.receivedUsage) weakSelf.snapshot.usageErrorText = @"更新失败，显示上次数据";
-                if (!weakSelf.receivedThreads) weakSelf.snapshot.recentTasksErrorText = @"更新失败，显示上次数据";
+                [weakSelf failPendingRequests:@"network"];
+                [weakSelf finishFetch];
                 [weakSelf notifyUpdate];
             }
         });
     };
     NSError *error = nil;
     if (![self.task launchAndReturnError:&error]) {
-        self.snapshot.statusText = @"无法启动Codex本机接口";
-        self.snapshot.quotaErrorText = @"无法启动本机接口";
-        self.snapshot.accountErrorText = @"无法启动本机接口";
-        self.snapshot.usageErrorText = @"无法启动本机接口";
-        self.snapshot.recentTasksErrorText = @"无法启动本机接口";
+        [self failPendingRequests:@"launch_failed"];
+        [self finishFetch];
         [self notifyUpdate];
         return;
     }
@@ -395,11 +416,8 @@ NSDictionary<NSString *, id> *CodexCalendarUsage(NSArray *buckets, NSDate *now) 
         @"params": @{ @"clientInfo": @{ @"name": @"codex-monitor-hud", @"title": @"Codex Monitor HUD", @"version": clientVersion } }
     }];
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(8 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        if (weakSelf.task.running) {
-            if (!weakSelf.receivedQuota) { weakSelf.snapshot.statusText = @"额度读取超时，稍后重试"; weakSelf.snapshot.quotaErrorText = @"更新超时，显示上次数据"; }
-            if (!weakSelf.receivedAccount) weakSelf.snapshot.accountErrorText = @"更新超时，显示上次数据";
-            if (!weakSelf.receivedUsage) weakSelf.snapshot.usageErrorText = @"更新超时，显示上次数据";
-            if (!weakSelf.receivedThreads) weakSelf.snapshot.recentTasksErrorText = @"更新超时，显示上次数据";
+        if (weakSelf.task == fetchTask && fetchTask.running) {
+            [weakSelf failPendingRequests:@"timeout"];
             [weakSelf notifyUpdate];
             [weakSelf finishFetch];
         }
@@ -407,6 +425,12 @@ NSDictionary<NSString *, id> *CodexCalendarUsage(NSArray *buckets, NSDate *now) 
 }
 
 - (void)consumeData:(NSData *)data {
+    if (data.length > CodexProtocolBufferLimit || self.outputBuffer.length > CodexProtocolBufferLimit - data.length) {
+        [self failPendingRequests:@"protocol"];
+        [self finishFetch];
+        [self notifyUpdate];
+        return;
+    }
     [self.outputBuffer appendData:data];
     while (YES) {
         const uint8_t *bytes = self.outputBuffer.bytes;
@@ -421,16 +445,23 @@ NSDictionary<NSString *, id> *CodexCalendarUsage(NSArray *buckets, NSDate *now) 
         if (line.length == 0) continue;
         NSDictionary *object = [NSJSONSerialization JSONObjectWithData:line options:0 error:nil];
         if ([object isKindOfClass:NSDictionary.class]) [self handleObject:object];
+        else {
+            [self failPendingRequests:@"protocol"]; [self finishFetch]; [self notifyUpdate]; return;
+        }
     }
 }
 
 - (void)handleObject:(NSDictionary *)object {
-    NSInteger requestID = [object[@"id"] integerValue];
+    // Notifications (including thread/closed and unknown item types) are not RPC replies.
+    NSNumber *identifier = CodexProtocolNumber(object[@"id"]);
+    if (!identifier || identifier.doubleValue != identifier.integerValue) return;
+    NSInteger requestID = identifier.integerValue;
     NSDictionary *result = [object[@"result"] isKindOfClass:NSDictionary.class] ? object[@"result"] : nil;
-    if (requestID == 1 && result) {
+    if (requestID == 1 && !self.initialized && result) {
         self.initialized = YES;
         [self sendObject:@{ @"method": @"initialized", @"params": @{} }];
-        [self sendObject:@{ @"id": @2, @"method": @"account/rateLimits/read", @"params": NSNull.null }];
+        self.quotaRequestID = 2;
+        [self sendObject:CodexQuotaReadRequest(@2, self.lightweightQuotaRequest)];
         [self sendObject:@{ @"id": @3, @"method": @"account/read", @"params": @{ @"refreshToken": @NO } }];
         [self sendObject:@{ @"id": @4, @"method": @"account/usage/read", @"params": NSNull.null }];
         [self sendObject:@{ @"id": @5, @"method": @"thread/list", @"params": @{
@@ -441,36 +472,84 @@ NSDictionary<NSString *, id> *CodexCalendarUsage(NSArray *buckets, NSDate *now) 
         } }];
         return;
     }
-    if (requestID == 2 && result) {
+    if (requestID == 1 && !self.initialized) {
+        [self failPendingRequests:object[@"error"] ? CodexProtocolErrorKind(object[@"error"]) : @"protocol"];
+        [self finishFetch]; [self notifyUpdate]; return;
+    }
+    if (requestID == self.quotaRequestID && !self.receivedQuota && result) {
         [self consumeRateLimits:result];
         self.receivedQuota = YES;
         [self maybeFinishFetch];
         return;
     }
-    if (requestID == 2 && object[@"error"]) {
-        self.snapshot.statusText = @"额度接口返回错误，稍后重试";
-        self.snapshot.quotaErrorText = @"更新失败，显示上次数据";
+    if (requestID == self.quotaRequestID && !self.receivedQuota) {
+        if (CodexQuotaNeedsLegacyRetry(object[@"error"], self.lightweightQuotaRequest, self.retriedLegacyQuota)) {
+            self.retriedLegacyQuota = YES;
+            self.legacyQuotaParameters = YES;
+            self.quotaRequestID = 102;
+            [self sendObject:CodexQuotaReadRequest(@102, NO)];
+            return;
+        }
+        [self recordFailure:object[@"error"] ? CodexProtocolErrorKind(object[@"error"]) : @"protocol" requestID:2];
         self.receivedQuota = YES;
         [self notifyUpdate];
         [self maybeFinishFetch];
         return;
     }
-    if (requestID == 3) {
-        if (result) [self consumeAccount:result]; else self.snapshot.accountErrorText = @"更新失败，显示上次数据";
+    if (requestID == 3 && !self.receivedAccount) {
+        if (result) [self consumeAccount:result]; else [self recordFailure:object[@"error"] ? CodexProtocolErrorKind(object[@"error"]) : @"protocol" requestID:3];
         self.receivedAccount = YES; [self notifyUpdate]; [self maybeFinishFetch]; return;
     }
-    if (requestID == 4) {
-        if (result) [self consumeUsage:result]; else self.snapshot.usageErrorText = @"更新失败，显示上次数据";
+    if (requestID == 4 && !self.receivedUsage) {
+        if (result) [self consumeUsage:result]; else [self recordFailure:object[@"error"] ? CodexProtocolErrorKind(object[@"error"]) : @"protocol" requestID:4];
         self.receivedUsage = YES; [self notifyUpdate]; [self maybeFinishFetch]; return;
     }
-    if (requestID == 5) {
-        if (result) [self consumeThreads:result]; else self.snapshot.recentTasksErrorText = @"更新失败，显示上次数据";
+    if (requestID == 5 && !self.receivedThreads) {
+        if (result) [self consumeThreads:result]; else [self recordFailure:object[@"error"] ? CodexProtocolErrorKind(object[@"error"]) : @"protocol" requestID:5];
         self.receivedThreads = YES; [self refreshActivity]; [self maybeFinishFetch]; return;
     }
 }
 
+- (void)clearFailureForRequestID:(NSInteger)requestID {
+    NSMutableDictionary *kinds = [self.snapshot.interfaceFailureKinds mutableCopy] ?: [NSMutableDictionary dictionary];
+    [kinds removeObjectForKey:[@(requestID) stringValue]];
+    self.snapshot.interfaceFailureKinds = kinds;
+}
+
+- (void)recordFailure:(NSString *)kind requestID:(NSInteger)requestID {
+    CodexStatusSnapshot *s = self.snapshot;
+    NSMutableDictionary *kinds = [s.interfaceFailureKinds mutableCopy] ?: [NSMutableDictionary dictionary];
+    kinds[[@(requestID) stringValue]] = kind;
+    s.interfaceFailureKinds = kinds;
+    if (requestID == 2) {
+        NSTimeInterval now = NSDate.date.timeIntervalSince1970;
+        if (s.fiveHourAvailable) { s.fiveHourAvailable = s.fiveHourResetAt > now; s.fiveHourDataState = s.fiveHourAvailable ? @"previous" : @"expired"; }
+        if (s.weeklyAvailable) { s.weeklyAvailable = s.weeklyResetAt > now; s.weeklyDataState = s.weeklyAvailable ? @"previous" : @"expired"; }
+        s.quotaAvailable = s.fiveHourAvailable || s.weeklyAvailable || (s.modelQuotaAvailable && s.modelQuotaResetAt > now);
+        s.ordinaryUsageAllowed = nil;
+        s.quotaErrorText = CodexProtocolFailureText(kind, s.quotaUpdatedAt > 0);
+        s.statusText = s.quotaErrorText;
+    } else if (requestID == 3) s.accountErrorText = CodexProtocolFailureText(kind, s.accountAvailable);
+    else if (requestID == 4) s.usageErrorText = CodexProtocolFailureText(kind, s.usageAvailable);
+    else if (requestID == 5) s.recentTasksErrorText = CodexProtocolFailureText(kind, s.recentTasksAvailable);
+}
+
+- (void)failPendingRequests:(NSString *)kind {
+    if (!self.receivedQuota) [self recordFailure:kind requestID:2];
+    if (!self.receivedAccount) [self recordFailure:kind requestID:3];
+    if (!self.receivedUsage) [self recordFailure:kind requestID:4];
+    if (!self.receivedThreads) [self recordFailure:kind requestID:5];
+}
+
 - (void)consumeThreads:(NSDictionary *)result {
-    NSArray *threads = [result[@"data"] isKindOfClass:NSArray.class] ? result[@"data"] : ([result[@"threads"] isKindOfClass:NSArray.class] ? result[@"threads"] : @[]);
+    NSArray *threads = [result[@"data"] isKindOfClass:NSArray.class] ? result[@"data"] : ([result[@"threads"] isKindOfClass:NSArray.class] ? result[@"threads"] : nil);
+    if (!threads) { [self recordFailure:@"protocol" requestID:5]; return; }
+    for (id thread in threads) {
+        if (![thread isKindOfClass:NSDictionary.class] || ![thread[@"id"] isKindOfClass:NSString.class] || [thread[@"id"] length] == 0) {
+            [self recordFailure:@"protocol" requestID:5]; return;
+        }
+    }
+    [self clearFailureForRequestID:5];
     NSMutableDictionary<NSString *, NSDictionary *> *metadata = [NSMutableDictionary dictionary];
     NSMutableArray<NSDictionary<NSString *, id> *> *recentTasks = [NSMutableArray array];
     NSInteger projectCount = 0;
@@ -503,8 +582,14 @@ NSDictionary<NSString *, id> *CodexCalendarUsage(NSArray *buckets, NSDate *now) 
 }
 
 - (void)consumeRateLimits:(NSDictionary *)result {
+    self.snapshot.ordinaryUsageAllowed = CodexProtocolBoolean(result[@"ordinaryUsageAllowed"]);
+    self.snapshot.ordinaryUsageUpdatedAt = self.snapshot.ordinaryUsageAllowed ? NSDate.date.timeIntervalSince1970 : 0;
+    [self clearFailureForRequestID:2];
     NSDictionary *buckets = [result[@"rateLimitsByLimitId"] isKindOfClass:NSDictionary.class] ? result[@"rateLimitsByLimitId"] : nil;
     NSDictionary *rate = [buckets[@"codex"] isKindOfClass:NSDictionary.class] ? buckets[@"codex"] : result[@"rateLimits"];
+    if (rate && ![rate isKindOfClass:NSDictionary.class] && rate != (id)NSNull.null) {
+        [self recordFailure:@"protocol" requestID:2]; [self notifyUpdate]; return;
+    }
     if (![rate isKindOfClass:NSDictionary.class]) {
         NSTimeInterval now = NSDate.date.timeIntervalSince1970;
         BOOL retained = NO;
@@ -538,7 +623,8 @@ NSDictionary<NSString *, id> *CodexCalendarUsage(NSArray *buckets, NSDate *now) 
     self.snapshot.modelQuotaAvailable = NO;
     self.snapshot.rateLimitReachedType = [rate[@"rateLimitReachedType"] isKindOfClass:NSString.class] ? rate[@"rateLimitReachedType"] : @"";
     NSDictionary *resetCredits = [result[@"rateLimitResetCredits"] isKindOfClass:NSDictionary.class] ? result[@"rateLimitResetCredits"] : nil;
-    NSNumber *resetCount = [resetCredits[@"availableCount"] isKindOfClass:NSNumber.class] ? resetCredits[@"availableCount"] : nil;
+    NSNumber *resetCount = CodexProtocolNumber(resetCredits[@"availableCount"]);
+    if (resetCount.doubleValue < 0 || resetCount.doubleValue != resetCount.integerValue) resetCount = nil;
     self.snapshot.rateLimitResetCreditsAvailable = resetCount != nil;
     self.snapshot.rateLimitResetCreditsCount = MAX(0, resetCount.integerValue);
     NSString *plan = [rate[@"planType"] isKindOfClass:NSString.class] ? rate[@"planType"] : nil;
@@ -547,12 +633,12 @@ NSDictionary<NSString *, id> *CodexCalendarUsage(NSArray *buckets, NSDate *now) 
     for (id value in @[rate[@"primary"] ?: NSNull.null, rate[@"secondary"] ?: NSNull.null]) {
         if (![value isKindOfClass:NSDictionary.class]) continue;
         NSDictionary *window = value;
-        NSNumber *used = window[@"usedPercent"];
-        NSNumber *duration = window[@"windowDurationMins"];
-        if (![used isKindOfClass:NSNumber.class]) continue;
+        NSNumber *used = CodexProtocolNumber(window[@"usedPercent"]);
+        NSNumber *duration = CodexProtocolNumber(window[@"windowDurationMins"]);
+        if (!used || used.doubleValue < 0 || !duration || duration.doubleValue <= 0) continue;
         double remaining = MAX(0, MIN(100, 100.0 - used.doubleValue));
-        NSTimeInterval reset = [window[@"resetsAt"] doubleValue];
-        if ([duration isKindOfClass:NSNumber.class] && duration.doubleValue <= 24.0 * 60.0) {
+        NSTimeInterval reset = [CodexProtocolNumber(window[@"resetsAt"]) doubleValue];
+        if (duration.doubleValue <= 24.0 * 60.0) {
             receivedFive = YES; fiveRemaining = remaining; fiveReset = reset; fiveDuration = duration.doubleValue;
         } else {
             receivedWeekly = YES; weeklyRemaining = remaining; weeklyReset = reset; weeklyDuration = duration.doubleValue;
@@ -567,24 +653,24 @@ NSDictionary<NSString *, id> *CodexCalendarUsage(NSArray *buckets, NSDate *now) 
             slot++;
             if (![value isKindOfClass:NSDictionary.class]) continue;
             NSDictionary *window = value;
-            NSNumber *used = [window[@"usedPercent"] isKindOfClass:NSNumber.class] ? window[@"usedPercent"] : nil;
-            if (!used) continue;
-            NSNumber *duration = [window[@"windowDurationMins"] isKindOfClass:NSNumber.class] ? window[@"windowDurationMins"] : nil;
+            NSNumber *used = CodexProtocolNumber(window[@"usedPercent"]);
+            if (!used || used.doubleValue < 0) continue;
+            NSNumber *duration = CodexProtocolNumber(window[@"windowDurationMins"]);
             double remaining = MAX(0, MIN(100, 100.0 - used.doubleValue));
             [quotaRows addObject:@{
                 @"limitId": key, @"name": name.length > 0 ? name : key,
                 @"slot": @(slot), @"remainingPercent": @(remaining),
                 @"usedPercent": @(MAX(0, MIN(100, used.doubleValue))),
                 @"windowDurationMins": duration ?: @0,
-                @"resetsAt": @([window[@"resetsAt"] doubleValue]),
+                @"resetsAt": @([CodexProtocolNumber(window[@"resetsAt"]) doubleValue]),
                 @"reachedType": [bucket[@"rateLimitReachedType"] isKindOfClass:NSString.class] ? bucket[@"rateLimitReachedType"] : @""
             }];
             if (![key isEqualToString:@"codex"] && !self.snapshot.modelQuotaAvailable) {
                 self.snapshot.modelQuotaAvailable = YES;
                 self.snapshot.modelQuotaName = name.length > 0 ? name : key;
                 self.snapshot.modelQuotaRemainingPercent = remaining;
-                self.snapshot.modelQuotaResetAt = [window[@"resetsAt"] doubleValue];
-                self.snapshot.modelQuotaWindowLabel = duration.doubleValue <= 24.0 * 60.0 ? @"短周期" : @"每周";
+                self.snapshot.modelQuotaResetAt = [CodexProtocolNumber(window[@"resetsAt"]) doubleValue];
+                self.snapshot.modelQuotaWindowLabel = duration.doubleValue <= 0 ? @"周期未知" : (duration.doubleValue <= 24.0 * 60.0 ? @"短周期" : @"每周");
             }
         }
     }
@@ -594,13 +680,13 @@ NSDictionary<NSString *, id> *CodexCalendarUsage(NSArray *buckets, NSDate *now) 
             slot++;
             if (![value isKindOfClass:NSDictionary.class]) continue;
             NSDictionary *window = value;
-            NSNumber *used = [window[@"usedPercent"] isKindOfClass:NSNumber.class] ? window[@"usedPercent"] : nil;
-            if (!used) continue;
+            NSNumber *used = CodexProtocolNumber(window[@"usedPercent"]);
+            if (!used || used.doubleValue < 0) continue;
             [quotaRows addObject:@{ @"limitId": @"codex", @"name": @"Codex", @"slot": @(slot),
                                     @"remainingPercent": @(MAX(0, MIN(100, 100.0 - used.doubleValue))),
                                     @"usedPercent": @(MAX(0, MIN(100, used.doubleValue))),
-                                    @"windowDurationMins": [window[@"windowDurationMins"] isKindOfClass:NSNumber.class] ? window[@"windowDurationMins"] : @0,
-                                    @"resetsAt": @([window[@"resetsAt"] doubleValue]), @"reachedType": self.snapshot.rateLimitReachedType ?: @"" }];
+                                    @"windowDurationMins": CodexProtocolNumber(window[@"windowDurationMins"]) ?: @0,
+                                    @"resetsAt": @([CodexProtocolNumber(window[@"resetsAt"]) doubleValue]), @"reachedType": self.snapshot.rateLimitReachedType ?: @"" }];
         }
     }
     self.snapshot.rateLimitBuckets = quotaRows;
@@ -633,11 +719,11 @@ NSDictionary<NSString *, id> *CodexCalendarUsage(NSArray *buckets, NSDate *now) 
     [self notifyUpdate];
     if (self.quotaForecastEnabled) {
         NSMutableDictionary<NSString *, id> *sample = [NSMutableDictionary dictionary];
-        if (self.snapshot.fiveHourAvailable) {
+        if (receivedFive) {
             sample[@"f"] = @(self.snapshot.fiveHourRemainingPercent);
             sample[@"fr"] = @(self.snapshot.fiveHourResetAt);
         }
-        if (self.snapshot.weeklyAvailable) {
+        if (receivedWeekly) {
             sample[@"w"] = @(self.snapshot.weeklyRemainingPercent);
             sample[@"wr"] = @(self.snapshot.weeklyResetAt);
         }
@@ -646,6 +732,10 @@ NSDictionary<NSString *, id> *CodexCalendarUsage(NSArray *buckets, NSDate *now) 
 }
 
 - (void)consumeAccount:(NSDictionary *)result {
+    if (result[@"account"] && result[@"account"] != NSNull.null && ![result[@"account"] isKindOfClass:NSDictionary.class]) {
+        [self recordFailure:@"protocol" requestID:3]; return;
+    }
+    [self clearFailureForRequestID:3];
     NSDictionary *account = [result[@"account"] isKindOfClass:NSDictionary.class] ? result[@"account"] : nil;
     NSString *plan = [account[@"planType"] isKindOfClass:NSString.class] ? account[@"planType"] : nil;
     if (plan.length > 0) {
@@ -655,6 +745,11 @@ NSDictionary<NSString *, id> *CodexCalendarUsage(NSArray *buckets, NSDate *now) 
 }
 
 - (void)consumeUsage:(NSDictionary *)result {
+    if ((result[@"dailyUsageBuckets"] && result[@"dailyUsageBuckets"] != NSNull.null && ![result[@"dailyUsageBuckets"] isKindOfClass:NSArray.class]) ||
+        (result[@"summary"] && result[@"summary"] != NSNull.null && ![result[@"summary"] isKindOfClass:NSDictionary.class])) {
+        [self recordFailure:@"protocol" requestID:4]; return;
+    }
+    [self clearFailureForRequestID:4];
     NSArray *buckets = [result[@"dailyUsageBuckets"] isKindOfClass:NSArray.class] ? result[@"dailyUsageBuckets"] : nil;
     NSDictionary *summary = [result[@"summary"] isKindOfClass:NSDictionary.class] ? result[@"summary"] : nil;
     if (!buckets && !summary) { self.snapshot.usageErrorText = @"用量当前未返回"; return; }
@@ -671,11 +766,11 @@ NSDictionary<NSString *, id> *CodexCalendarUsage(NSArray *buckets, NSDate *now) 
     self.snapshot.monthForecastTokens = [usage[@"monthForecast"] longLongValue];
     self.snapshot.latestUsageDate = usage[@"latestDate"];
     self.snapshot.latestUsageTokens = [usage[@"latestTokens"] longLongValue];
-    self.snapshot.lifetimeTokens = [summary[@"lifetimeTokens"] longLongValue];
+    self.snapshot.lifetimeTokens = [CodexProtocolNumber(summary[@"lifetimeTokens"]) longLongValue];
     NSNumber *peakDaily = [summary[@"peakDailyTokens"] isKindOfClass:NSNumber.class] ? summary[@"peakDailyTokens"] : nil;
     self.snapshot.peakDailyTokensAvailable = peakDaily != nil;
     self.snapshot.peakDailyTokens = peakDaily.longLongValue;
-    self.snapshot.currentStreakDays = [summary[@"currentStreakDays"] integerValue];
+    self.snapshot.currentStreakDays = [CodexProtocolNumber(summary[@"currentStreakDays"]) integerValue];
     NSNumber *longestTurn = [summary[@"longestRunningTurnSec"] isKindOfClass:NSNumber.class] ? summary[@"longestRunningTurnSec"] : nil;
     self.snapshot.longestRunningTurnAvailable = longestTurn != nil;
     self.snapshot.longestRunningTurnSec = longestTurn.integerValue;
@@ -696,6 +791,10 @@ NSDictionary<NSString *, id> *CodexCalendarUsage(NSArray *buckets, NSDate *now) 
 
 - (void)refreshQuota {
     if (!self.task.running) [self start];
+}
+
+- (void)refreshQuotaInBackground {
+    [self startFetchInBackground:YES];
 }
 
 - (void)refreshCostHistory {
@@ -809,14 +908,28 @@ NSDictionary<NSString *, id> *CodexCalendarUsage(NSArray *buckets, NSDate *now) 
     self.outputPipe.fileHandleForReading.readabilityHandler = nil;
     if (self.task.running) [self.task terminate];
     self.task = nil;
+    self.outputBuffer.length = 0;
+    self.initialized = NO;
 }
 
 - (void)finishFetch {
+    if (self.snapshot.interfaceFailureKinds.count > 0) {
+        self.consecutiveFetchFailures = MIN(4, self.consecutiveFetchFailures + 1);
+        BOOL permanentOnly = YES;
+        for (NSString *kind in self.snapshot.interfaceFailureKinds.allValues) {
+            if (![@[@"unsupported", @"invalid_parameters", @"protocol", @"authentication", @"missing_executable", @"launch_failed"] containsObject:kind]) permanentOnly = NO;
+        }
+        self.recommendedRetryInterval = permanentOnly ? 300.0 : MIN(300.0, 60.0 * pow(2.0, self.consecutiveFetchFailures - 1));
+    } else {
+        self.consecutiveFetchFailures = 0;
+        self.recommendedRetryInterval = 0;
+    }
     self.intentionalStop = YES;
     self.outputPipe.fileHandleForReading.readabilityHandler = nil;
     if (self.task.running) [self.task terminate];
     self.task = nil;
     self.initialized = NO;
+    self.outputBuffer.length = 0;
 }
 
 @end
