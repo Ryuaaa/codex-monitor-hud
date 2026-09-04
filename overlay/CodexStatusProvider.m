@@ -525,7 +525,8 @@ NSDictionary<NSString *, id> *CodexCalendarUsage(NSArray *buckets, NSDate *now) 
         NSTimeInterval now = NSDate.date.timeIntervalSince1970;
         if (s.fiveHourAvailable) { s.fiveHourAvailable = s.fiveHourResetAt > now; s.fiveHourDataState = s.fiveHourAvailable ? @"previous" : @"expired"; }
         if (s.weeklyAvailable) { s.weeklyAvailable = s.weeklyResetAt > now; s.weeklyDataState = s.weeklyAvailable ? @"previous" : @"expired"; }
-        s.quotaAvailable = s.fiveHourAvailable || s.weeklyAvailable || (s.modelQuotaAvailable && s.modelQuotaResetAt > now);
+        s.modelQuotaAvailable = s.modelQuotaAvailable && s.modelQuotaResetAt > now;
+        s.quotaAvailable = s.fiveHourAvailable || s.weeklyAvailable || s.modelQuotaAvailable;
         s.ordinaryUsageAllowed = nil;
         s.quotaErrorText = CodexProtocolFailureText(kind, s.quotaUpdatedAt > 0);
         s.statusText = s.quotaErrorText;

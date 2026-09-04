@@ -115,8 +115,10 @@ int main(int argc, const char **argv) {
         [p recordFailure:@"timeout" requestID:2];
         Check(p.snapshot.weeklyRemainingPercent == 60 && p.snapshot.weeklyAvailable && [p.snapshot.quotaErrorText containsString:@"上次数据"], "transport failure retains balance");
         p.snapshot.weeklyResetAt = 1; p.snapshot.fiveHourResetAt = 1;
+        p.snapshot.modelQuotaAvailable = YES; p.snapshot.modelQuotaResetAt = 1;
         [p recordFailure:@"network" requestID:2];
         Check(!p.snapshot.weeklyAvailable && [p.snapshot.weeklyDataState isEqual:@"expired"], "expired prior cycle not live");
+        Check(!p.snapshot.modelQuotaAvailable, "expired model-specific quota not live");
         [p consumeRateLimits:Quota(@YES)]; [p consumeRateLimits:@{@"rateLimits": @[], @"ordinaryUsageAllowed": @YES}];
         Check([p.snapshot.interfaceFailureKinds[@"2"] isEqual:@"protocol"] && p.snapshot.weeklyRemainingPercent == 60, "malformed quota domain retains value");
         [p consumeRateLimits:@{@"rateLimits": @{@"primary": @{@"usedPercent": NSNull.null, @"resetsAt": NSNull.null, @"windowDurationMins": NSNull.null}}}];
