@@ -26,8 +26,8 @@
 
 ## 发布门禁
 
-- [ ] Developer ID强化运行时签名、Apple公证、票据装订和Gatekeeper通过。
-- [ ] GitHub干净构建通过，标签与发布源代码一致。
+- [x] Developer ID强化运行时签名、Apple公证、票据装订和Gatekeeper通过。最终公证提交：`43b5915c-055d-4817-a10a-bef1c61a2a88`，状态Accepted。
+- [x] GitHub干净构建通过：[构建记录](https://github.com/Ryuaaa/codex-monitor-hud/actions/runs/33842126743)。发布前核对标签与源代码一致。
 - [ ] 发布资产重新下载，核验SHA-256、双架构、版本和公证。
 - [ ] 已发布1.1.0旧包到1.2.0的真实替换与重启验证。
 - [ ] 本机只保留最新已安装HUD，设置/历史保留，旧应用可恢复。
