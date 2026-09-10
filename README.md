@@ -2,9 +2,9 @@
 
 > 同仓库的第二个独立应用“Codex Monitor 任务中心”位于 `task-center/`。HUD 顶栏和应用菜单可按需打开它；任务中心关闭后退出，不会链接到或改变 HUD 的常驻运行层。架构与验收记录见 `docs/task-center/`。
 
-> 已发布的macOS正式版：1.2.0，使用Developer ID签名并通过Apple公证。Windows已发布版本仍为1.1.0未签名预览版；当前发布批次须先完成Windows同步，再发布两端更新。任务中心独立发布。
+> 当前HUD版本：macOS 1.3.0正式版，使用Developer ID签名并通过Apple公证；Windows 1.3.0未签名预览版，同步计数修复、显示语言、币种及订阅日期。任务中心独立发布。
 
-> 当前1.3.0正在双平台联合验收：macOS已完成Developer ID签名、Apple公证及本机替换；Windows已同步计数修复、价格、语言、币种与订阅日期等改动，须通过Windows构建和运行测试后再发布。Windows可信签名未配置，产物将明确标为未签名预览。任务中心不在本轮范围内。[macOS验收记录](docs/hud-1.3.0-validation.md)。候选源码和本机升级不等于GitHub正式发布完成。
+> 1.3.0双平台验收已通过：macOS完成本机替换与签名公证验证；Windows完成58项测试、原生窗口运行、MSI安装/卸载与旧版升级验证。Windows可信签名及个人实体电脑长期验证尚未完成，预览包不进入正式自动安装通道。[macOS验收记录](docs/hud-1.3.0-validation.md) · [Windows验收记录](docs/hud-1.3.0-windows-validation.md)。
 
 ### 1.3.0 统计与显示口径
 
@@ -99,16 +99,16 @@ Token增量缓存和额度预测样本位于：
 ## 系统要求
 
 - macOS正式版：macOS 15或更高版本，支持Apple芯片和Intel处理器；从源码构建需要Xcode Command Line Tools。
-- Windows 1.1.0预览版：Windows 10/11 x64；暂不支持ARM64。
+- Windows 1.3.0预览版：Windows 10/11 x64；暂不支持ARM64。
 - 电脑性能监控可独立工作；Codex额度、订阅和用量需要本机安装并登录ChatGPT桌面版、Codex桌面版或Codex命令行工具。
 
 ## 安装或更新
 
 不想自行构建时，可从GitHub发布页下载：
 
-- [macOS 1.2.0](https://github.com/Ryuaaa/codex-monitor-hud/releases/tag/v1.2.0)：`Codex-Monitor-HUD.app.zip`。解压后把应用移到“应用程序”文件夹并打开；文件已经Developer ID签名并通过Apple公证。
+- [macOS 1.3.0](https://github.com/Ryuaaa/codex-monitor-hud/releases/tag/v1.3.0)：`Codex-Monitor-HUD.app.zip`。解压后把应用移到“应用程序”文件夹并打开；文件已经Developer ID签名并通过Apple公证。
 - [macOS 任务中心 1.3.0](https://github.com/Ryuaaa/codex-monitor-hud/releases/tag/task-center-v1.3.0)：下载通用版 `.app.zip`，可查看、继续并在 Codex 中准确打开官方任务；应用按需运行，关闭后退出。
-- [Windows 1.1.0未签名预览版](https://github.com/Ryuaaa/codex-monitor-hud/releases/tag/windows-preview-v1.1.0)：可下载便携ZIP和MSI安装包；Windows会显示“未知发布者”。该预发布不进入应用内自动更新通道。Windows 1.1.0正式安装包会在可信签名完成后发布。
+- [Windows 1.3.0未签名预览版](https://github.com/Ryuaaa/codex-monitor-hud/releases/tag/windows-preview-v1.3.0)：可下载便携ZIP和MSI安装包；Windows可能显示“未知发布者”或拦截。该预发布不进入正式自动安装通道，需手动下载；不要关闭系统安全功能。
 
 macOS 与 Windows 使用独立更新通道：macOS 读取 `v版本号`，Windows 读取 `windows-v版本号`。两个平台不会把对方的发布当成自己的新版。
 
