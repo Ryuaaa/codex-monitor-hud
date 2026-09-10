@@ -106,6 +106,7 @@ private:
     bool quotaForecastEnabled_ = false;
     bool costHistoryEnabled_ = false;
     bool started_ = false;
+    bool fullQuotaDetailsPending_ = true;
     std::thread thread_;
 };
 

@@ -150,16 +150,11 @@ void TestUnknownModelsAndOccurrenceIdentity() {
 
 void TestNegativeAndInvalidTokenFields() {
     CodexCostEventParserState state;
-    const auto& clipped = RequireEvent(
+    const auto clipped =
         ParseCodexCostJsonlLine(
             R"json({"timestamp":"2026-08-11T00:00:00Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":-8,"cached_input_tokens":-3,"cache_write_input_tokens":-2,"output_tokens":4}}}})json",
-            state),
-        "positive output survives negative companion fields");
-    Expect(clipped.usage.inputTokens == 0 &&
-               clipped.usage.cachedInputTokens == 0 &&
-               clipped.usage.cacheWriteInputTokens == 0 &&
-               clipped.usage.outputTokens == 4,
-           "negative values are clipped without wrapping");
+            state);
+    Expect(!clipped.event, "negative companion fields invalidate usage");
 
     const auto allNegative = ParseCodexCostJsonlLine(
         R"json({"timestamp":"2026-08-11T00:00:01Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":-1,"output_tokens":-1}}}})json",
@@ -235,6 +230,23 @@ void TestMalformedAndTimestampValidation() {
 }  // namespace
 
 int main() {
+    CodexCostEventParserState child;
+    const auto meta = ParseCodexCostJsonlLine(
+        R"({"type":"session_meta","payload":{"source":{"subagent":{"parent_thread_id":"synthetic"}}}})", child);
+    Expect(meta.disposition == CodexCostLineDisposition::kStateUpdated && child.inheritedBaselinePending,
+           "child metadata records only inherited baseline flag");
+    const auto inherited = ParseCodexCostJsonlLine(
+        R"({"timestamp":"2026-09-11T00:00:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1000000000,"output_tokens":0}}}})", child);
+    Expect(!inherited.event && child.hasRawTotalsWatermark, "inherited billion tokens are not charged");
+    const auto delta = ParseCodexCostJsonlLine(
+        R"({"timestamp":"2026-09-11T00:00:01Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1000000200,"output_tokens":0}}}})", child);
+    Expect(delta.event && delta.event->usage.inputTokens == 200, "child counts only new delta");
+    CodexCostEventParserState zero;
+    zero.inheritedBaselinePending = true;
+    const auto baseline = ParseCodexCostJsonlLine(
+        R"({"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":0,"output_tokens":0}}}})", zero);
+    Expect(!baseline.event && zero.hasRawTotalsWatermark && !zero.inheritedBaselinePending,
+           "explicit zero establishes baseline without losing first new event");
     TestTurnContextAndLastUsage();
     TestExplicitModelSeedsIncrementalState();
     TestCumulativeWatermarkAndReset();

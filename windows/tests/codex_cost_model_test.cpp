@@ -48,7 +48,9 @@ void TestGpt56PricesAndCacheWrite() {
 
     const CodexCostEstimate sol =
         RequireEstimate("gpt-5.6-sol", usage, "gpt-5.6-sol available");
-    ExpectNear(sol.estimatedUsd, 1.145, "gpt-5.6-sol cache-write price");
+    ExpectNear(sol.estimatedUsd, 0.876, "gpt-5.6-sol Standard reference price");
+    ExpectNear(RequireEstimate("gpt-6-astra", usage, "Astra priced").estimatedUsd,
+               2.19, "Astra Standard reference price");
 
     const CodexCostEstimate terra =
         RequireEstimate("gpt-5.6-terra", usage, "gpt-5.6-terra available");
@@ -113,7 +115,7 @@ void TestUnknownAndInvalidCounts() {
 
     const CodexCostEstimate clipped = RequireEstimate(
         "gpt-5.6-sol", {100, 90, 90, 0}, "cache counts are clipped");
-    ExpectNear(clipped.estimatedUsd, 0.0001075,
+    ExpectNear(clipped.estimatedUsd, 0.000086,
                "cached and write input cannot exceed total input");
 }
 

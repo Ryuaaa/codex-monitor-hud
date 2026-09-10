@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.21)
 
-project(CodexMonitorHUDWindows VERSION 1.1.0 LANGUAGES CXX)
+project(CodexMonitorHUDWindows VERSION 1.3.0 LANGUAGES CXX)
 
 include(CTest)
 
@@ -52,6 +52,15 @@ function(configure_codex_monitor_target target)
 endfunction()
 
 if(BUILD_TESTING)
+    add_executable(CodexMonitorDisplayPreferencesTests
+        src/module_state.cpp tests/display_preferences_test.cpp)
+    configure_codex_monitor_target(CodexMonitorDisplayPreferencesTests)
+    foreach(lang zh-Hans en ja ko)
+        add_test(NAME windows_display_${lang} COMMAND CodexMonitorDisplayPreferencesTests ${lang})
+    endforeach()
+    if(WIN32)
+        add_test(NAME windows_display_zh-Hant COMMAND CodexMonitorDisplayPreferencesTests zh-Hant)
+    endif()
     add_executable(CodexMonitorPerformanceDiagnosisTests
         src/performance_diagnosis.cpp
         tests/performance_diagnosis_test.cpp
@@ -744,6 +753,7 @@ if(WIN32)
     endif()
 
     add_executable(CodexMonitorHUD WIN32
+        src/exchange_rates_win32.cpp
         resources/CodexMonitorHUD.rc
         src/codex/codex_activity_scan.cpp
         src/codex/codex_activity_worker.cpp
@@ -802,6 +812,7 @@ if(WIN32)
         src/windows_sampler.cpp
     )
     configure_codex_monitor_target(CodexMonitorHUD)
+    target_compile_definitions(CodexMonitorHUD PRIVATE CODEX_MONITOR_DISPLAY_EXCHANGE_RATES=1)
     target_compile_definitions(CodexMonitorHUD PRIVATE
         UNICODE
         _UNICODE

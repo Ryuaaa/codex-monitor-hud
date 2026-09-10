@@ -45,7 +45,8 @@ public:
 
     AppServerRefreshReport Refresh(const std::filesystem::path& executable,
                                    std::string_view clientVersion,
-                                   const std::function<bool()>& isCancelled = {});
+                                   const std::function<bool()>& isCancelled = {},
+                                   bool excludeResetCreditDetails = false);
 
     [[nodiscard]] const CodexDataState& data() const noexcept { return data_; }
     // Thread-confined input for future local-only scanners. It is intentionally

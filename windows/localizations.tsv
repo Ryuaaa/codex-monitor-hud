@@ -1,0 +1,296 @@
+# source<TAB>English<TAB>Japanese<TAB>Korean
+费用为API估算，非账单；汇率日期：	API estimate, not a bill; FX date: 	API推定・請求額ではありません。為替: 	API 추정액이며 청구액 아님; 환율 날짜:
+System diagnosis & Codex / ChatGPT impact	系统诊断与Codex影响	System diagnosis & Codex / ChatGPT impact	システム診断・Codexの影響	시스템 진단 및 Codex 영향
+Codex / ChatGPT process tree	Codex / ChatGPT进程树	Codex / ChatGPT process tree	Codex / ChatGPTプロセスツリー	Codex / ChatGPT 프로세스 트리
+System CPU & physical memory	系统CPU与物理内存	System CPU & physical memory	システムCPUと物理メモリ	시스템 CPU 및 물리 메모리
+10-minute system CPU trend	系统CPU十分钟趋势	10-minute system CPU trend	CPUの10分間の傾向	시스템 CPU 10분 추세
+Network & disk live throughput	网络与磁盘速度	Network & disk live throughput	ネットワーク・ディスク速度	네트워크 및 디스크 속도
+Commit & page file	提交内存与分页文件	Commit & page file	コミットとページファイル	커밋 및 페이지 파일
+Top processes by CPU & memory	CPU与内存高占用进程	Top processes by CPU & memory	CPU・メモリ上位プロセス	CPU 및 메모리 상위 프로세스
+Codex 5-hour quota	Codex五小时额度	Codex 5-hour quota	Codex 5時間使用量	Codex 5시간 한도
+Codex weekly quota	Codex每周额度	Codex weekly quota	Codex週間使用量	Codex 주간 한도
+Codex quota trend forecast	Codex额度趋势预测	Codex quota trend forecast	Codex使用量予測	Codex 한도 추세 예측
+Codex subscription type	Codex订阅套餐	Codex subscription type	Codex契約プラン	Codex 구독 요금제
+Codex account Token usage	Codex账户Token用量	Codex account Token usage	CodexアカウントToken使用量	Codex 계정 Token 사용량
+Codex Token usage & API-equivalent cost (Beta)	Codex Token与API估算	Codex Token usage & API estimate	Codex Token・API推定	Codex Token 및 API 추정
+Codex current task activity (local estimate)	Codex当前任务活动（本机推测）	Codex current task activity (local estimate)	Codexタスク活動（ローカル推定）	Codex 현재 작업 활동 (로컬 추정)
+Codex recent tasks (history)	Codex最近任务（历史）	Codex recent tasks (history)	Codex最近のタスク（履歴）	Codex 최근 작업 (기록)
+OpenAI official service status	OpenAI官方服务状态	OpenAI official service status	OpenAI公式稼働状況	OpenAI 공식 서비스 상태
+Home	主页	Home	ホーム	홈
+Computer	电脑	Computer	コンピューター	컴퓨터
+Settings	设置	Settings	設定	설정
+Minimize	最小化	Minimize	最小化	최소화
+Close	关闭	Close	閉じる	닫기
+Up	上移	Up	上へ	위로
+Down	下移	Down	下へ	아래로
+Pin on top	置顶	Pin on top	最前面	항상 위에
+Unpin	取消置顶	Unpin	最前面を解除	위 고정 해제
+Lock	锁定	Lock	固定	잠금
+Unlock	解锁	Unlock	固定解除	잠금 해제
+Off	关闭	Off	無効	꺼짐
+Low	低	Low	低	낮음
+Medium	中	Medium	中	중간
+High	高	High	高	높음
+Unknown	未知	Unknown	不明	알 수 없음
+None	无	None	なし	없음
+Memory	内存	Memory	メモリ	메모리
+CPU + memory	CPU与内存	CPU + memory	CPUとメモリ	CPU 및 메모리
+Possible	可能	Possible	可能性あり	가능성 있음
+Not detected	未检测到	Not detected	未検出	감지 안 됨
+Data unavailable	数据不可用	Data unavailable	データなし	데이터 없음
+Comfortable	充裕	Comfortable	余裕あり	여유 있음
+Elevated	偏高	Elevated	やや高い	다소 높음
+waiting for next sample	等待下一次采样	waiting for next sample	次の計測待ち	다음 측정 대기
+unavailable	不可用	unavailable	利用不可	사용 불가
+unknown	未知	unknown	不明	알 수 없음
+(partial)	（部分）	(partial)	（一部）	(일부)
+partial	部分	partial	一部	일부
+CODEX / CHATGPT PROCESS TREE	CODEX / CHATGPT 进程树	CODEX / CHATGPT PROCESS TREE	CODEX / CHATGPT プロセスツリー	CODEX / CHATGPT 프로세스 트리
+Process list unavailable	进程列表不可用	Process list unavailable	プロセス一覧なし	프로세스 목록 없음
+CPU share: unavailable	CPU占比：不可用	CPU share: unavailable	CPU比率: 利用不可	CPU 비율: 사용 불가
+Working set: unavailable	内存工作集：不可用	Working set: unavailable	ワーキングセット: 利用不可	작업 집합: 사용 불가
+CPU share: 0.0%	CPU占比：0.0%	CPU share: 0.0%	CPU比率: 0.0%	CPU 비율: 0.0%
+Working set: 0.0 MB	内存工作集：0.0 MB	Working set: 0.0 MB	ワーキングセット: 0.0 MB	작업 집합: 0.0 MB
+Roots:	根进程：	Roots:	ルート:	루트:
+Tree:	进程树：	Tree:	ツリー:	트리:
+process(es)	个进程	process(es)	プロセス	개 프로세스
+CPU whole-machine share:	CPU整机占比：	CPU whole-machine share:	CPU全体比率:	CPU 전체 비율:
+Working set:	内存工作集：	Working set:	ワーキングセット:	작업 집합:
+Largest RAM process:	最大内存进程：	Largest RAM process:	最大メモリプロセス:	최대 메모리 프로세스:
+Process I/O read:	进程读：	Process I/O read:	プロセス読込:	프로세스 읽기:
+write:	写：	write:	書込:	쓰기:
+Process I/O is not disk-only	进程读写不只包含磁盘	Process I/O is not disk-only	プロセスI/Oはディスク以外も含む	프로세스 I/O는 디스크 외 항목도 포함
+SYSTEM CPU & PHYSICAL MEMORY	系统CPU与物理内存	SYSTEM CPU & PHYSICAL MEMORY	システムCPUと物理メモリ	시스템 CPU 및 물리 메모리
+Physical:	物理内存：	Physical:	物理メモリ:	물리 메모리:
+Available:	可用：	Available:	利用可能:	사용 가능:
+Physical memory: unavailable	物理内存：不可用	Physical memory: unavailable	物理メモリ: 利用不可	물리 메모리: 사용 불가
+Processes:	进程：	Processes:	プロセス:	프로세스:
+WS readable:	内存可读取：	WS readable:	メモリ読取可能:	메모리 읽기 가능:
+Process list: unavailable	进程列表：不可用	Process list: unavailable	プロセス一覧: 利用不可	프로세스 목록: 사용 불가
+SYSTEM CPU	系统CPU	SYSTEM CPU	システムCPU	시스템 CPU
+10-MINUTE TREND	10分钟趋势	10-MINUTE TREND	10分間の傾向	10분 추세
+Waiting for the first unbiased sample	等待首个有效采样	Waiting for the first unbiased sample	最初の有効な計測待ち	첫 유효 측정 대기
+Sampled	已采样	Sampled	計測済み	측정됨
+Average	平均	Average	平均	평균
+Peak	峰值	Peak	ピーク	최대
+5 s samples	5秒采样	5 s samples	5秒間隔	5초 간격 측정
+in-memory only	仅保留在内存	in-memory only	メモリ内のみ	메모리에만 보관
+COMMIT & PAGE FILE	提交内存与分页文件	COMMIT & PAGE FILE	コミットとページファイル	커밋 및 페이지 파일
+Committed:	已提交：	Committed:	コミット済み:	커밋됨:
+Commit peak:	提交峰值：	Commit peak:	コミットピーク:	커밋 최대값:
+Commit: unavailable	提交内存：不可用	Commit: unavailable	コミット: 利用不可	커밋: 사용 불가
+Page file:	分页文件：	Page file:	ページファイル:	페이지 파일:
+Page-file peak:	分页峰值：	Page-file peak:	ページファイルピーク:	페이지 파일 최대값:
+Page file: unavailable	分页文件：不可用	Page file: unavailable	ページファイル: 利用不可	페이지 파일: 사용 불가
+TOP PROCESSES	高占用进程	TOP PROCESSES	高負荷プロセス	상위 프로세스
+CPU / MEMORY	CPU / 内存	CPU / MEMORY	CPU / メモリ	CPU / 메모리
+CPU (20 s):	CPU（20秒）：	CPU (20 s):	CPU（20秒）:	CPU (20초):
+Waiting for the next slow CPU sample	等待下一次低频CPU采样	Waiting for the next slow CPU sample	次の低頻度CPU計測待ち	다음 저빈도 CPU 측정 대기
+Memory working set:	内存工作集：	Memory working set:	メモリワーキングセット:	메모리 작업 집합:
+Working-set metrics unavailable	内存工作集指标不可用	Working-set metrics unavailable	メモリ計測値なし	메모리 작업 집합 지표 없음
+Thermal pressure: system not provided	温度压力：系统未提供	Thermal pressure: system not provided	熱負荷: システム未提供	열 압력: 시스템에서 제공하지 않음
+SYSTEM + CODEX/CHATGPT	系统 + CODEX/CHATGPT	SYSTEM + CODEX/CHATGPT	システム + CODEX/CHATGPT	시스템 + CODEX/CHATGPT
+Pressure:	压力：	Pressure:	負荷:	압력:
+Bottleneck:	瓶颈：	Bottleneck:	ボトルネック:	병목:
+Impact:	影响：	Impact:	影響:	영향:
+Confidence:	置信度：	Confidence:	信頼度:	신뢰도:
+CODEX 5-HOUR QUOTA	CODEX 5小时额度	CODEX 5-HOUR QUOTA	CODEX 5時間使用量	CODEX 5시간 한도
+CODEX WEEKLY QUOTA	CODEX 每周额度	CODEX WEEKLY QUOTA	CODEX 週間使用量	CODEX 주간 한도
+CODEX QUOTA TREND FORECAST	CODEX 额度趋势预测	CODEX QUOTA TREND FORECAST	CODEX 使用量予測	CODEX 한도 추세 예측
+CODEX SUBSCRIPTION TYPE	CODEX 订阅套餐	CODEX SUBSCRIPTION TYPE	CODEX 契約プラン	CODEX 구독 요금제
+CODEX ACCOUNT TOKEN USAGE	CODEX 账户TOKEN用量	CODEX ACCOUNT TOKEN USAGE	CODEX アカウントTOKEN使用量	CODEX 계정 TOKEN 사용량
+CODEX TOKEN USAGE & COST (BETA)	CODEX TOKEN与API估算	CODEX TOKEN USAGE & API ESTIMATE	CODEX TOKEN・API推定	CODEX TOKEN 및 API 추정
+CODEX CURRENT TASK ACTIVITY (LOCAL ESTIMATE)	CODEX 当前任务活动（本机推测）	CODEX CURRENT TASK ACTIVITY (LOCAL ESTIMATE)	CODEX タスク活動（ローカル推定）	CODEX 현재 작업 활동 (로컬 추정)
+CODEX RECENT TASKS (HISTORY)	CODEX 最近任务（历史）	CODEX RECENT TASKS (HISTORY)	CODEX 最近のタスク（履歴）	CODEX 최근 작업 (기록)
+OPENAI OFFICIAL SERVICE STATUS	OPENAI 官方服务状态	OPENAI OFFICIAL SERVICE STATUS	OPENAI 公式稼働状況	OPENAI 공식 서비스 상태
+Updated:	更新于：	Updated:	更新:	갱신:
+Refreshing; showing last status	正在刷新，显示上次状态	Refreshing; showing last status	更新中・前回の状態	갱신 중; 이전 상태 표시
+Update failed; showing last status	更新失败，显示上次状态	Update failed; showing last status	更新失敗・前回の状態	갱신 실패; 이전 상태 표시
+Refresh cadence: 15 min	刷新间隔：15分钟	Refresh cadence: 15 min	更新間隔: 15分	갱신 간격: 15분
+Status reader unavailable	状态读取组件不可用	Status reader unavailable	状態読取不可	상태 읽기 구성 요소 사용 불가
+Checking the official OpenAI status page	正在检查OpenAI官方服务状态	Checking the official OpenAI status page	OpenAI公式状態を確認中	OpenAI 공식 상태 확인 중
+Official status temporarily unavailable	官方状态暂不可用	Official status temporarily unavailable	公式状態は一時利用不可	공식 상태 일시적으로 사용 불가
+Retry in	重试等待	Retry in	再試行まで	재시도까지
+Refresh paused while this module is not visible	模块隐藏时停止刷新	Refresh paused while this module is not visible	非表示中は更新停止	모듈이 숨겨지면 갱신 중지
+Waiting for the official OpenAI status page	等待OpenAI官方状态	Waiting for the official OpenAI status page	OpenAI公式状態待ち	OpenAI 공식 상태 대기
+Unavailable module	模块不可用	Unavailable module	モジュール利用不可	모듈 사용 불가
+Waiting for official status	等待官方状态	Waiting for official status	公式状態待ち	공식 상태 대기
+Top:	置顶：	Top:	最前面:	위 고정:
+System:	系统：	System:	システム:	시스템:
+paused	暂停	paused	一時停止	일시 중지
+refreshing	刷新中	refreshing	更新中	갱신 중
+waiting	等待中	waiting	待機中	대기 중
+Activity:	活动：	Activity:	活動:	활동:
+Service:	服务：	Service:	サービス:	서비스:
+No active data modules	没有启用的数据模块	No active data modules	有効なデータモジュールなし	활성 데이터 모듈 없음
+Update: preparing	更新：准备中	Update: preparing	更新: 準備中	업데이트: 준비 중
+Update:	更新：	Update:	更新:	업데이트:
+REFRESHING PERFORMANCE DATA	正在刷新性能数据	REFRESHING PERFORMANCE DATA	性能データ更新中	성능 데이터 갱신 중
+Waiting for background sample	等待后台采样	Waiting for background sample	バックグラウンド計測待ち	백그라운드 측정 대기
+No modules are shown on Computer.	电脑页没有显示模块。	No modules are shown on Computer.	コンピューターページにモジュールなし。	컴퓨터 페이지에 표시된 모듈이 없습니다.
+Open Settings and enable one or more modules for its own page.	请在设置中选择需要显示的模块。	Open Settings and enable one or more modules for its own page.	設定で表示するモジュールを選択してください。	설정에서 표시할 모듈을 선택하세요.
+Home - selected performance and Codex modules	主页：选择的性能与Codex模块	Home - selected performance and Codex modules	ホーム: 選択した性能・Codexモジュール	홈: 선택한 성능 및 Codex 모듈
+Codex - read-only data and official service status	Codex：只读数据与官方服务状态	Codex - read-only data and official service status	Codex: 読取専用データ・公式状態	Codex: 읽기 전용 데이터 및 공식 상태
+Computer performance - Windows native metrics	电脑性能：Windows原生指标	Computer performance - Windows native metrics	性能: Windowsネイティブ指標	컴퓨터 성능: Windows 기본 지표
+Starting Windows product shell	正在启动Windows界面	Starting Windows product shell	Windows画面を起動中	Windows 화면 시작 중
+Evaluating sampler demand	正在检查采样需求	Evaluating sampler demand	計測需要を確認中	측정 필요 확인 중
+Starting sampler	正在启动采样	Starting sampler	計測開始中	측정 시작 중
+Columns: module | Home visibility | own-page visibility | Home order	模块 | 主页显示 | 分页显示 | 主页顺序	Columns: module | Home visibility | own-page visibility | Home order	モジュール | ホーム表示 | ページ表示 | 順序	모듈 | 홈 표시 | 페이지 표시 | 홈 순서
+Codex Monitor HUD Settings	Codex Monitor HUD 设置	Codex Monitor HUD Settings	Codex Monitor HUD 設定	Codex Monitor HUD 설정
+当前未返回；状态只表示 app-server 进程范围，不代表桌面版全局	Not returned; status covers this app-server process, not all desktop tasks	未取得・状態はこのapp-serverのみで、デスクトップ全体ではありません	미반환; 상태는 이 app-server 범위이며 데스크톱 전체 작업이 아님
+正在建立基线	Establishing baseline	基準を作成中	기준값 설정 중
+活跃5秒	Active 5s	稼働5秒	활성 5초
+空闲20秒	Idle 20s	待機20秒	유휴 20초
+本机会话推测	Local session estimate	ローカルセッション推定	로컬 세션 추정
+默认关闭	Off by default	初期値は無効	기본 꺼짐
+今天	Today	今日	오늘
+Codex 周额度提醒	Codex weekly quota alert	Codex週間使用量通知	Codex 주간 한도 알림
+%ls已使用约 %d%%，达到你设置的 %d%% 阈值。	%ls used about %d%%, reaching your %d%% threshold.	%lsの使用率は約%d%%で、設定した%d%%に達しました。	%ls 사용량 약 %d%%로 설정한 %d%% 기준에 도달했습니다.
+不可用	Unavailable	利用不可	사용 불가
+网络与磁盘实时速度	Network and disk throughput	ネットワーク・ディスク速度	네트워크 및 디스크 속도
+下载：	Download: 	受信: 	다운로드:
+上传：	Upload: 	送信: 	업로드:
+磁盘读：	Disk read: 	ディスク読込: 	디스크 읽기:
+磁盘写：	Disk write: 	ディスク書込: 	디스크 쓰기:
+当前未取得网络或磁盘计数	Network or disk counters unavailable	ネットワーク・ディスク計測値なし	네트워크 또는 디스크 측정값 없음
+复用现有 5 秒性能采样	Uses existing 5-second sampling	既存の5秒間隔計測を使用	기존 5초 간격 측정 사용
+Codex 读取组件未能启动	Codex reader could not start	Codex読取処理を起動できません	Codex 읽기 구성 요소 시작 실패
+未找到或无法启动 codex.exe	codex.exe missing or unable to start	codex.exeが見つからないか起動できません	codex.exe가 없거나 시작할 수 없음
+Codex 接口初始化失败	Codex API initialization failed	Codex API初期化失敗	Codex API 초기화 실패
+Codex 接口请求发送失败	Codex API request failed to send	Codex API送信失敗	Codex API 요청 전송 실패
+Codex 接口连接失败	Codex API connection failed	Codex API接続失敗	Codex API 연결 실패
+Codex 接口读取超时	Codex API timed out	Codex APIタイムアウト	Codex API 시간 초과
+Codex 读取已暂停	Codex reading paused	Codex読取一時停止	Codex 읽기 일시 중지
+正在连接本机 Codex 只读接口	Connecting to local Codex read-only API	ローカルCodex読取専用APIに接続中	로컬 Codex 읽기 전용 API 연결 중
+Codex 接口当前未返回有效数据	Codex API has no valid data yet	Codex APIの有効データなし	Codex API의 유효 데이터 없음
+当前未返回；不会模拟数值	Not returned; no simulated values	未取得・数値を推測しません	미반환; 값을 임의 생성하지 않음
+正在等待额度数据	Waiting for quota data	使用量データ待機中	한도 데이터 대기 중
+至少需要15分钟历史才能判断趋势	At least 15 minutes of history needed	傾向には15分以上の履歴が必要	추세 판단에 최소 15분 기록 필요
+当前未返回；状态只表示 app-server 进程范围，	Not returned; status covers this app-server process only, 	未取得・状態はこのapp-serverプロセスのみ、	미반환; 상태는 이 app-server 프로세스 범위만 해당,
+不代表桌面版全局	not all desktop tasks	デスクトップ全体ではありません	데스크톱 전체 작업이 아님
+正在检查本机会话活动	Checking local session activity	ローカル活動を確認中	로컬 세션 활동 확인 중
+只识别时间与事件类型，不保存或显示对话内容	Only time and event type; no conversation content stored or shown	時刻と種類のみ・会話本文の保存や表示なし	시간과 이벤트 유형만; 대화 내용 저장 및 표시 안 함
+正在读取本机 Codex Token 历史	Reading local Codex token history	ローカルToken履歴を読込中	로컬 Codex Token 기록 읽는 중
+费用为 API 等价估算，不是订阅账单	API-equivalent estimate, not a subscription bill	API換算の推定額・請求額ではありません	API 환산 추정액이며 구독 청구액이 아님
+更新失败，显示上次数据	Refresh failed; showing previous data	更新失敗・前回の値を表示	새로고침 실패; 이전 데이터 표시
+；本次更新失败	; refresh failed	・今回の更新失敗	; 이번 새로고침 실패
+恢复：	Resets: 	リセット: 	초기화:
+恢复时间：当前未返回	Reset time unavailable	リセット時刻未取得	초기화 시간 미반환
+正在积累历史（至少15分钟）	Collecting history (at least 15 min)	履歴収集中（15分以上）	기록 수집 중 (최소 15분)
+暂时无法计算	Cannot calculate yet	計算できません	아직 계산할 수 없음
+可撑到恢复，预计剩余	Should last until reset; expected remaining	リセットまで持続・推定残量	초기화까지 지속 예상; 예상 잔여
+置信	Confidence	信頼度	신뢰도
+等待下一次额度更新	Waiting for next quota update	次の使用量更新待ち	다음 한도 갱신 대기 중
+历史保存失败；趋势可能无法继续积累	History save failed; trend may not persist	履歴保存失敗・傾向を保持できない可能性	기록 저장 실패; 추세가 유지되지 않을 수 있음
+更新失败，显示上次预测	Refresh failed; showing previous forecast	更新失敗・前回予測を表示	새로고침 실패; 이전 예측 표시
+订阅：	Plan: 	プラン: 	구독:
+当前未返回每日 Token 记录	Daily token records not returned	日別Token記録未取得	일일 Token 기록 미반환
+当前没有可显示的每日 Token 记录	No daily token records to show	表示可能な日別記録なし	표시할 일일 Token 기록 없음
+今日：	Today: 	今日: 	오늘:
+最新	Latest	最新	최신
+近7日：	Last 7 days: 	過去7日: 	최근 7일:
+近30日：	Last 30 days: 	過去30日: 	최근 30일:
+本月：	This month: 	今月: 	이번 달:
+月末约：	Month-end estimate: 	月末推定: 	월말 추정:
+月末约：当前数据不足	Month-end estimate: insufficient data	月末推定: データ不足	월말 추정: 데이터 부족
+（达到上限，非精确）	(limit reached; not exact)	（上限到達・正確値ではありません）	(상한 도달; 정확한 값이 아님)
+费用样本不足	Insufficient pricing samples	料金サンプル不足	가격 표본 부족
+正在建立安装后的统计起点	Establishing installation baseline	導入後の基準を作成中	설치 후 기준값 설정 중
+Codex 当前未返回本机数据目录	Codex local data directory unavailable	Codexローカルデータ場所未取得	Codex 로컬 데이터 폴더 미반환
+本机 Token 历史读取失败	Local token history read failed	ローカルToken履歴読込失敗	로컬 Token 기록 읽기 실패
+安装后暂时没有新增 Token 数据	No new tokens since installation yet	導入後の新規Tokenなし	설치 후 새 Token 데이터 없음
+当前没有可显示的 Token 数据	No token data to show	表示可能なTokenデータなし	표시할 Token 데이터 없음
+费用将在取得模型样本后估算	Cost available after model samples arrive	モデル取得後に費用を推定	모델 표본 확보 후 비용 추정
+安装后近30日	Since install, up to 30 days	導入後・最大30日	설치 후 최대 30일
+近7日	Last 7 days	過去7日	최근 7일
+本月	This month	今月	이번 달
+数据不足	Insufficient data	データ不足	데이터 부족
+本机计价样本覆盖：	Pricing coverage: 	料金計算の網羅率: 	가격 계산 범위:
+主模型：	Main model: 	主なモデル: 	주요 모델:
+本机历史仍在补齐	Local history is still rebuilding	ローカル履歴を補完中	로컬 기록 재구성 중
+压缩历史暂未读取	Compressed history not read	圧縮履歴は未読込	압축 기록은 읽지 않음
+本次读取失败，显示上次历史	Read failed; showing previous history	読込失敗・前回の履歴を表示	읽기 실패; 이전 기록 표시
+历史缓存保存失败；下次启动将重新扫描	Cache save failed; will rescan next launch	キャッシュ保存失敗・次回再走査	캐시 저장 실패; 다음 시작 시 재검색
+数值达到显示上限	Display limit reached	表示上限に到達	표시 상한 도달
+只统计安装后的本机Token；费用按API价格估算	Local tokens since install; cost estimated at API rates	導入後のローカルToken・API料金で推定	설치 후 로컬 Token만; API 가격으로 비용 추정
+状态口径：仅本次 app-server 进程范围	Status scope: this app-server process only	状態の範囲: このapp-serverのみ	상태 범위: 이 app-server 프로세스만
+暂无历史任务	No recent tasks	履歴タスクなし	최근 작업 없음
+未命名任务	Untitled task	無題のタスク	제목 없는 작업
+秒	s	秒	초
+分	m	分	분
+小时	h	時間	시간
+正在检查最近本机会话记录	Checking recent local sessions	最近のローカル記録を確認中	최근 로컬 세션 확인 중
+活跃5秒 · 空闲20秒	Active 5s · idle 20s	稼働5秒・待機20秒	활성 5초 · 유휴 20초
+未找到本机会话记录	No local session records found	ローカル記録なし	로컬 세션 기록 없음
+本机会话目录不安全或不可用，未读取	Local session directory unsafe or unavailable; not read	ローカル場所が安全でないか利用不可・未読込	로컬 세션 폴더가 안전하지 않거나 사용 불가; 읽지 않음
+近期记录已压缩、迁移或暂不可读	Recent records compressed, moved or unreadable	最近の記録は圧縮・移動・読込不可	최근 기록이 압축, 이동되었거나 읽을 수 없음
+当前无法可靠判断活动	Cannot reliably determine activity	活動を確実に判定できません	활동을 신뢰할 수 있게 판단할 수 없음
+本机会话记录暂时不可读	Local session records temporarily unreadable	ローカル記録を一時的に読込不可	로컬 세션 기록을 일시적으로 읽을 수 없음
+检查已暂停	Checks paused	確認一時停止	확인 일시 중지
+个可确认活跃	 confirmed active	件の稼働を確認	개 활성 확인
+个活跃	 active	件稼働	개 활성
+最长	Longest	最長	최장
+暂无可确认的活跃任务	No confirmed active tasks	確認できる稼働タスクなし	확인된 활성 작업 없음
+当前没有活跃任务	No active tasks	稼働タスクなし	활성 작업 없음
+部分近期记录已压缩、迁移或暂不可读	Some recent records compressed, moved or unreadable	一部の記録は圧縮・移動・読込不可	일부 최근 기록이 압축, 이동되었거나 읽을 수 없음
+本机会话推测 · 活跃5秒 · 空闲20秒	Local estimate · active 5s · idle 20s	ローカル推定・稼働5秒・待機20秒	로컬 추정 · 활성 5초 · 유휴 20초
+Codex 页面当前未选择任何模块。	No modules selected on the Codex page.	Codexページのモジュール未選択。	Codex 페이지에서 선택된 모듈이 없습니다.
+请打开设置，启用一个或多个 Codex 模块。	Enable Codex modules in Settings.	設定でCodexモジュールを有効にしてください。	설정에서 Codex 모듈을 활성화하세요.
+发现新版	New version	新バージョン	새 버전
+点击查看更新	Click to view update	クリックして更新を確認	클릭하여 업데이트 확인
+更新已校验，正在安全重启…	Update verified; restarting safely…	更新検証済み・安全に再起動中…	업데이트 검증 완료; 안전하게 재시작 중…
+更新已取消；当前版本继续运行	Update cancelled; current version keeps running	更新取消・現在の版は稼働継続	업데이트 취소; 현재 버전 계속 실행
+此构建未配置正式发布者签名	Trusted publisher not configured in this build	正式発行者の署名未設定	이 빌드에 신뢰할 수 있는 게시자 서명 미설정
+无法创建安全更新目录；未安装	Cannot create safe update directory; not installed	安全な更新先を作成不可・未導入	안전한 업데이트 폴더 생성 실패; 설치 안 함
+更新校验文件失败；未安装	Checksum download failed; not installed	検証ファイル取得失敗・未導入	검증 파일 다운로드 실패; 설치 안 함
+安装包下载失败；未安装	Installer download failed; not installed	インストーラー取得失敗・未導入	설치 파일 다운로드 실패; 설치 안 함
+安全启动检查失败；未安装	Safe launch check failed; not installed	安全起動確認失敗・未導入	안전 시작 검사 실패; 설치 안 함
+更新信息不完整；请重新检查	Update information incomplete; check again	更新情報不足・再確認してください	업데이트 정보 불완전; 다시 확인하세요
+当前系统不支持自动安装	Automatic installation unavailable on this system	この環境では自動導入不可	이 시스템에서 자동 설치 불가
+自动更新失败；当前版本继续运行	Automatic update failed; current version keeps running	自動更新失敗・現在の版は稼働継続	자동 업데이트 실패; 현재 버전 계속 실행
+正在下载并校验 Windows 更新…	Downloading and verifying Windows update…	Windows更新を取得・検証中…	Windows 업데이트 다운로드 및 검증 중…
+Windows 更新检查当前不可用	Windows update check unavailable	Windows更新確認は利用不可	Windows 업데이트 확인 불가
+正在检查 Windows 更新…	Checking for Windows updates…	Windows更新を確認中…	Windows 업데이트 확인 중…
+每天自动检查一次，也可以手动检查	Checked daily; manual check also available	毎日自動確認・手動確認も可能	하루 한 번 자동 확인; 수동 확인 가능
+已记录 Windows 新版	Windows update recorded	Windows新版を記録済み	Windows 새 버전 기록됨
+发现 Windows 新版	Windows update available	Windows新版あり	Windows 새 버전 있음
+当前 Windows 版已是最新版	Windows version is up to date	Windows版は最新です	Windows 버전이 최신입니다
+更新检查失败；不会影响监控	Update check failed; monitoring unaffected	更新確認失敗・監視に影響なし	업데이트 확인 실패; 모니터링에 영향 없음
+当前版本号无法用于自动更新	Version number unsupported for auto-update	自動更新非対応のバージョン番号	자동 업데이트에 사용할 수 없는 버전 번호
+GitHub 更新信息格式异常	Invalid GitHub update format	GitHub更新形式が不正	GitHub 업데이트 형식 오류
+；检查记录未保存	; check record not saved	・確認記録は未保存	; 확인 기록 저장 안 됨
+；便携版请下载 MSI 安装包更新	; portable users should download the MSI	・ポータブル版はMSIで更新	; 포터블 버전은 MSI를 다운로드하여 업데이트
+正在准备…	Preparing…	準備中…	준비 중…
+便携版不可安装	Portable installation unavailable	ポータブル版で導入不可	포터블 설치 불가
+签名后启用	Enabled after signing	署名後に有効	서명 후 활성화
+安装更新	Install update	更新をインストール	업데이트 설치
+提醒阈值：	Alert threshold: 	通知しきい値: 	알림 기준:
+默认关闭；开启后每5分钟复用额度刷新，不增加额外轮询。	Off by default; uses existing 5-minute quota refresh.	初期値は無効・既存の5分間隔更新を使用。	기본 꺼짐; 기존 5분 간격 한도 갱신 사용.
+已开启；系统通知暂不可用，不会误记为已提醒。	Enabled; notifications unavailable, not marked as delivered.	有効・通知は利用不可、通知済みにしません。	켜짐; 알림 사용 불가, 전달 완료로 기록하지 않음.
+已开启；数据不足时不提醒，同一周期只提醒一次。	Enabled; no alert without enough data, once per period.	有効・データ不足時は通知せず、各期間に1回。	켜짐; 데이터 부족 시 알리지 않으며 주기당 한 번만 알림.
+当前记录不可用，本轮已安全抑制。	Records unavailable; alert safely suppressed.	記録利用不可・今回の通知を抑制。	기록 사용 불가; 이번 알림은 안전하게 억제됨.
+始终置顶	Always on top	常に最前面	항상 위에 표시
+锁定主窗口位置和大小	Lock window position and size	位置とサイズを固定	창 위치 및 크기 고정
+窗口位置	Window position	ウィンドウ位置	창 위치
+左上	Top left	左上	왼쪽 위
+右上	Top right	右上	오른쪽 위
+左下	Bottom left	左下	왼쪽 아래
+右下	Bottom right	右下	오른쪽 아래
+整体透明度	Opacity	不透明度	불투명도
+低饱和主题	Muted theme	低彩度テーマ	저채도 테마
+蓝	Blue	青	파랑
+绿	Green	緑	초록
+紫	Purple	紫	보라
+橙	Orange	オレンジ	주황
+周额度消耗提醒	Weekly quota usage alert	週間使用量通知	주간 한도 사용량 알림
+提醒阈值：15%	Alert threshold: 15%	通知しきい値: 15%	알림 기준: 15%
+滚动24小时	Rolling 24 hours	直近24時間	최근 24시간
+自然日（本地）	Calendar day (local)	暦日（現地）	현지 날짜 기준
+订阅日期（手动）：	Subscription date (manual): 	契約日（手動）: 	구독 날짜 (수동):
+未设置	Not set	未設定	미설정
+语言重启后生效；币种立即生效。	Language after restart; currency immediately.	言語は再起動後・通貨は即時反映。	언어는 재시작 후, 통화는 즉시 적용.
+费用为API估算，非账单；汇率日期：2026-09-10。	API estimate, not a bill; FX date: 2026-09-10.	API推定・請求額ではありません。為替: 2026-09-10。	API 추정액이며 청구액 아님; 환율 날짜: 2026-09-10.
+保存订阅日期	Save subscription date	契約日を保存	구독 날짜 저장
+打开官方账单页	Open official billing	公式請求ページ	공식 청구 페이지 열기
+请填写有效日期 YYYY-MM-DD；留空可取消。	Enter a valid YYYY-MM-DD date; empty clears it.	有効なYYYY-MM-DDを入力・空欄で解除。	유효한 YYYY-MM-DD를 입력하세요; 비우면 해제됩니다.
+订阅日期	Subscription date	契約日	구독 날짜

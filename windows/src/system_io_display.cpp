@@ -1,3 +1,4 @@
+#include "localization.h"
 #include "system_io_display.h"
 
 #include <cmath>
@@ -25,10 +26,10 @@ std::wstring FormatSystemIoByteRate(
     const std::optional<double>& bytesPerSecond,
     bool needsBaseline) {
     if (!bytesPerSecond) {
-        return needsBaseline ? L"正在建立基线" : L"不可用";
+        return needsBaseline ? codex_monitor::Localized(L"正在建立基线") : codex_monitor::Localized(L"不可用");
     }
     if (!std::isfinite(*bytesPerSecond) || *bytesPerSecond < 0.0) {
-        return L"不可用";
+        return codex_monitor::Localized(L"不可用");
     }
 
     constexpr double kUnitStep = 1024.0;
@@ -50,29 +51,29 @@ std::wstring FormatSystemIoByteRate(
 
 std::wstring BuildSystemIoThroughputCardText(const SystemIoRates& rates) {
     std::wostringstream output;
-    output << L"网络与磁盘实时速度\r\n"
-           << L"下载："
+    output << codex_monitor::Localized(L"网络与磁盘实时速度\r\n")
+           << codex_monitor::Localized(L"下载：")
            << FormatSystemIoByteRate(
                   rates.networkReceiveBytesPerSecond,
                   rates.networkNeedsBaseline)
-           << L"  |  上传："
+           << codex_monitor::Localized(L"  |  上传：")
            << FormatSystemIoByteRate(
                   rates.networkSendBytesPerSecond,
                   rates.networkNeedsBaseline)
-           << L"\r\n磁盘读："
+           << codex_monitor::Localized(L"\r\n磁盘读：")
            << FormatSystemIoByteRate(
                   rates.diskReadBytesPerSecond,
                   rates.diskNeedsBaseline)
-           << L"  |  磁盘写："
+           << codex_monitor::Localized(L"  |  磁盘写：")
            << FormatSystemIoByteRate(
                   rates.diskWriteBytesPerSecond,
                   rates.diskNeedsBaseline);
 
     if (!HasAnyUsableRate(rates) && !rates.networkNeedsBaseline &&
         !rates.diskNeedsBaseline) {
-        output << L"\r\n当前未取得网络或磁盘计数";
+        output << codex_monitor::Localized(L"\r\n当前未取得网络或磁盘计数");
     } else {
-        output << L"\r\n复用现有 5 秒性能采样";
+        output << codex_monitor::Localized(L"\r\n复用现有 5 秒性能采样");
     }
     return output.str();
 }

@@ -150,8 +150,8 @@ void TestVersionElevenRoundTripAndIndependentQuotaSwitches() {
     settings.windowPlacement = codex_monitor::WindowPlacement{-900, 120, 720, 640};
 
     const std::string serialized = codex_monitor::SerializeSettings(settings);
-    Expect(serialized.find("version=11\n") == 0,
-           "the settings whitelist must be serialized as version 11");
+    Expect(serialized.find("version=12\n") == 0,
+           "the settings whitelist must be serialized as version 12");
 
     const codex_monitor::SettingsState parsed = codex_monitor::ParseSettings(serialized);
     Expect(parsed.currentPage == Page::kCodex,

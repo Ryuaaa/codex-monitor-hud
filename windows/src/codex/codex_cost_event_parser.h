@@ -15,6 +15,7 @@ namespace codex_monitor::codex {
 struct CodexCostEventParserState {
     std::string currentModel = "unknown";
     bool baselinePending = false;
+    bool inheritedBaselinePending = false;
     bool hasRawTotalsWatermark = false;
     CodexTokenUsage rawTotalsWatermark;
 

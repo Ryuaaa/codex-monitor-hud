@@ -421,6 +421,10 @@ MethodParseResult<RateLimitsData> ParseRateLimitsResultJson(std::string_view jso
 
     JsonObject rate;
     RateLimitsData output;
+    if (root.HasKey(L"ordinaryUsageAllowed")) {
+        const auto value = root.GetNamedValue(L"ordinaryUsageAllowed");
+        if (value.ValueType() == JsonValueType::Boolean) output.ordinaryUsageAllowed = value.GetBoolean();
+    }
     if (!SelectRateLimitSnapshot(root, rate, output.selectedCodexLimitId, failure) ||
         !ReadOptionalString(rate, L"planType", L"rateLimits.planType",
                             output.planType, failure) ||

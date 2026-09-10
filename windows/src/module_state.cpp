@@ -1,4 +1,5 @@
 #include "module_state.h"
+#include "display_preferences.h"
 
 #include <algorithm>
 #include <charconv>
@@ -404,7 +405,10 @@ bool MoveHomeModule(SettingsState& settings, ModuleId id, int direction) {
 std::string SerializeSettings(const SettingsState& settings) {
     const std::vector<ModuleId> order = SanitizeHomeOrder(settings.homeOrder);
     std::ostringstream output;
-    output << "version=11\n";
+    output << "version=12\n";
+    output << "display_language=" << (IsDisplayChoice(settings.displayLanguage, kDisplayLanguages) ? settings.displayLanguage : "zh-Hans") << '\n';
+    output << "display_currency=" << (IsDisplayChoice(settings.displayCurrency, kDisplayCurrencies) ? settings.displayCurrency : "CNY") << '\n';
+    output << "subscription_date=" << (IsSubscriptionDate(settings.subscriptionDate) ? settings.subscriptionDate : "") << '\n';
     output << "page=" << PageKey(settings.currentPage) << '\n';
     output << "always_on_top=" << (settings.alwaysOnTop ? 1 : 0) << '\n';
     output << "window_locked=" << (settings.windowLocked ? 1 : 0) << '\n';
@@ -482,6 +486,12 @@ SettingsState ParseSettings(std::string_view text) {
 
         if (key == "version") {
             version = ParseInt(value);
+        } else if (key == "display_language") {
+            if (IsDisplayChoice(value, kDisplayLanguages)) settings.displayLanguage = value;
+        } else if (key == "display_currency") {
+            if (IsDisplayChoice(value, kDisplayCurrencies)) settings.displayCurrency = value;
+        } else if (key == "subscription_date") {
+            if (IsSubscriptionDate(value)) settings.subscriptionDate = value;
         } else if (key == "page") {
             settings.currentPage = PageFromKey(value);
         } else if (key == "always_on_top") {
@@ -574,7 +584,7 @@ SettingsState ParseSettings(std::string_view text) {
     // a complete version 10 or 11 triplet can opt in. Older, unknown, partial,
     // and malformed settings remain safely disabled with the 15% rolling
     // default.
-    if ((version == 10 || version == 11) &&
+    if ((version == 10 || version == 11 || version == 12) &&
         !weeklyAlertSettingsMalformed &&
         weeklyAlertEnabled && weeklyAlertThreshold && weeklyAlertMode) {
         settings.weeklyQuotaAlert.enabled = *weeklyAlertEnabled;
@@ -614,11 +624,11 @@ SettingsState ParseSettings(std::string_view text) {
         // not silently opt the user into newly introduced work.
         const bool useForecastDefault =
             (version == 5 || version == 6 || version == 7 || version == 8 ||
-             version == 9 || version == 10 || version == 11) &&
+             version == 9 || version == 10 || version == 11 || version == 12) &&
             !nativeVisibleKeySeen;
         const bool useActivityDefault =
             (version == 7 || version == 8 || version == 9 || version == 10 ||
-             version == 11) &&
+             version == 11 || version == 12) &&
             !nativeVisibleKeySeen;
         if (!useForecastDefault) {
             settings.nativePageVisible[ModuleIndex(ModuleId::kCodexQuotaForecast)] =

@@ -10,6 +10,8 @@
 
 #include <windows.h>
 #include <commctrl.h>
+#include <shellapi.h>
+#include "localization.h"
 
 #include <winrt/base.h>
 
@@ -21,6 +23,8 @@
 #include "codex/weekly_quota_alert_delivery.h"
 #include "codex/weekly_quota_notification_win32.h"
 #include "module_state.h"
+#include "display_preferences.h"
+#include "exchange_rates_win32.h"
 #include "performance_diagnosis.h"
 #include "performance_trend.h"
 #include "performance_worker.h"
@@ -90,6 +94,11 @@ constexpr int kSettingsWindowLockId = 3500;
 constexpr int kSettingsCornerBaseId = 3510;
 constexpr int kSettingsOpacityBaseId = 3520;
 constexpr int kSettingsThemeBaseId = 3530;
+constexpr int kSettingsLanguageId = 3600;
+constexpr int kSettingsCurrencyId = 3601;
+constexpr int kSettingsSubscriptionSaveId = 3602;
+constexpr int kSettingsBillingId = 3603;
+std::string displayCurrency = "CNY";
 constexpr UINT_PTR kSampleTimerId = 2001;
 constexpr UINT kSampleReadyMessage = WM_APP + 1;
 constexpr UINT kCodexReadyMessage = WM_APP + 2;
@@ -149,6 +158,12 @@ struct AppState {
     HWND emptyHomeNotice = nullptr;
     HWND settingsWindow = nullptr;
     HWND settingsHeading = nullptr;
+    HWND settingsLanguage = nullptr;
+    HWND settingsCurrency = nullptr;
+    HWND settingsDisplayHint = nullptr;
+    HWND settingsSubscriptionDate = nullptr;
+    HWND settingsSubscriptionSave = nullptr;
+    HWND settingsBilling = nullptr;
     HWND settingsTopmostCheck = nullptr;
     HWND settingsWindowLockCheck = nullptr;
     HWND settingsCornerLabel = nullptr;
@@ -479,10 +494,10 @@ std::wstring FormatBytes(std::uint64_t bytes) {
 std::wstring FormatPercent(const std::optional<double>& percent,
                            bool needsBaseline,
                            bool partial = false) {
-    if (!percent) return needsBaseline ? L"waiting for next sample" : L"unavailable";
+    if (!percent) return needsBaseline ? codex_monitor::Localized(L"waiting for next sample") : codex_monitor::Localized(L"unavailable");
     std::wostringstream output;
     output << std::fixed << std::setprecision(1) << *percent << L"%";
-    if (partial) output << L" (partial)";
+    if (partial) output << codex_monitor::Localized(L" (partial)");
     return output.str();
 }
 
@@ -499,7 +514,7 @@ std::wstring FormatByteRatio(std::uint64_t used, std::uint64_t total) {
 
 std::wstring TruncatedProcessName(const std::wstring& rawName) {
     std::wstring name = codex_monitor::NormalizedExecutableName(rawName);
-    if (name.empty()) name = L"unknown";
+    if (name.empty()) name = codex_monitor::Localized(L"unknown");
     constexpr std::size_t kMaximumLength = 24;
     if (name.size() > kMaximumLength) {
         name.resize(kMaximumLength - 3);
@@ -547,7 +562,7 @@ std::wstring SanitizeDisplayText(std::wstring_view raw, std::size_t maximumChara
 }
 
 std::wstring FormatTokenCount(std::int64_t value) {
-    if (value < 0) return L"当前未返回";
+    if (value < 0) return codex_monitor::Localized(L"当前未返回");
     std::wstring digits = std::to_wstring(value);
     for (std::ptrdiff_t position = static_cast<std::ptrdiff_t>(digits.size()) - 3;
          position > 0; position -= 3) {
@@ -608,85 +623,85 @@ std::wstring FriendlyPlanType(std::wstring_view rawPlan) {
     if (normalized == L"business") return L"Business";
     if (normalized == L"enterprise") return L"Enterprise";
     if (normalized == L"edu" || normalized == L"education") return L"Education";
-    return cleaned.empty() ? L"当前未返回" : cleaned;
+    return cleaned.empty() ? codex_monitor::Localized(L"当前未返回") : cleaned;
 }
 
 std::wstring CodexFailureReason(const AppState& state) {
     using Failure = codex_monitor::codex::AppServerClientFailureKind;
-    if (!state.codexWorkerAvailable) return L"Codex 读取组件未能启动";
+    if (!state.codexWorkerAvailable) return codex_monitor::Localized(L"Codex 读取组件未能启动");
     if (state.latestCodexReport.failure) {
         switch (*state.latestCodexReport.failure) {
             case Failure::kStartFailed:
-                return L"未找到或无法启动 codex.exe";
+                return codex_monitor::Localized(L"未找到或无法启动 codex.exe");
             case Failure::kInitializeRejected:
-                return L"Codex 接口初始化失败";
+                return codex_monitor::Localized(L"Codex 接口初始化失败");
             case Failure::kWriteFailed:
-                return L"Codex 接口请求发送失败";
+                return codex_monitor::Localized(L"Codex 接口请求发送失败");
             case Failure::kTransportFailed:
-                return L"Codex 接口连接失败";
+                return codex_monitor::Localized(L"Codex 接口连接失败");
             case Failure::kTimedOut:
-                return L"Codex 接口读取超时";
+                return codex_monitor::Localized(L"Codex 接口读取超时");
             case Failure::kCancelled:
-                return L"Codex 读取已暂停";
+                return codex_monitor::Localized(L"Codex 读取已暂停");
         }
     }
-    if (state.codexPaused) return L"Codex 读取已暂停";
-    if (state.codexWorker.IsBusy()) return L"正在连接本机 Codex 只读接口";
-    return L"Codex 接口当前未返回有效数据";
+    if (state.codexPaused) return codex_monitor::Localized(L"Codex 读取已暂停");
+    if (state.codexWorker.IsBusy()) return codex_monitor::Localized(L"正在连接本机 Codex 只读接口");
+    return codex_monitor::Localized(L"Codex 接口当前未返回有效数据");
 }
 
 std::wstring BuildTargetCardText(const codex_monitor::PerformanceSnapshot& snapshot) {
     std::wostringstream output;
-    output << L"CODEX / CHATGPT PROCESS TREE\r\n";
+    output << codex_monitor::Localized(L"CODEX / CHATGPT PROCESS TREE\r\n");
     if (!snapshot.raw.processListAvailable) {
-        output << L"Process list unavailable\r\n"
-               << L"CPU share: unavailable\r\n"
-               << L"Working set: unavailable";
+        output << codex_monitor::Localized(L"Process list unavailable\r\n")
+               << codex_monitor::Localized(L"CPU share: unavailable\r\n")
+               << codex_monitor::Localized(L"Working set: unavailable");
         return output.str();
     }
 
     if (snapshot.targetRootCount == 0) {
-        output << L"Not detected\r\nCPU share: 0.0%\r\nWorking set: 0.0 MB";
+        output << codex_monitor::Localized(L"Not detected\r\nCPU share: 0.0%\r\nWorking set: 0.0 MB");
         return output.str();
     }
 
-    output << L"Roots: " << snapshot.targetRootCount << L"  |  Tree: "
-           << snapshot.targetProcessCount << L" process(es)\r\n";
-    output << L"CPU whole-machine share: "
+    output << codex_monitor::Localized(L"Roots: ") << snapshot.targetRootCount << codex_monitor::Localized(L"  |  Tree: ")
+           << snapshot.targetProcessCount << codex_monitor::Localized(L" process(es)\r\n");
+    output << codex_monitor::Localized(L"CPU whole-machine share: ")
            << FormatPercent(snapshot.targetCpuPercent, snapshot.systemCpuNeedsBaseline,
                             snapshot.targetCpuPartial)
            << L"\r\n";
-    output << L"Working set: ";
+    output << codex_monitor::Localized(L"Working set: ");
     if (snapshot.targetWorkingSetAvailable) {
         output << FormatBytes(snapshot.targetWorkingSetBytes);
-        if (snapshot.targetWorkingSetPartial) output << L" (partial)";
+        if (snapshot.targetWorkingSetPartial) output << codex_monitor::Localized(L" (partial)");
     } else {
-        output << L"unavailable";
+        output << codex_monitor::Localized(L"unavailable");
     }
     if (snapshot.largestTargetWorkingSetProcess) {
-        output << L"\r\nLargest RAM process: "
+        output << codex_monitor::Localized(L"\r\nLargest RAM process: ")
                << TruncatedProcessName(
                       snapshot.largestTargetWorkingSetProcess->executableName)
                << L"  "
                << FormatBytes(
                       snapshot.largestTargetWorkingSetProcess->workingSetBytes);
     }
-    output << L"\r\nProcess I/O read: "
+    output << codex_monitor::Localized(L"\r\nProcess I/O read: ")
            << codex_monitor::FormatSystemIoByteRate(
                   snapshot.targetIoReadBytesPerSecond,
                   snapshot.targetIoNeedsBaseline)
-           << L"  |  write: "
+           << codex_monitor::Localized(L"  |  write: ")
            << codex_monitor::FormatSystemIoByteRate(
                   snapshot.targetIoWriteBytesPerSecond,
                   snapshot.targetIoNeedsBaseline);
-    if (snapshot.targetIoPartial) output << L" (partial)";
-    output << L"\r\nProcess I/O is not disk-only";
+    if (snapshot.targetIoPartial) output << codex_monitor::Localized(L" (partial)");
+    output << codex_monitor::Localized(L"\r\nProcess I/O is not disk-only");
     return output.str();
 }
 
 std::wstring BuildSystemCardText(const codex_monitor::PerformanceSnapshot& snapshot) {
     std::wostringstream output;
-    output << L"SYSTEM CPU & PHYSICAL MEMORY\r\n";
+    output << codex_monitor::Localized(L"SYSTEM CPU & PHYSICAL MEMORY\r\n");
     output << L"CPU: "
            << FormatPercent(snapshot.systemCpuPercent, snapshot.systemCpuNeedsBaseline) << L"\r\n";
     if (snapshot.raw.physicalMemoryAvailable) {
@@ -694,16 +709,16 @@ std::wstring BuildSystemCardText(const codex_monitor::PerformanceSnapshot& snaps
             snapshot.raw.physicalTotalBytes >= snapshot.raw.physicalAvailableBytes
                 ? snapshot.raw.physicalTotalBytes - snapshot.raw.physicalAvailableBytes
                 : 0;
-        output << L"Physical: " << FormatByteRatio(used, snapshot.raw.physicalTotalBytes) << L"\r\n";
-        output << L"Available: " << FormatBytes(snapshot.raw.physicalAvailableBytes) << L"\r\n";
+        output << codex_monitor::Localized(L"Physical: ") << FormatByteRatio(used, snapshot.raw.physicalTotalBytes) << L"\r\n";
+        output << codex_monitor::Localized(L"Available: ") << FormatBytes(snapshot.raw.physicalAvailableBytes) << L"\r\n";
     } else {
-        output << L"Physical memory: unavailable\r\n";
+        output << codex_monitor::Localized(L"Physical memory: unavailable\r\n");
     }
     if (snapshot.raw.processListAvailable) {
-        output << L"Processes: " << snapshot.raw.processes.size() << L"  |  WS readable: "
+        output << codex_monitor::Localized(L"Processes: ") << snapshot.raw.processes.size() << codex_monitor::Localized(L"  |  WS readable: ")
                << snapshot.readableWorkingSetProcessCount;
     } else {
-        output << L"Process list: unavailable";
+        output << codex_monitor::Localized(L"Process list: unavailable");
     }
     return output.str();
 }
@@ -755,48 +770,48 @@ std::wstring BuildCpuTrendCardText(
     }
 
     std::wostringstream output;
-    output << L"SYSTEM CPU · 10-MINUTE TREND\r\n" << graph << L"\r\n";
+    output << codex_monitor::Localized(L"SYSTEM CPU · 10-MINUTE TREND\r\n") << graph << L"\r\n";
     if (summary.sampleCount == 0) {
-        output << L"Waiting for the first unbiased sample";
+        output << codex_monitor::Localized(L"Waiting for the first unbiased sample");
     } else {
-        output << L"Sampled " << FormatCpuTrendCoverage(summary.coverage100ns)
-               << L"  |  Average "
+        output << codex_monitor::Localized(L"Sampled ") << FormatCpuTrendCoverage(summary.coverage100ns)
+               << codex_monitor::Localized(L"  |  Average ")
                << FormatCpuTrendPercent(summary.averagePercent)
-               << L"  |  Peak "
+               << codex_monitor::Localized(L"  |  Peak ")
                << FormatCpuTrendPercent(summary.peakPercent);
     }
-    output << L"\r\n5 s samples · in-memory only";
+    output << codex_monitor::Localized(L"\r\n5 s samples · in-memory only");
     return output.str();
 }
 
 std::wstring BuildCommitCardText(const codex_monitor::PerformanceSnapshot& snapshot) {
     std::wostringstream output;
-    output << L"COMMIT & PAGE FILE\r\n";
+    output << codex_monitor::Localized(L"COMMIT & PAGE FILE\r\n");
     if (snapshot.raw.commitAvailable) {
-        output << L"Committed: "
+        output << codex_monitor::Localized(L"Committed: ")
                << FormatByteRatio(snapshot.raw.commitTotalBytes, snapshot.raw.commitLimitBytes)
                << L"\r\n";
-        output << L"Commit peak: " << FormatBytes(snapshot.raw.commitPeakBytes) << L"\r\n";
+        output << codex_monitor::Localized(L"Commit peak: ") << FormatBytes(snapshot.raw.commitPeakBytes) << L"\r\n";
     } else {
-        output << L"Commit: unavailable\r\n";
+        output << codex_monitor::Localized(L"Commit: unavailable\r\n");
     }
     if (snapshot.raw.pageFileAvailable) {
-        output << L"Page file: "
+        output << codex_monitor::Localized(L"Page file: ")
                << FormatByteRatio(snapshot.raw.pageFileUsedBytes,
                                   snapshot.raw.pageFileTotalBytes)
                << L"\r\n";
-        output << L"Page-file peak: " << FormatBytes(snapshot.raw.pageFilePeakBytes);
+        output << codex_monitor::Localized(L"Page-file peak: ") << FormatBytes(snapshot.raw.pageFilePeakBytes);
     } else {
-        output << L"Page file: unavailable";
+        output << codex_monitor::Localized(L"Page file: unavailable");
     }
     return output.str();
 }
 
 std::wstring BuildRankingCardText(const codex_monitor::PerformanceSnapshot& snapshot) {
     std::wostringstream output;
-    output << L"TOP PROCESSES · CPU / MEMORY\r\nCPU (20 s):\r\n";
+    output << codex_monitor::Localized(L"TOP PROCESSES · CPU / MEMORY\r\nCPU (20 s):\r\n");
     if (!snapshot.topCpuRankingAvailable || snapshot.topCpuProcesses.empty()) {
-        output << L"Waiting for the next slow CPU sample\r\n";
+        output << codex_monitor::Localized(L"Waiting for the next slow CPU sample\r\n");
     } else {
         const std::size_t cpuCount =
             std::min<std::size_t>(3, snapshot.topCpuProcesses.size());
@@ -809,9 +824,9 @@ std::wstring BuildRankingCardText(const codex_monitor::PerformanceSnapshot& snap
                    << process.wholeMachineCpuPercent << L"%\r\n";
         }
     }
-    output << L"Memory working set:\r\n";
+    output << codex_monitor::Localized(L"Memory working set:\r\n");
     if (!snapshot.topMemoryRankingAvailable || snapshot.topMemoryProcesses.empty()) {
-        output << L"Working-set metrics unavailable\r\n";
+        output << codex_monitor::Localized(L"Working-set metrics unavailable\r\n");
     } else {
         for (std::size_t index = 0; index < snapshot.topMemoryProcesses.size(); ++index) {
             const codex_monitor::RankedProcess& process = snapshot.topMemoryProcesses[index];
@@ -819,7 +834,7 @@ std::wstring BuildRankingCardText(const codex_monitor::PerformanceSnapshot& snap
                    << L"  " << FormatBytes(process.workingSetBytes) << L"\r\n";
         }
     }
-    output << L"Thermal pressure: system not provided";
+    output << codex_monitor::Localized(L"Thermal pressure: system not provided");
     return output.str();
 }
 
@@ -833,59 +848,59 @@ std::wstring DiagnosisPercent(const std::optional<double>& percent) {
 std::wstring_view PressureLabel(codex_monitor::SystemPressure pressure) {
     switch (pressure) {
         case codex_monitor::SystemPressure::kUnavailable:
-            return L"Data unavailable";
+            return codex_monitor::Localized(L"Data unavailable");
         case codex_monitor::SystemPressure::kComfortable:
-            return L"Comfortable";
+            return codex_monitor::Localized(L"Comfortable");
         case codex_monitor::SystemPressure::kElevated:
-            return L"Elevated";
+            return codex_monitor::Localized(L"Elevated");
         case codex_monitor::SystemPressure::kHigh:
-            return L"High";
+            return codex_monitor::Localized(L"High");
     }
-    return L"Data unavailable";
+    return codex_monitor::Localized(L"Data unavailable");
 }
 
 std::wstring_view BottleneckLabel(codex_monitor::SystemBottleneck bottleneck) {
     switch (bottleneck) {
         case codex_monitor::SystemBottleneck::kUnavailable:
-            return L"Unknown";
+            return codex_monitor::Localized(L"Unknown");
         case codex_monitor::SystemBottleneck::kNone:
-            return L"None";
+            return codex_monitor::Localized(L"None");
         case codex_monitor::SystemBottleneck::kCpu:
             return L"CPU";
         case codex_monitor::SystemBottleneck::kMemory:
-            return L"Memory";
+            return codex_monitor::Localized(L"Memory");
         case codex_monitor::SystemBottleneck::kMixed:
-            return L"CPU + memory";
+            return codex_monitor::Localized(L"CPU + memory");
     }
-    return L"Unknown";
+    return codex_monitor::Localized(L"Unknown");
 }
 
 std::wstring_view TargetImpactLabel(codex_monitor::TargetImpact impact) {
     switch (impact) {
         case codex_monitor::TargetImpact::kUnavailable:
-            return L"Unknown";
+            return codex_monitor::Localized(L"Unknown");
         case codex_monitor::TargetImpact::kNotDetected:
-            return L"Not detected";
+            return codex_monitor::Localized(L"Not detected");
         case codex_monitor::TargetImpact::kLow:
-            return L"Low";
+            return codex_monitor::Localized(L"Low");
         case codex_monitor::TargetImpact::kPossible:
-            return L"Possible";
+            return codex_monitor::Localized(L"Possible");
         case codex_monitor::TargetImpact::kHigh:
-            return L"High";
+            return codex_monitor::Localized(L"High");
     }
-    return L"Unknown";
+    return codex_monitor::Localized(L"Unknown");
 }
 
 std::wstring_view ConfidenceLabel(codex_monitor::DiagnosisConfidence confidence) {
     switch (confidence) {
         case codex_monitor::DiagnosisConfidence::kLow:
-            return L"Low";
+            return codex_monitor::Localized(L"Low");
         case codex_monitor::DiagnosisConfidence::kMedium:
-            return L"Medium";
+            return codex_monitor::Localized(L"Medium");
         case codex_monitor::DiagnosisConfidence::kHigh:
-            return L"High";
+            return codex_monitor::Localized(L"High");
     }
-    return L"Low";
+    return codex_monitor::Localized(L"Low");
 }
 
 std::wstring BuildDiagnosisCardText(
@@ -893,10 +908,10 @@ std::wstring BuildDiagnosisCardText(
     const codex_monitor::PerformanceDiagnosis diagnosis =
         codex_monitor::DiagnosePerformance(snapshot);
     std::wostringstream output;
-    output << L"SYSTEM + CODEX/CHATGPT\r\n"
-           << L"Pressure: " << PressureLabel(diagnosis.pressure)
-           << L"\r\nBottleneck: " << BottleneckLabel(diagnosis.bottleneck)
-           << L"  |  Impact: " << TargetImpactLabel(diagnosis.targetImpact)
+    output << codex_monitor::Localized(L"SYSTEM + CODEX/CHATGPT\r\n")
+           << codex_monitor::Localized(L"Pressure: ") << PressureLabel(diagnosis.pressure)
+           << codex_monitor::Localized(L"\r\nBottleneck: ") << BottleneckLabel(diagnosis.bottleneck)
+           << codex_monitor::Localized(L"  |  Impact: ") << TargetImpactLabel(diagnosis.targetImpact)
            << L"\r\nCPU " << DiagnosisPercent(diagnosis.cpuPercent)
            << L"  |  RAM " << DiagnosisPercent(diagnosis.physicalMemoryPercent)
            << L"  |  Commit " << DiagnosisPercent(diagnosis.commitPercent)
@@ -914,9 +929,9 @@ std::wstring BuildDiagnosisCardText(
         output << FormatBytes(snapshot.targetWorkingSetBytes)
                << L" (" << std::fixed << std::setprecision(1)
                << std::clamp(targetRamPercent, 0.0, 100.0) << L"%)";
-        if (snapshot.targetWorkingSetPartial) output << L" partial";
+        if (snapshot.targetWorkingSetPartial) output << codex_monitor::Localized(L" partial");
     } else {
-        output << L"unavailable";
+        output << codex_monitor::Localized(L"unavailable");
     }
     output << L"\r\nCodex process I/O R "
            << codex_monitor::FormatSystemIoByteRate(
@@ -926,7 +941,7 @@ std::wstring BuildDiagnosisCardText(
            << codex_monitor::FormatSystemIoByteRate(
                   snapshot.targetIoWriteBytesPerSecond,
                   snapshot.targetIoNeedsBaseline)
-           << L"\r\nConfidence: " << ConfidenceLabel(diagnosis.confidence)
+           << codex_monitor::Localized(L"\r\nConfidence: ") << ConfidenceLabel(diagnosis.confidence)
            << L"  |  snapshot";
     return output.str();
 }
@@ -934,23 +949,23 @@ std::wstring BuildDiagnosisCardText(
 std::wstring_view CodexModuleHeading(codex_monitor::ModuleId id) {
     switch (id) {
         case codex_monitor::ModuleId::kCodexFiveHourQuota:
-            return L"CODEX 5-HOUR QUOTA";
+            return codex_monitor::Localized(L"CODEX 5-HOUR QUOTA");
         case codex_monitor::ModuleId::kCodexWeeklyQuota:
-            return L"CODEX WEEKLY QUOTA";
+            return codex_monitor::Localized(L"CODEX WEEKLY QUOTA");
         case codex_monitor::ModuleId::kCodexQuotaForecast:
-            return L"CODEX QUOTA TREND FORECAST";
+            return codex_monitor::Localized(L"CODEX QUOTA TREND FORECAST");
         case codex_monitor::ModuleId::kCodexSubscriptionType:
-            return L"CODEX SUBSCRIPTION TYPE";
+            return codex_monitor::Localized(L"CODEX SUBSCRIPTION TYPE");
         case codex_monitor::ModuleId::kCodexAccountTokenUsage:
-            return L"CODEX ACCOUNT TOKEN USAGE";
+            return codex_monitor::Localized(L"CODEX ACCOUNT TOKEN USAGE");
         case codex_monitor::ModuleId::kCodexTokenCostEstimate:
-            return L"CODEX TOKEN USAGE & COST (BETA)";
+            return codex_monitor::Localized(L"CODEX TOKEN USAGE & COST (BETA)");
         case codex_monitor::ModuleId::kCodexTaskActivity:
-            return L"CODEX CURRENT TASK ACTIVITY (LOCAL ESTIMATE)";
+            return codex_monitor::Localized(L"CODEX CURRENT TASK ACTIVITY (LOCAL ESTIMATE)");
         case codex_monitor::ModuleId::kCodexRecentTasks:
-            return L"CODEX RECENT TASKS (HISTORY)";
+            return codex_monitor::Localized(L"CODEX RECENT TASKS (HISTORY)");
         case codex_monitor::ModuleId::kOpenAIServiceStatus:
-            return L"OPENAI OFFICIAL SERVICE STATUS";
+            return codex_monitor::Localized(L"OPENAI OFFICIAL SERVICE STATUS");
         case codex_monitor::ModuleId::kSystemDiagnosis:
         case codex_monitor::ModuleId::kTargetProcessTree:
         case codex_monitor::ModuleId::kSystemResources:
@@ -964,29 +979,29 @@ std::wstring_view CodexModuleHeading(codex_monitor::ModuleId id) {
 }
 
 std::wstring BuildCodexUnavailableText(codex_monitor::ModuleId id) {
-    std::wstring detail = L"正在连接本机 Codex 只读接口\r\n当前未返回；不会模拟数值";
+    std::wstring detail = codex_monitor::Localized(L"正在连接本机 Codex 只读接口\r\n当前未返回；不会模拟数值");
     if (id == codex_monitor::ModuleId::kCodexQuotaForecast) {
-        detail = L"正在等待额度数据\r\n至少需要15分钟历史才能判断趋势";
+        detail = codex_monitor::Localized(L"正在等待额度数据\r\n至少需要15分钟历史才能判断趋势");
     }
     if (id == codex_monitor::ModuleId::kCodexRecentTasks) {
-        detail = L"正在连接本机 Codex 只读接口\r\n"
+        detail = codex_monitor::Localized(L"正在连接本机 Codex 只读接口\r\n"
                  L"当前未返回；状态只表示 app-server 进程范围，"
-                 L"不代表桌面版全局";
+                 L"不代表桌面版全局");
     }
     if (id == codex_monitor::ModuleId::kCodexTaskActivity) {
-        detail = L"正在检查本机会话活动\r\n"
-                 L"只识别时间与事件类型，不保存或显示对话内容";
+        detail = codex_monitor::Localized(L"正在检查本机会话活动\r\n"
+                 L"只识别时间与事件类型，不保存或显示对话内容");
     }
     if (id == codex_monitor::ModuleId::kCodexTokenCostEstimate) {
-        detail = L"正在读取本机 Codex Token 历史\r\n"
-                 L"费用为 API 等价估算，不是订阅账单";
+        detail = codex_monitor::Localized(L"正在读取本机 Codex Token 历史\r\n"
+                 L"费用为 API 等价估算，不是订阅账单");
     }
     return std::wstring(CodexModuleHeading(id)) + L"\r\n" + detail;
 }
 
 std::wstring BuildServiceStatusCardText(const AppState& state) {
     std::wostringstream output;
-    output << L"OPENAI OFFICIAL SERVICE STATUS\r\n";
+    output << codex_monitor::Localized(L"OPENAI OFFICIAL SERVICE STATUS\r\n");
     if (state.latestServiceStatus) {
         output << std::wstring(state.latestServiceStatus->headline.begin(),
                                state.latestServiceStatus->headline.end())
@@ -996,31 +1011,31 @@ std::wstring BuildServiceStatusCardText(const AppState& state) {
         if (state.serviceStatusLastSuccessfulRefresh) {
             if (const auto updated =
                     FormatLocalTime(*state.serviceStatusLastSuccessfulRefresh)) {
-                output << L"\r\nUpdated: " << *updated;
+                output << codex_monitor::Localized(L"\r\nUpdated: ") << *updated;
             }
         }
         if (!state.serviceStatusPaused && state.serviceStatusWorker.IsBusy()) {
-            output << L"\r\nRefreshing; showing last status";
+            output << codex_monitor::Localized(L"\r\nRefreshing; showing last status");
         } else if (state.serviceStatusShowingLastKnown) {
-            output << L"\r\nUpdate failed; showing last status";
+            output << codex_monitor::Localized(L"\r\nUpdate failed; showing last status");
         } else {
-            output << L"\r\nRefresh cadence: 15 min";
+            output << codex_monitor::Localized(L"\r\nRefresh cadence: 15 min");
         }
     } else if (!state.serviceStatusWorkerAvailable) {
-        output << L"Status reader unavailable";
+        output << codex_monitor::Localized(L"Status reader unavailable");
     } else if (!state.serviceStatusPaused && state.serviceStatusWorker.IsBusy()) {
-        output << L"Checking the official OpenAI status page";
+        output << codex_monitor::Localized(L"Checking the official OpenAI status page");
     } else if (state.hasServiceStatusRefresh &&
                !state.serviceStatusLastRefreshSucceeded) {
         const auto retryMinutes = std::max<std::int64_t>(
             1, std::chrono::duration_cast<std::chrono::minutes>(
                    state.serviceStatusNextRefreshDelay).count());
-        output << L"Official status temporarily unavailable\r\nRetry in "
+        output << codex_monitor::Localized(L"Official status temporarily unavailable\r\nRetry in ")
                << retryMinutes << L" min";
     } else if (state.serviceStatusPaused) {
-        output << L"Refresh paused while this module is not visible";
+        output << codex_monitor::Localized(L"Refresh paused while this module is not visible");
     } else {
-        output << L"Waiting for the official OpenAI status page";
+        output << codex_monitor::Localized(L"Waiting for the official OpenAI status page");
     }
     output << L"\r\nSource: status.openai.com";
     return output.str();
@@ -1129,7 +1144,7 @@ void AppendMethodRefreshWarning(
     const codex_monitor::codex::MethodState<T>& method,
     std::wostringstream& output) {
     if (method.lastFailure && method.lastValue) {
-        output << L"\r\n更新失败，显示上次数据";
+        output << codex_monitor::Localized(L"\r\n更新失败，显示上次数据");
     }
 }
 
@@ -1147,21 +1162,21 @@ std::wstring BuildQuotaCardText(const AppState& state, bool weekly) {
     const codex_monitor::codex::RateLimitWindow* window =
         SelectQuotaWindow(*method.lastValue, weekly);
     if (!window) {
-        output << L"\r\n当前未返回";
-        if (method.lastFailure) output << L"；本次更新失败";
+        output << codex_monitor::Localized(L"\r\n当前未返回");
+        if (method.lastFailure) output << codex_monitor::Localized(L"；本次更新失败");
         return output.str();
     }
 
     const int used = std::clamp(static_cast<int>(window->usedPercent), 0, 100);
-    output << L"\r\n剩余 " << 100 - used << L"%";
+    output << codex_monitor::Localized(L"\r\n剩余 ") << 100 - used << L"%";
     if (window->resetsAtUnixSeconds) {
         if (const auto reset = FormatUnixLocalTime(*window->resetsAtUnixSeconds)) {
-            output << L"\r\n恢复：" << *reset;
+            output << codex_monitor::Localized(L"\r\n恢复：") << *reset;
         } else {
-            output << L"\r\n恢复时间：当前未返回";
+            output << codex_monitor::Localized(L"\r\n恢复时间：当前未返回");
         }
     } else {
-        output << L"\r\n恢复时间：当前未返回";
+        output << codex_monitor::Localized(L"\r\n恢复时间：当前未返回");
     }
     AppendMethodRefreshWarning(method, output);
     return output.str();
@@ -1171,11 +1186,11 @@ std::wstring_view ForecastConfidenceLabel(
     codex_monitor::codex::QuotaForecastConfidence confidence) {
     switch (confidence) {
         case codex_monitor::codex::QuotaForecastConfidence::kLow:
-            return L"低";
+            return codex_monitor::Localized(L"低");
         case codex_monitor::codex::QuotaForecastConfidence::kMedium:
-            return L"中";
+            return codex_monitor::Localized(L"中");
         case codex_monitor::codex::QuotaForecastConfidence::kHigh:
-            return L"高";
+            return codex_monitor::Localized(L"高");
         case codex_monitor::codex::QuotaForecastConfidence::kUnavailable:
             return L"";
     }
@@ -1191,7 +1206,7 @@ void AppendQuotaForecastLine(
 
     output << L"\r\n" << label << L"：";
     if (!window.windowReturned) {
-        output << L"当前未返回";
+        output << codex_monitor::Localized(L"当前未返回");
         return;
     }
 
@@ -1200,27 +1215,27 @@ void AppendQuotaForecastLine(
         case QuotaForecastState::kUnavailable:
             if (forecast.unavailableReason ==
                 QuotaForecastUnavailableReason::kInsufficientHistory) {
-                output << L"正在积累历史（至少15分钟）";
+                output << codex_monitor::Localized(L"正在积累历史（至少15分钟）");
             } else if (forecast.unavailableReason ==
                        QuotaForecastUnavailableReason::kInvalidCurrentState) {
-                output << L"恢复时间未返回";
+                output << codex_monitor::Localized(L"恢复时间未返回");
             } else {
-                output << L"暂时无法计算";
+                output << codex_monitor::Localized(L"暂时无法计算");
             }
             return;
         case QuotaForecastState::kStable:
-            output << L"近期平稳";
+            output << codex_monitor::Localized(L"近期平稳");
             break;
         case QuotaForecastState::kLastsToReset: {
             const int projected = std::clamp(
                 static_cast<int>(std::lround(
                     forecast.projectedRemainingAtResetPercent.value_or(0.0))),
                 0, 100);
-            output << L"可撑到恢复，预计剩余 " << projected << L"%";
+            output << codex_monitor::Localized(L"可撑到恢复，预计剩余 ") << projected << L"%";
             break;
         }
         case QuotaForecastState::kMayExhaustEarly:
-            output << L"可能提前用完";
+            output << codex_monitor::Localized(L"可能提前用完");
             if (forecast.projectedExhaustAtUnixSeconds) {
                 const auto exhaustAt = static_cast<std::int64_t>(
                     std::llround(*forecast.projectedExhaustAtUnixSeconds));
@@ -1232,7 +1247,7 @@ void AppendQuotaForecastLine(
     }
     const std::wstring_view confidence =
         ForecastConfidenceLabel(forecast.confidence);
-    if (!confidence.empty()) output << L" · " << confidence << L"置信";
+    if (!confidence.empty()) output << L" · " << confidence << codex_monitor::Localized(L"置信");
 }
 
 std::wstring BuildQuotaForecastCardText(const AppState& state) {
@@ -1243,18 +1258,18 @@ std::wstring BuildQuotaForecastCardText(const AppState& state) {
         if (!state.latestCodexData.rateLimits.lastValue) {
             output << L"\r\n" << CodexFailureReason(state);
         } else {
-            output << L"\r\n等待下一次额度更新";
+            output << codex_monitor::Localized(L"\r\n等待下一次额度更新");
         }
-        output << L"\r\n至少需要15分钟历史才能判断趋势";
+        output << codex_monitor::Localized(L"\r\n至少需要15分钟历史才能判断趋势");
         return output.str();
     }
 
-    AppendQuotaForecastLine(output, L"5小时", state.latestQuotaForecast->fiveHour);
-    AppendQuotaForecastLine(output, L"每周", state.latestQuotaForecast->weekly);
+    AppendQuotaForecastLine(output, codex_monitor::Localized(L"5小时"), state.latestQuotaForecast->fiveHour);
+    AppendQuotaForecastLine(output, codex_monitor::Localized(L"每周"), state.latestQuotaForecast->weekly);
     if (state.latestQuotaForecast->historySaveFailed) {
-        output << L"\r\n历史保存失败；趋势可能无法继续积累";
+        output << codex_monitor::Localized(L"\r\n历史保存失败；趋势可能无法继续积累");
     } else if (state.latestCodexData.rateLimits.lastFailure) {
-        output << L"\r\n更新失败，显示上次预测";
+        output << codex_monitor::Localized(L"\r\n更新失败，显示上次预测");
     }
     return output.str();
 }
@@ -1274,12 +1289,14 @@ std::wstring BuildSubscriptionCardText(const AppState& state) {
 
     std::wostringstream output;
     output << CodexModuleHeading(codex_monitor::ModuleId::kCodexSubscriptionType);
+    output << codex_monitor::Localized(L"\r\n订阅日期（手动）：") << (state.settings.subscriptionDate.empty()
+        ? codex_monitor::Localized(L"未设置") : std::wstring(state.settings.subscriptionDate.begin(), state.settings.subscriptionDate.end()));
     if (!plan) {
         output << L"\r\n" << CodexFailureReason(state);
         return output.str();
     }
-    output << L"\r\n订阅：" << FriendlyPlanType(*plan);
-    if (displayingStaleData) output << L"\r\n更新失败，显示上次数据";
+    output << codex_monitor::Localized(L"\r\n订阅：") << FriendlyPlanType(*plan);
+    if (displayingStaleData) output << codex_monitor::Localized(L"\r\n更新失败，显示上次数据");
     return output.str();
 }
 
@@ -1295,42 +1312,37 @@ std::wstring BuildTokenUsageCardText(const AppState& state) {
     const auto totals = codex_monitor::codex::CalculateUsageCalendarTotals(
         *method.lastValue, CurrentLocalDate());
     if (!totals || !totals->sourceAvailable) {
-        output << L"\r\n当前未返回每日 Token 记录";
+        output << codex_monitor::Localized(L"\r\n当前未返回每日 Token 记录");
         AppendMethodRefreshWarning(method, output);
         return output.str();
     }
     if (!totals->latestDate || !totals->latestTokens) {
-        output << L"\r\n当前没有可显示的每日 Token 记录";
+        output << codex_monitor::Localized(L"\r\n当前没有可显示的每日 Token 记录");
         AppendMethodRefreshWarning(method, output);
         return output.str();
     }
 
     if (totals->todayAvailable && totals->todayTokens) {
-        output << L"\r\n今日：" << FormatTokenCount(*totals->todayTokens);
+        output << codex_monitor::Localized(L"\r\n今日：") << FormatTokenCount(*totals->todayTokens);
     } else {
-        output << L"\r\n最新 " << *totals->latestDate << L"："
+        output << codex_monitor::Localized(L"\r\n最新 ") << *totals->latestDate << L"："
                << FormatTokenCount(*totals->latestTokens);
     }
-    output << L"\r\n近7日：" << FormatTokenCount(totals->last7DaysTokens)
-           << L"  |  近30日：" << FormatTokenCount(totals->thirtyDayTokens);
-    output << L"\r\n本月：" << FormatTokenCount(totals->monthToDateTokens);
+    output << codex_monitor::Localized(L"\r\n近7日：") << FormatTokenCount(totals->last7DaysTokens)
+           << codex_monitor::Localized(L"  |  近30日：") << FormatTokenCount(totals->thirtyDayTokens);
+    output << codex_monitor::Localized(L"\r\n本月：") << FormatTokenCount(totals->monthToDateTokens);
     if (totals->monthForecastTokens) {
-        output << L"  |  月末约：" << FormatTokenCount(*totals->monthForecastTokens);
+        output << codex_monitor::Localized(L"  |  月末约：") << FormatTokenCount(*totals->monthForecastTokens);
     } else {
-        output << L"  |  月末约：当前数据不足";
+        output << codex_monitor::Localized(L"  |  月末约：当前数据不足");
     }
-    if (totals->saturated) output << L"（达到上限，非精确）";
+    if (totals->saturated) output << codex_monitor::Localized(L"（达到上限，非精确）");
     AppendMethodRefreshWarning(method, output);
     return output.str();
 }
 
 std::wstring FormatEstimatedUsd(double value) {
-    if (!std::isfinite(value) || value < 0.0) return L"--";
-    std::wostringstream output;
-    output << L'$' << std::fixed
-           << std::setprecision(value > 0.0 && value < 0.01 ? 4 : 2)
-           << value;
-    return output.str();
+    return codex_monitor::FormatDisplayMoney(value, displayCurrency, codex_monitor::DisplayExchangeRate(displayCurrency));
 }
 
 void AppendLocalCostPeriod(
@@ -1342,7 +1354,7 @@ void AppendLocalCostPeriod(
     if (period.pricedTokens > 0) {
         output << FormatEstimatedUsd(period.estimatedUsd);
     } else if (period.tokens > 0) {
-        output << L"费用样本不足";
+        output << codex_monitor::Localized(L"费用样本不足");
     } else {
         output << FormatEstimatedUsd(0.0);
     }
@@ -1360,66 +1372,66 @@ std::wstring BuildTokenCostCardText(const AppState& state) {
     if (!local.available) {
         output << L"\r\n";
         if (!state.latestCostHistory) {
-            output << L"正在建立安装后的统计起点";
+            output << codex_monitor::Localized(L"正在建立安装后的统计起点");
         } else {
             switch (state.latestCostHistory->status) {
                 case codex_monitor::codex::CodexCostRefreshStatus::kCodexHomeUnavailable:
-                    output << L"Codex 当前未返回本机数据目录";
+                    output << codex_monitor::Localized(L"Codex 当前未返回本机数据目录");
                     break;
                 case codex_monitor::codex::CodexCostRefreshStatus::kScanFailed:
-                    output << L"本机 Token 历史读取失败";
+                    output << codex_monitor::Localized(L"本机 Token 历史读取失败");
                     break;
                 case codex_monitor::codex::CodexCostRefreshStatus::kNoTokenEvents:
-                    output << L"安装后暂时没有新增 Token 数据";
+                    output << codex_monitor::Localized(L"安装后暂时没有新增 Token 数据");
                     break;
                 case codex_monitor::codex::CodexCostRefreshStatus::kAvailable:
-                    output << L"当前没有可显示的 Token 数据";
+                    output << codex_monitor::Localized(L"当前没有可显示的 Token 数据");
                     break;
             }
         }
-        output << L"\r\n费用将在取得模型样本后估算";
+        output << codex_monitor::Localized(L"\r\n费用将在取得模型样本后估算");
         return output.str();
     }
 
     output << L"\r\n";
-    AppendLocalCostPeriod(output, L"安装后近30日", local.last30Days);
+    AppendLocalCostPeriod(output, codex_monitor::Localized(L"安装后近30日"), local.last30Days);
     output << L"\r\n";
-    AppendLocalCostPeriod(output, L"今日", local.today);
+    AppendLocalCostPeriod(output, codex_monitor::Localized(L"今日"), local.today);
     output << L"  |  ";
-    AppendLocalCostPeriod(output, L"近7日", local.last7Days);
+    AppendLocalCostPeriod(output, codex_monitor::Localized(L"近7日"), local.last7Days);
     output << L"\r\n";
-    AppendLocalCostPeriod(output, L"本月", local.monthToDate);
-    output << L"  |  月末约：";
+    AppendLocalCostPeriod(output, codex_monitor::Localized(L"本月"), local.monthToDate);
+    output << codex_monitor::Localized(L"  |  月末约：");
     if (local.monthForecastEstimatedUsd > 0.0) {
         output << FormatEstimatedUsd(local.monthForecastEstimatedUsd);
     } else {
-        output << L"数据不足";
+        output << codex_monitor::Localized(L"数据不足");
     }
 
     if (local.available) {
-        output << L"\r\n本机计价样本覆盖：" << std::fixed << std::setprecision(0)
+        output << codex_monitor::Localized(L"\r\n本机计价样本覆盖：") << std::fixed << std::setprecision(0)
                << local.pricedTokenPercent << L'%';
         if (!local.topModel.empty()) {
-            output << L"  |  主模型："
+            output << codex_monitor::Localized(L"  |  主模型：")
                    << std::wstring(local.topModel.begin(), local.topModel.end());
         }
     }
     if (state.latestCostHistory) {
         if (state.latestCostHistory->coverageIncomplete) {
-            output << L"\r\n本机历史仍在补齐";
+            output << codex_monitor::Localized(L"\r\n本机历史仍在补齐");
         }
         if (state.latestCostHistory->skippedCompressedFiles > 0) {
-            output << L"\r\n压缩历史暂未读取";
+            output << codex_monitor::Localized(L"\r\n压缩历史暂未读取");
         }
         if (state.latestCostHistory->showingLastKnown) {
-            output << L"\r\n本次读取失败，显示上次历史";
+            output << codex_monitor::Localized(L"\r\n本次读取失败，显示上次历史");
         }
         if (state.latestCostHistory->historyCacheSaveFailed) {
-            output << L"\r\n历史缓存保存失败；下次启动将重新扫描";
+            output << codex_monitor::Localized(L"\r\n历史缓存保存失败；下次启动将重新扫描");
         }
     }
-    if (local.saturated) output << L"\r\n数值达到显示上限";
-    output << L"\r\n只统计安装后的本机Token；费用按API价格估算";
+    if (local.saturated) output << codex_monitor::Localized(L"\r\n数值达到显示上限");
+    output << codex_monitor::Localized(L"\r\n只统计安装后的本机Token；费用按API价格估算");
     return output.str();
 }
 
@@ -1429,13 +1441,13 @@ std::wstring BuildRecentTasksCardText(const AppState& state) {
     output << CodexModuleHeading(codex_monitor::ModuleId::kCodexRecentTasks);
     if (!method.lastValue) {
         output << L"\r\n" << CodexFailureReason(state);
-        output << L"\r\n状态口径：仅本次 app-server 进程范围";
+        output << codex_monitor::Localized(L"\r\n状态口径：仅本次 app-server 进程范围");
         return output.str();
     }
 
     const std::size_t count = std::min<std::size_t>(3, method.lastValue->threads.size());
     if (count == 0) {
-        output << L"\r\n暂无历史任务";
+        output << codex_monitor::Localized(L"\r\n暂无历史任务");
     } else {
         for (std::size_t index = 0; index < count; ++index) {
             const codex_monitor::codex::ProcessLocalThread& task =
@@ -1443,7 +1455,7 @@ std::wstring BuildRecentTasksCardText(const AppState& state) {
             std::wstring name = task.name
                 ? SanitizeDisplayText(*task.name, 42)
                 : std::wstring{};
-            if (name.empty()) name = L"未命名任务";
+            if (name.empty()) name = codex_monitor::Localized(L"未命名任务");
             output << L"\r\n" << index + 1 << L". " << name;
             if (task.recencyAtUnixSeconds) {
                 if (const auto updated = FormatUnixLocalTime(*task.recencyAtUnixSeconds)) {
@@ -1452,7 +1464,7 @@ std::wstring BuildRecentTasksCardText(const AppState& state) {
             }
         }
     }
-    output << L"\r\n状态口径：仅本次 app-server 进程范围";
+    output << codex_monitor::Localized(L"\r\n状态口径：仅本次 app-server 进程范围");
     AppendMethodRefreshWarning(method, output);
     return output.str();
 }
@@ -1461,14 +1473,14 @@ std::wstring FormatActivityDuration(std::int64_t seconds) {
     seconds = std::max<std::int64_t>(0, seconds);
     std::wostringstream output;
     if (seconds < 60) {
-        output << seconds << L"秒";
+        output << seconds << codex_monitor::Localized(L"秒");
     } else if (seconds < 3600) {
-        output << seconds / 60 << L"分";
-        if (seconds % 60 != 0) output << seconds % 60 << L"秒";
+        output << seconds / 60 << codex_monitor::Localized(L"分");
+        if (seconds % 60 != 0) output << seconds % 60 << codex_monitor::Localized(L"秒");
     } else {
-        output << seconds / 3600 << L"小时";
+        output << seconds / 3600 << codex_monitor::Localized(L"小时");
         const std::int64_t minutes = (seconds % 3600) / 60;
-        if (minutes != 0) output << minutes << L"分";
+        if (minutes != 0) output << minutes << codex_monitor::Localized(L"分");
     }
     return output.str();
 }
@@ -1479,52 +1491,52 @@ std::wstring BuildTaskActivityCardText(const AppState& state) {
     output << CodexModuleHeading(
         codex_monitor::ModuleId::kCodexTaskActivity);
     if (!state.hasCodexActivityRefresh) {
-        output << L"\r\n正在检查最近本机会话记录"
-                  L"\r\n活跃5秒 · 空闲20秒";
+        output << codex_monitor::Localized(L"\r\n正在检查最近本机会话记录"
+                  L"\r\n活跃5秒 · 空闲20秒");
         return output.str();
     }
     const auto& activity = state.latestCodexActivity;
     if (!activity.available()) {
         switch (activity.status) {
             case CodexActivityScanStatus::kRootNotFound:
-                output << L"\r\n未找到本机会话记录";
+                output << codex_monitor::Localized(L"\r\n未找到本机会话记录");
                 break;
             case CodexActivityScanStatus::kUnsafeRoot:
             case CodexActivityScanStatus::kRootNotDirectory:
-                output << L"\r\n本机会话目录不安全或不可用，未读取";
+                output << codex_monitor::Localized(L"\r\n本机会话目录不安全或不可用，未读取");
                 break;
             case CodexActivityScanStatus::kRecentFilesUnresolved:
-                output << L"\r\n近期记录已压缩、迁移或暂不可读"
-                          L"\r\n当前无法可靠判断活动";
+                output << codex_monitor::Localized(L"\r\n近期记录已压缩、迁移或暂不可读"
+                          L"\r\n当前无法可靠判断活动");
                 return output.str();
             case CodexActivityScanStatus::kInvalidArgument:
             case CodexActivityScanStatus::kIoError:
-                output << L"\r\n本机会话记录暂时不可读";
+                output << codex_monitor::Localized(L"\r\n本机会话记录暂时不可读");
                 break;
             case CodexActivityScanStatus::kCancelled:
-                output << L"\r\n检查已暂停";
+                output << codex_monitor::Localized(L"\r\n检查已暂停");
                 break;
             case CodexActivityScanStatus::kAvailable:
                 break;
         }
-        output << L"\r\n当前无法可靠判断活动";
+        output << codex_monitor::Localized(L"\r\n当前无法可靠判断活动");
         return output.str();
     }
     if (activity.activeTaskCount > 0) {
         output << L"\r\n" << activity.activeTaskCount
-               << (activity.partial ? L"个可确认活跃" : L"个活跃")
-               << L" · 最长"
+               << (activity.partial ? codex_monitor::Localized(L"个可确认活跃") : codex_monitor::Localized(L"个活跃"))
+               << codex_monitor::Localized(L" · 最长")
                << FormatActivityDuration(
                       activity.longestActiveTaskSeconds);
     } else {
         output << (activity.partial
-                       ? L"\r\n暂无可确认的活跃任务"
-                       : L"\r\n当前没有活跃任务");
+                       ? codex_monitor::Localized(L"\r\n暂无可确认的活跃任务")
+                       : codex_monitor::Localized(L"\r\n当前没有活跃任务"));
     }
     if (activity.partial) {
-        output << L"\r\n部分近期记录已压缩、迁移或暂不可读";
+        output << codex_monitor::Localized(L"\r\n部分近期记录已压缩、迁移或暂不可读");
     } else {
-        output << L"\r\n本机会话推测 · 活跃5秒 · 空闲20秒";
+        output << codex_monitor::Localized(L"\r\n本机会话推测 · 活跃5秒 · 空闲20秒");
     }
     return output.str();
 }
@@ -1557,9 +1569,9 @@ std::wstring BuildCodexCardText(codex_monitor::ModuleId id,
         case codex_monitor::ModuleId::kSystemIoThroughput:
         case codex_monitor::ModuleId::kCommitAndPageFile:
         case codex_monitor::ModuleId::kTopMemoryProcesses:
-            return L"Unavailable module";
+            return codex_monitor::Localized(L"Unavailable module");
     }
-    return L"Unavailable module";
+    return codex_monitor::Localized(L"Unavailable module");
 }
 
 std::wstring BuildModuleCardText(codex_monitor::ModuleId id,
@@ -1591,9 +1603,9 @@ std::wstring BuildModuleCardText(codex_monitor::ModuleId id,
         case codex_monitor::ModuleId::kCodexRecentTasks:
             return BuildCodexUnavailableText(id);
         case codex_monitor::ModuleId::kOpenAIServiceStatus:
-            return L"OPENAI OFFICIAL SERVICE STATUS\r\nWaiting for official status";
+            return codex_monitor::Localized(L"OPENAI OFFICIAL SERVICE STATUS\r\nWaiting for official status");
     }
-    return L"Unavailable module";
+    return codex_monitor::Localized(L"Unavailable module");
 }
 
 void UpdateModuleCards(AppState& state) {
@@ -1777,7 +1789,7 @@ bool CurrentPageNeedsServiceStatus(const AppState& state) {
 
 void UpdateStatusText(AppState& state) {
     std::wostringstream output;
-    output << L"Top: " << (state.settings.alwaysOnTop ? L"On" : L"Off");
+    output << codex_monitor::Localized(L"Top: ") << (state.settings.alwaysOnTop ? L"On" : codex_monitor::Localized(L"Off"));
     const bool needsPerformance = CurrentPageNeedsPerformance(state);
     const bool needsCodex = CurrentPageNeedsCodexData(state);
     const bool weeklyAlertEnabled =
@@ -1785,15 +1797,15 @@ void UpdateStatusText(AppState& state) {
     const bool needsActivity = CurrentPageNeedsCodexActivity(state);
     const bool needsService = CurrentPageNeedsServiceStatus(state);
     if (needsPerformance) {
-        output << L"  |  System: ";
+        output << codex_monitor::Localized(L"  |  System: ");
         if (state.windowMinimized) {
-            output << L"paused";
+            output << codex_monitor::Localized(L"paused");
         } else if (state.performanceWorker.IsBusy()) {
-            output << L"refreshing";
+            output << codex_monitor::Localized(L"refreshing");
         } else if (state.timerActive) {
             output << L"5 s / 20 s";
         } else {
-            output << L"unavailable";
+            output << codex_monitor::Localized(L"unavailable");
         }
         if (state.hasPerformanceSnapshot &&
             state.latestSnapshot.unreadableProcessMetricCount > 0) {
@@ -1805,13 +1817,13 @@ void UpdateStatusText(AppState& state) {
         output << L"  |  Codex: ";
         if (state.codexPaused ||
             (state.windowMinimized && !weeklyAlertEnabled)) {
-            output << L"paused";
+            output << codex_monitor::Localized(L"paused");
         } else if (!state.codexWorkerAvailable) {
-            output << L"unavailable";
+            output << codex_monitor::Localized(L"unavailable");
         } else if (state.codexWorker.IsBusy()) {
-            output << L"refreshing";
+            output << codex_monitor::Localized(L"refreshing");
         } else if (!state.hasCodexRefresh) {
-            output << L"waiting";
+            output << codex_monitor::Localized(L"waiting");
         } else if (!state.codexLastRefreshSucceeded) {
             const auto retryMinutes = std::max<std::int64_t>(
                 1, std::chrono::duration_cast<std::chrono::minutes>(
@@ -1823,31 +1835,31 @@ void UpdateStatusText(AppState& state) {
         if (weeklyAlertEnabled && !needsCodex) output << L" alert";
     }
     if (needsActivity) {
-        output << L"  |  Activity: ";
+        output << codex_monitor::Localized(L"  |  Activity: ");
         if (state.windowMinimized || state.windowHidden ||
             state.codexActivityPaused) {
-            output << L"paused";
+            output << codex_monitor::Localized(L"paused");
         } else if (!state.codexActivityWorkerAvailable) {
-            output << L"unavailable";
+            output << codex_monitor::Localized(L"unavailable");
         } else if (state.codexActivityWorker.IsBusy()) {
-            output << L"refreshing";
+            output << codex_monitor::Localized(L"refreshing");
         } else if (!state.hasCodexActivityRefresh) {
-            output << L"waiting";
+            output << codex_monitor::Localized(L"waiting");
         } else {
             output << state.codexActivityNextRefreshDelay.count() << L" s";
         }
     }
     if (needsService) {
-        output << L"  |  Service: ";
+        output << codex_monitor::Localized(L"  |  Service: ");
         if (state.windowMinimized || state.windowHidden ||
             state.serviceStatusPaused) {
-            output << L"paused";
+            output << codex_monitor::Localized(L"paused");
         } else if (!state.serviceStatusWorkerAvailable) {
-            output << L"unavailable";
+            output << codex_monitor::Localized(L"unavailable");
         } else if (state.serviceStatusWorker.IsBusy()) {
-            output << L"refreshing";
+            output << codex_monitor::Localized(L"refreshing");
         } else if (!state.hasServiceStatusRefresh) {
-            output << L"waiting";
+            output << codex_monitor::Localized(L"waiting");
         } else if (!state.serviceStatusLastRefreshSucceeded) {
             const auto retryMinutes = std::max<std::int64_t>(
                 1, std::chrono::duration_cast<std::chrono::minutes>(
@@ -1859,12 +1871,12 @@ void UpdateStatusText(AppState& state) {
     }
     if (!needsPerformance && !needsCodex && !weeklyAlertEnabled &&
         !needsActivity && !needsService) {
-        output << L"  |  No active data modules";
+        output << codex_monitor::Localized(L"  |  No active data modules");
     }
     if (state.updateInstallWorker.IsBusy()) {
-        output << L"  |  Update: preparing";
+        output << codex_monitor::Localized(L"  |  Update: preparing");
     } else if (!state.availableUpdateVersion.empty()) {
-        output << L"  |  Update: "
+        output << codex_monitor::Localized(L"  |  Update: ")
                << std::wstring(state.availableUpdateVersion.begin(),
                                state.availableUpdateVersion.end());
     }
@@ -1879,7 +1891,7 @@ void UpdateTopmostState(HWND window, AppState& state, bool enabled, bool persist
     state.settings.alwaysOnTop = enabled;
     SetWindowPos(window, enabled ? HWND_TOPMOST : HWND_NOTOPMOST, 0, 0, 0, 0,
                  SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-    SetWindowTextW(state.pinButton, enabled ? L"Unpin" : L"Pin on top");
+    SetWindowTextW(state.pinButton, enabled ? codex_monitor::Localized(L"Unpin") : codex_monitor::Localized(L"Pin on top"));
     if (state.settingsTopmostCheck) {
         SendMessageW(state.settingsTopmostCheck, BM_SETCHECK,
                      enabled ? BST_CHECKED : BST_UNCHECKED, 0);
@@ -1890,7 +1902,7 @@ void UpdateTopmostState(HWND window, AppState& state, bool enabled, bool persist
 
 void UpdateWindowLockState(AppState& state, bool locked, bool persist) {
     state.settings.windowLocked = locked;
-    SetWindowTextW(state.windowLockButton, locked ? L"Unlock" : L"Lock");
+    SetWindowTextW(state.windowLockButton, locked ? codex_monitor::Localized(L"Unlock") : codex_monitor::Localized(L"Lock"));
     if (state.settingsWindowLockCheck) {
         SendMessageW(state.settingsWindowLockCheck, BM_SETCHECK,
                      locked ? BST_CHECKED : BST_UNCHECKED, 0);
@@ -1910,8 +1922,8 @@ void StartSamplingTimer(HWND window, AppState& state) {
 }
 
 void ShowSamplingRefreshState(AppState& state) {
-    constexpr wchar_t message[] =
-        L"REFRESHING PERFORMANCE DATA\r\nWaiting for background sample";
+    const wchar_t* message =
+        codex_monitor::Localized(L"REFRESHING PERFORMANCE DATA\r\nWaiting for background sample");
     for (const ModuleViews& views : state.moduleViews) {
         const std::size_t index = codex_monitor::ModuleIndex(views.id);
         const codex_monitor::ModuleDefinition& definition =
@@ -2218,12 +2230,12 @@ void UpdatePageVisibility(AppState& state) {
     if (nativeEmpty && isCodex) {
         SetWindowTextW(
             state.codexNotice,
-            L"Codex 页面当前未选择任何模块。\r\n\r\n"
-            L"请打开设置，启用一个或多个 Codex 模块。");
+            codex_monitor::Localized(L"Codex 页面当前未选择任何模块。\r\n\r\n"
+            L"请打开设置，启用一个或多个 Codex 模块。"));
     } else if (nativeEmpty) {
         SetWindowTextW(state.codexNotice,
-                       L"No modules are shown on Computer.\r\n\r\n"
-                       L"Open Settings and enable one or more modules for its own page.");
+                       codex_monitor::Localized(L"No modules are shown on Computer.\r\n\r\n"
+                       L"Open Settings and enable one or more modules for its own page."));
     }
     ShowWindow(state.codexNotice, nativeEmpty ? SW_SHOW : SW_HIDE);
     const bool homeEmpty = isHome && visibleHome.empty();
@@ -2234,12 +2246,12 @@ void UpdatePageVisibility(AppState& state) {
                             : (isCodex ? kCodexPageButtonId : kComputerPageButtonId));
 
     if (isHome) {
-        SetWindowTextW(state.subtitle, L"Home - selected performance and Codex modules");
+        SetWindowTextW(state.subtitle, codex_monitor::Localized(L"Home - selected performance and Codex modules"));
     } else if (isCodex) {
         SetWindowTextW(state.subtitle,
-                       L"Codex - read-only data and official service status");
+                       codex_monitor::Localized(L"Codex - read-only data and official service status"));
     } else {
-        SetWindowTextW(state.subtitle, L"Computer performance - Windows native metrics");
+        SetWindowTextW(state.subtitle, codex_monitor::Localized(L"Computer performance - Windows native metrics"));
     }
 }
 
@@ -2405,7 +2417,7 @@ void LayoutControls(HWND window, AppState& state) {
         const std::wstring version(
             state.availableUpdateVersion.begin(),
             state.availableUpdateVersion.end());
-        const std::wstring text = L"发现新版 " + version + L" · 点击查看更新";
+        const std::wstring text = codex_monitor::Localized(L"发现新版 ") + version + codex_monitor::Localized(L" · 点击查看更新");
         SetWindowTextW(state.updateBannerButton, text.c_str());
         const int bannerHeight =
             ScaleForUi(window, 34, state.settings.windowScale);
@@ -2431,31 +2443,31 @@ void LayoutControls(HWND window, AppState& state) {
 bool CreateControls(HWND window, AppState& state) {
     state.mainWindow = window;
     state.heading = CreateLabel(window, L"Codex Monitor HUD", SS_LEFT | SS_CENTERIMAGE);
-    state.subtitle = CreateLabel(window, L"Starting Windows product shell",
+    state.subtitle = CreateLabel(window, codex_monitor::Localized(L"Starting Windows product shell"),
                                  SS_LEFT | SS_CENTERIMAGE);
-    state.status = CreateLabel(window, L"Evaluating sampler demand", SS_LEFT | SS_CENTERIMAGE);
-    state.pinButton = CreateButton(window, L"Unpin", kPinButtonId);
-    state.windowLockButton = CreateButton(window, L"Lock", kWindowLockButtonId);
-    state.minimizeButton = CreateButton(window, L"Minimize", kMinimizeButtonId);
-    state.homePageButton = CreateButton(window, L"Home", kHomePageButtonId,
+    state.status = CreateLabel(window, codex_monitor::Localized(L"Evaluating sampler demand"), SS_LEFT | SS_CENTERIMAGE);
+    state.pinButton = CreateButton(window, codex_monitor::Localized(L"Unpin"), kPinButtonId);
+    state.windowLockButton = CreateButton(window, codex_monitor::Localized(L"Lock"), kWindowLockButtonId);
+    state.minimizeButton = CreateButton(window, codex_monitor::Localized(L"Minimize"), kMinimizeButtonId);
+    state.homePageButton = CreateButton(window, codex_monitor::Localized(L"Home"), kHomePageButtonId,
                                         BS_AUTORADIOBUTTON | BS_PUSHLIKE | WS_GROUP);
     state.codexPageButton = CreateButton(window, L"Codex", kCodexPageButtonId,
                                          BS_AUTORADIOBUTTON | BS_PUSHLIKE);
-    state.computerPageButton = CreateButton(window, L"Computer", kComputerPageButtonId,
+    state.computerPageButton = CreateButton(window, codex_monitor::Localized(L"Computer"), kComputerPageButtonId,
                                             BS_AUTORADIOBUTTON | BS_PUSHLIKE);
-    state.settingsButton = CreateButton(window, L"Settings", kSettingsButtonId);
+    state.settingsButton = CreateButton(window, codex_monitor::Localized(L"Settings"), kSettingsButtonId);
     state.updateBannerButton = CreateButton(
-        window, L"发现新版 · 点击查看更新", kUpdateBannerButtonId,
+        window, codex_monitor::Localized(L"发现新版 · 点击查看更新"), kUpdateBannerButtonId,
         BS_DEFPUSHBUTTON);
     state.codexNotice = CreateLabel(
         window,
-        L"Codex 页面当前未选择任何模块。\r\n\r\n"
-        L"请打开设置，启用一个或多个 Codex 模块。",
+        codex_monitor::Localized(L"Codex 页面当前未选择任何模块。\r\n\r\n"
+        L"请打开设置，启用一个或多个 Codex 模块。"),
         SS_LEFT | WS_BORDER);
     state.emptyHomeNotice = CreateLabel(
         window,
-        L"No modules are shown on Home.\r\n\r\nOpen Settings to choose one or more "
-        L"performance or Codex modules.",
+        codex_monitor::Localized(L"No modules are shown on Home.\r\n\r\nOpen Settings to choose one or more "
+        L"performance or Codex modules."),
         SS_LEFT | WS_BORDER);
 
     for (const codex_monitor::ModuleDefinition& definition :
@@ -2463,7 +2475,7 @@ bool CreateControls(HWND window, AppState& state) {
         ModuleViews views;
         views.id = definition.id;
         const std::wstring initialText = definition.requiresPerformanceSampling
-            ? L"Starting sampler"
+            ? codex_monitor::Localized(L"Starting sampler")
             : definition.requiresCodexData
                 ? BuildCodexUnavailableText(definition.id)
                 : definition.requiresCodexActivity
@@ -2726,29 +2738,29 @@ std::wstring WindowsUpdateInstallFailureText(
     using codex_monitor::update::WindowsUpdateInstallStatus;
     switch (status) {
         case WindowsUpdateInstallStatus::kHelperStarted:
-            return L"更新已校验，正在安全重启…";
+            return codex_monitor::Localized(L"更新已校验，正在安全重启…");
         case WindowsUpdateInstallStatus::kCancelled:
-            return L"更新已取消；当前版本继续运行";
+            return codex_monitor::Localized(L"更新已取消；当前版本继续运行");
         case WindowsUpdateInstallStatus::kPublisherNotConfigured:
-            return L"此构建未配置正式发布者签名";
+            return codex_monitor::Localized(L"此构建未配置正式发布者签名");
         case WindowsUpdateInstallStatus::kUpdateDirectoryUnavailable:
-            return L"无法创建安全更新目录；未安装";
+            return codex_monitor::Localized(L"无法创建安全更新目录；未安装");
         case WindowsUpdateInstallStatus::kChecksumDownloadFailed:
         case WindowsUpdateInstallStatus::kChecksumReadFailed:
         case WindowsUpdateInstallStatus::kChecksumRejected:
-            return L"更新校验文件失败；未安装";
+            return codex_monitor::Localized(L"更新校验文件失败；未安装");
         case WindowsUpdateInstallStatus::kInstallerDownloadFailed:
-            return L"安装包下载失败；未安装";
+            return codex_monitor::Localized(L"安装包下载失败；未安装");
         case WindowsUpdateInstallStatus::kHelperLaunchFailed:
-            return L"安全启动检查失败；未安装";
+            return codex_monitor::Localized(L"安全启动检查失败；未安装");
         case WindowsUpdateInstallStatus::kInvalidInput:
-            return L"更新信息不完整；请重新检查";
+            return codex_monitor::Localized(L"更新信息不完整；请重新检查");
         case WindowsUpdateInstallStatus::kUnsupportedPlatform:
-            return L"当前系统不支持自动安装";
+            return codex_monitor::Localized(L"当前系统不支持自动安装");
         case WindowsUpdateInstallStatus::kUnexpected:
-            return L"自动更新失败；当前版本继续运行";
+            return codex_monitor::Localized(L"自动更新失败；当前版本继续运行");
     }
-    return L"自动更新失败；当前版本继续运行";
+    return codex_monitor::Localized(L"自动更新失败；当前版本继续运行");
 }
 
 void RefreshUpdateControls(AppState& state) {
@@ -2761,47 +2773,47 @@ void RefreshUpdateControls(AppState& state) {
     const bool installing = preflight.updateInstallBusy;
     std::wstring message;
     if (installing) {
-        message = L"正在下载并校验 Windows 更新…";
+        message = codex_monitor::Localized(L"正在下载并校验 Windows 更新…");
     } else if (state.latestUpdateInstall.has_value()) {
         message = WindowsUpdateInstallFailureText(
             state.latestUpdateInstall->status);
     } else if (!state.updateWorkerAvailable) {
-        message = L"Windows 更新检查当前不可用";
+        message = codex_monitor::Localized(L"Windows 更新检查当前不可用");
     } else if (checking) {
-        message = L"正在检查 Windows 更新…";
+        message = codex_monitor::Localized(L"正在检查 Windows 更新…");
     } else if (!state.latestUpdateCheck) {
-        message = L"每天自动检查一次，也可以手动检查";
+        message = codex_monitor::Localized(L"每天自动检查一次，也可以手动检查");
     } else {
         const auto& completed = *state.latestUpdateCheck;
         if (completed.fromCache && !completed.availableVersion.empty()) {
-            message = L"已记录 Windows 新版 " +
+            message = codex_monitor::Localized(L"已记录 Windows 新版 ") +
                       std::wstring(completed.availableVersion.begin(),
                                    completed.availableVersion.end());
         } else {
             switch (completed.result.status) {
                 case codex_monitor::update::WindowsUpdateCheckStatus::kUpdateAvailable:
-                    message = L"发现 Windows 新版 " +
+                    message = codex_monitor::Localized(L"发现 Windows 新版 ") +
                               std::wstring(completed.availableVersion.begin(),
                                            completed.availableVersion.end());
                     break;
                 case codex_monitor::update::WindowsUpdateCheckStatus::kUpToDate:
-                    message = L"当前 Windows 版已是最新版";
+                    message = codex_monitor::Localized(L"当前 Windows 版已是最新版");
                     break;
                 case codex_monitor::update::WindowsUpdateCheckStatus::kFetchFailed:
-                    message = L"更新检查失败；不会影响监控";
+                    message = codex_monitor::Localized(L"更新检查失败；不会影响监控");
                     break;
                 case codex_monitor::update::WindowsUpdateCheckStatus::kInvalidCurrentVersion:
-                    message = L"当前版本号无法用于自动更新";
+                    message = codex_monitor::Localized(L"当前版本号无法用于自动更新");
                     break;
                 case codex_monitor::update::WindowsUpdateCheckStatus::kInvalidResponse:
-                    message = L"GitHub 更新信息格式异常";
+                    message = codex_monitor::Localized(L"GitHub 更新信息格式异常");
                     break;
             }
         }
-        if (completed.stateSaveFailed) message += L"；检查记录未保存";
+        if (completed.stateSaveFailed) message += codex_monitor::Localized(L"；检查记录未保存");
     }
     if (!preflight.runningFromMsiInstalledHud && !installing) {
-        message += L"；便携版请下载 MSI 安装包更新";
+        message += codex_monitor::Localized(L"；便携版请下载 MSI 安装包更新");
     }
     SetWindowTextW(state.settingsUpdateStatus, message.c_str());
     EnableWindow(state.settingsCheckUpdatesButton,
@@ -2811,12 +2823,12 @@ void RefreshUpdateControls(AppState& state) {
     EnableWindow(state.settingsInstallUpdateButton, installEnabled);
     SetWindowTextW(
         state.settingsInstallUpdateButton,
-        installing ? L"正在准备…"
+        installing ? codex_monitor::Localized(L"正在准备…")
                    : (!preflight.runningFromMsiInstalledHud
-                          ? L"便携版不可安装"
+                          ? codex_monitor::Localized(L"便携版不可安装")
                           : (!preflight.publisherConfigured
-                                 ? L"签名后启用"
-                                 : L"安装更新")));
+                                 ? codex_monitor::Localized(L"签名后启用")
+                                 : codex_monitor::Localized(L"安装更新"))));
 }
 
 void RefreshWeeklyQuotaAlertControls(AppState& state) {
@@ -2837,7 +2849,7 @@ void RefreshWeeklyQuotaAlertControls(AppState& state) {
     }
     if (state.settingsWeeklyAlertThresholdLabel) {
         const std::wstring text =
-            L"提醒阈值：" + std::to_wstring(threshold) + L"%";
+            codex_monitor::Localized(L"提醒阈值：") + std::to_wstring(threshold) + L"%";
         SetWindowTextW(state.settingsWeeklyAlertThresholdLabel, text.c_str());
     }
     const bool rolling = state.settings.weeklyQuotaAlert.mode ==
@@ -2855,11 +2867,11 @@ void RefreshWeeklyQuotaAlertControls(AppState& state) {
     if (state.settingsWeeklyAlertStatus) {
         std::wstring text;
         if (!enabled) {
-            text = L"默认关闭；开启后每5分钟复用额度刷新，不增加额外轮询。";
+            text = codex_monitor::Localized(L"默认关闭；开启后每5分钟复用额度刷新，不增加额外轮询。");
         } else if (!state.weeklyQuotaNotification.available()) {
-            text = L"已开启；系统通知暂不可用，不会误记为已提醒。";
+            text = codex_monitor::Localized(L"已开启；系统通知暂不可用，不会误记为已提醒。");
         } else {
-            text = L"已开启；数据不足时不提醒，同一周期只提醒一次。";
+            text = codex_monitor::Localized(L"已开启；数据不足时不提醒，同一周期只提醒一次。");
         }
         if (state.latestWeeklyQuotaAlertDelivery) {
             using Status =
@@ -2870,7 +2882,7 @@ void RefreshWeeklyQuotaAlertControls(AppState& state) {
                 status == Status::kStateUnavailable ||
                 status == Status::kHistoryUnavailable ||
                 status == Status::kNotificationFailedStateRestoreFailed) {
-                text += L" 当前记录不可用，本轮已安全抑制。";
+                text += codex_monitor::Localized(L" 当前记录不可用，本轮已安全抑制。");
             }
         }
         SetWindowTextW(state.settingsWeeklyAlertStatus, text.c_str());
@@ -2940,7 +2952,7 @@ void LayoutSettingsControls(HWND window, AppState& state) {
     const int rowCount = static_cast<int>(state.settings.homeOrder.size());
     const int contentHeight = margin + headingAdvance +
         rowCount * (rowHeight + gap) + ScaleForDpi(window, 4) +
-        rowHeight * 11 + gap * 4 + ScaleForDpi(window, 52) + margin;
+        rowHeight * 15 + gap * 8 + ScaleForDpi(window, 52) + margin;
     state.settingsScrollMaximum = std::max(0, contentHeight - height);
     state.settingsScrollOffset =
         std::clamp(state.settingsScrollOffset, 0, state.settingsScrollMaximum);
@@ -2959,6 +2971,19 @@ void LayoutSettingsControls(HWND window, AppState& state) {
     MoveWindow(state.settingsHeading, margin, y, width - margin * 2,
                headingHeight, TRUE);
     y += headingAdvance;
+    MoveWindow(state.settingsLanguage, margin, y, (width-margin*3)/2,
+               rowHeight*8, TRUE);
+    MoveWindow(state.settingsCurrency, width/2, y, (width-margin*3)/2,
+               rowHeight*8, TRUE);
+    y += rowHeight + gap;
+    MoveWindow(state.settingsDisplayHint, margin, y, width-margin*2, rowHeight*2, TRUE);
+    y += rowHeight*2 + gap;
+    MoveWindow(state.settingsSubscriptionDate, margin, y, ScaleForDpi(window,130), rowHeight, TRUE);
+    MoveWindow(state.settingsSubscriptionSave, margin+ScaleForDpi(window,140), y,
+               ScaleForDpi(window,150), rowHeight, TRUE);
+    MoveWindow(state.settingsBilling, margin+ScaleForDpi(window,300), y,
+               std::max(ScaleForDpi(window,130),width-margin*2-ScaleForDpi(window,300)), rowHeight, TRUE);
+    y += rowHeight + gap*2;
     for (codex_monitor::ModuleId id : state.settings.homeOrder) {
         SettingsRow* row = FindSettingsRow(state, id);
         if (!row) continue;
@@ -3066,9 +3091,34 @@ bool SetSettingsScrollOffset(HWND window, AppState& state, int requestedOffset) 
 }
 
 bool CreateSettingsControls(HWND window, AppState& state) {
+    const auto combo = [&](int id) {
+        return CreateWindowExW(0, L"COMBOBOX", L"", WS_CHILD|WS_VISIBLE|WS_TABSTOP|CBS_DROPDOWNLIST|WS_VSCROLL,
+            0,0,0,0,window,reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)),GetModuleHandleW(nullptr),nullptr);
+    };
+    state.settingsLanguage = combo(kSettingsLanguageId);
+    state.settingsCurrency = combo(kSettingsCurrencyId);
+    const wchar_t* languageNames[]{L"简体中文",L"繁體中文",L"English",L"日本語",L"한국어"};
+    for (std::size_t i=0;i<5;++i) {
+        SendMessageW(state.settingsLanguage, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(languageNames[i]));
+        const auto code = codex_monitor::kDisplayCurrencies[i];
+        const std::wstring label(code.begin(),code.end());
+        SendMessageW(state.settingsCurrency, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(label.c_str()));
+        if (state.settings.displayLanguage == codex_monitor::kDisplayLanguages[i]) SendMessageW(state.settingsLanguage,CB_SETCURSEL,i,0);
+        if (state.settings.displayCurrency == code) SendMessageW(state.settingsCurrency,CB_SETCURSEL,i,0);
+    }
+    const auto fxDate = codex_monitor::DisplayExchangeRateDate();
+    const std::wstring displayHint = std::wstring(codex_monitor::Localized(L"语言重启后生效；币种立即生效。")) + L"\r\n" +
+        codex_monitor::Localized(L"费用为API估算，非账单；汇率日期：") + std::wstring(fxDate.begin(),fxDate.end());
+    state.settingsDisplayHint = CreateLabel(window,displayHint.c_str(),SS_LEFT);
+    const std::wstring date(state.settings.subscriptionDate.begin(),state.settings.subscriptionDate.end());
+    state.settingsSubscriptionDate = CreateWindowExW(WS_EX_CLIENTEDGE,L"EDIT",date.c_str(),
+        WS_CHILD|WS_VISIBLE|WS_TABSTOP|ES_AUTOHSCROLL,0,0,0,0,window,nullptr,GetModuleHandleW(nullptr),nullptr);
+    SendMessageW(state.settingsSubscriptionDate,EM_SETLIMITTEXT,10,0);
+    state.settingsSubscriptionSave = CreateButton(window,codex_monitor::Localized(L"保存订阅日期"),kSettingsSubscriptionSaveId);
+    state.settingsBilling = CreateButton(window,codex_monitor::Localized(L"打开官方账单页"),kSettingsBillingId);
     state.settingsHeading = CreateLabel(
         window,
-        L"Columns: module | Home visibility | own-page visibility | Home order",
+        codex_monitor::Localized(L"Columns: module | Home visibility | own-page visibility | Home order"),
         SS_LEFT | SS_CENTERIMAGE);
     state.settingsRows.clear();
     for (const codex_monitor::ModuleDefinition& definition :
@@ -3077,16 +3127,16 @@ bool CreateSettingsControls(HWND window, AppState& state) {
         SettingsRow row;
         row.id = definition.id;
         row.nameLabel = CreateLabel(
-            window, std::wstring(definition.displayName).c_str(),
+            window, codex_monitor::Localized(std::wstring(definition.displayName).c_str()),
             SS_LEFT | SS_CENTERIMAGE);
         row.homeVisibleCheck = CreateWindowExW(
-            0, L"BUTTON", L"Home",
+            0, L"BUTTON", codex_monitor::Localized(L"Home"),
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
             0, 0, 0, 0, window,
             reinterpret_cast<HMENU>(static_cast<INT_PTR>(kSettingsVisibleBaseId + index)),
             GetModuleHandleW(nullptr), nullptr);
         const wchar_t* nativePageLabel =
-            definition.nativePage == codex_monitor::Page::kCodex ? L"Codex" : L"Computer";
+            definition.nativePage == codex_monitor::Page::kCodex ? L"Codex" : codex_monitor::Localized(L"Computer");
         row.nativeVisibleCheck = CreateWindowExW(
             0, L"BUTTON", nativePageLabel,
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
@@ -3094,33 +3144,33 @@ bool CreateSettingsControls(HWND window, AppState& state) {
             reinterpret_cast<HMENU>(
                 static_cast<INT_PTR>(kSettingsNativeVisibleBaseId + index)),
             GetModuleHandleW(nullptr), nullptr);
-        row.moveUpButton = CreateButton(window, L"Up", kSettingsMoveUpBaseId + index);
-        row.moveDownButton = CreateButton(window, L"Down", kSettingsMoveDownBaseId + index);
+        row.moveUpButton = CreateButton(window, codex_monitor::Localized(L"Up"), kSettingsMoveUpBaseId + index);
+        row.moveDownButton = CreateButton(window, codex_monitor::Localized(L"Down"), kSettingsMoveDownBaseId + index);
         state.settingsRows.push_back(row);
     }
     state.settingsTopmostCheck = CreateWindowExW(
-        0, L"BUTTON", L"始终置顶",
+        0, L"BUTTON", codex_monitor::Localized(L"始终置顶"),
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
         0, 0, 0, 0, window,
         reinterpret_cast<HMENU>(static_cast<INT_PTR>(kSettingsTopmostId)),
         GetModuleHandleW(nullptr), nullptr);
     state.settingsWindowLockCheck = CreateWindowExW(
-        0, L"BUTTON", L"锁定主窗口位置和大小",
+        0, L"BUTTON", codex_monitor::Localized(L"锁定主窗口位置和大小"),
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
         0, 0, 0, 0, window,
         reinterpret_cast<HMENU>(static_cast<INT_PTR>(kSettingsWindowLockId)),
         GetModuleHandleW(nullptr), nullptr);
     state.settingsCornerLabel = CreateLabel(
-        window, L"窗口位置", SS_LEFT | SS_CENTERIMAGE);
-    constexpr std::array<const wchar_t*, 4> cornerLabels{
-        L"左上", L"右上", L"左下", L"右下"};
+        window, codex_monitor::Localized(L"窗口位置"), SS_LEFT | SS_CENTERIMAGE);
+    const std::array<const wchar_t*, 4> cornerLabels{
+        codex_monitor::Localized(L"左上"), codex_monitor::Localized(L"右上"), codex_monitor::Localized(L"左下"), codex_monitor::Localized(L"右下")};
     for (std::size_t index = 0; index < cornerLabels.size(); ++index) {
         state.settingsCornerButtons[index] = CreateButton(
             window, cornerLabels[index],
             kSettingsCornerBaseId + static_cast<int>(index));
     }
     state.settingsOpacityLabel = CreateLabel(
-        window, L"整体透明度", SS_LEFT | SS_CENTERIMAGE);
+        window, codex_monitor::Localized(L"整体透明度"), SS_LEFT | SS_CENTERIMAGE);
     constexpr std::array<const wchar_t*, 4> opacityLabels{
         L"70%", L"82%", L"90%", L"100%"};
     for (std::size_t index = 0; index < opacityLabels.size(); ++index) {
@@ -3130,9 +3180,9 @@ bool CreateSettingsControls(HWND window, AppState& state) {
             BS_AUTORADIOBUTTON | (index == 0 ? WS_GROUP : 0));
     }
     state.settingsThemeLabel = CreateLabel(
-        window, L"低饱和主题", SS_LEFT | SS_CENTERIMAGE);
-    constexpr std::array<const wchar_t*, 4> themeLabels{
-        L"蓝", L"绿", L"紫", L"橙"};
+        window, codex_monitor::Localized(L"低饱和主题"), SS_LEFT | SS_CENTERIMAGE);
+    const std::array<const wchar_t*, 4> themeLabels{
+        codex_monitor::Localized(L"蓝"), codex_monitor::Localized(L"绿"), codex_monitor::Localized(L"紫"), codex_monitor::Localized(L"橙")};
     for (std::size_t index = 0; index < themeLabels.size(); ++index) {
         state.settingsThemeButtons[index] = CreateButton(
             window, themeLabels[index],
@@ -3140,14 +3190,14 @@ bool CreateSettingsControls(HWND window, AppState& state) {
             BS_AUTORADIOBUTTON | (index == 0 ? WS_GROUP : 0));
     }
     state.settingsWeeklyAlertEnabledCheck = CreateWindowExW(
-        0, L"BUTTON", L"周额度消耗提醒",
+        0, L"BUTTON", codex_monitor::Localized(L"周额度消耗提醒"),
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
         0, 0, 0, 0, window,
         reinterpret_cast<HMENU>(
             static_cast<INT_PTR>(kSettingsWeeklyAlertEnabledId)),
         GetModuleHandleW(nullptr), nullptr);
     state.settingsWeeklyAlertThresholdLabel = CreateLabel(
-        window, L"提醒阈值：15%", SS_LEFT | SS_CENTERIMAGE);
+        window, codex_monitor::Localized(L"提醒阈值：15%"), SS_LEFT | SS_CENTERIMAGE);
     state.settingsWeeklyAlertThresholdSlider = CreateWindowExW(
         0, TRACKBAR_CLASSW, L"",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | TBS_HORZ | TBS_AUTOTICKS,
@@ -3164,29 +3214,29 @@ bool CreateSettingsControls(HWND window, AppState& state) {
                      TBM_SETPAGESIZE, 0, 5);
     }
     state.settingsWeeklyAlertRollingRadio = CreateWindowExW(
-        0, L"BUTTON", L"滚动24小时",
+        0, L"BUTTON", codex_monitor::Localized(L"滚动24小时"),
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_GROUP | BS_AUTORADIOBUTTON,
         0, 0, 0, 0, window,
         reinterpret_cast<HMENU>(
             static_cast<INT_PTR>(kSettingsWeeklyAlertRollingId)),
         GetModuleHandleW(nullptr), nullptr);
     state.settingsWeeklyAlertNaturalRadio = CreateWindowExW(
-        0, L"BUTTON", L"自然日（本地）",
+        0, L"BUTTON", codex_monitor::Localized(L"自然日（本地）"),
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTORADIOBUTTON,
         0, 0, 0, 0, window,
         reinterpret_cast<HMENU>(
             static_cast<INT_PTR>(kSettingsWeeklyAlertNaturalId)),
         GetModuleHandleW(nullptr), nullptr);
     state.settingsWeeklyAlertStatus = CreateLabel(
-        window, L"默认关闭", SS_LEFT | SS_CENTERIMAGE);
+        window, codex_monitor::Localized(L"默认关闭"), SS_LEFT | SS_CENTERIMAGE);
     state.settingsUpdateStatus = CreateLabel(
-        window, L"每天自动检查一次，也可以手动检查",
+        window, codex_monitor::Localized(L"每天自动检查一次，也可以手动检查"),
         SS_LEFT | SS_CENTERIMAGE);
     state.settingsCheckUpdatesButton =
-        CreateButton(window, L"检查更新", kSettingsCheckUpdatesId);
+        CreateButton(window, codex_monitor::Localized(L"检查更新"), kSettingsCheckUpdatesId);
     state.settingsInstallUpdateButton =
-        CreateButton(window, L"安装更新", kSettingsInstallUpdateId);
-    state.settingsCloseButton = CreateButton(window, L"Close", kSettingsCloseId);
+        CreateButton(window, codex_monitor::Localized(L"安装更新"), kSettingsInstallUpdateId);
+    state.settingsCloseButton = CreateButton(window, codex_monitor::Localized(L"Close"), kSettingsCloseId);
 
     if (!state.settingsHeading || !state.settingsTopmostCheck ||
         !state.settingsWindowLockCheck || !state.settingsCornerLabel ||
@@ -3214,6 +3264,11 @@ bool CreateSettingsControls(HWND window, AppState& state) {
     }
 
     RecreateSettingsFonts(window, state);
+    for (HWND control : {state.settingsLanguage,state.settingsCurrency,state.settingsDisplayHint,
+         state.settingsSubscriptionDate,state.settingsSubscriptionSave,state.settingsBilling}) {
+        if (!control) return false;
+        ApplyFont(control,state.settingsSmallFont);
+    }
     RefreshSettingsControls(state);
     return true;
 }
@@ -3247,7 +3302,7 @@ void OpenSettingsWindow(HWND owner, AppState& state) {
     state.settingsScrollMaximum = 0;
     state.settingsWheelDeltaRemainder = 0;
     state.settingsWindow = CreateWindowExW(
-        WS_EX_TOOLWINDOW, kSettingsWindowClassName, L"Codex Monitor HUD Settings",
+        WS_EX_TOOLWINDOW, kSettingsWindowClassName, codex_monitor::Localized(L"Codex Monitor HUD Settings"),
         WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_VSCROLL,
         x, y, width, height, owner, nullptr, GetModuleHandleW(nullptr), &state);
     if (state.settingsWindow) {
@@ -3272,8 +3327,32 @@ LRESULT CALLBACK SettingsWindowProcedure(HWND window, UINT message,
             return 0;
 
         case WM_COMMAND: {
-            if (!state || HIWORD(wParam) != BN_CLICKED) break;
+            if (!state) break;
             const int controlId = LOWORD(wParam);
+            if ((controlId == kSettingsLanguageId || controlId == kSettingsCurrencyId) && HIWORD(wParam) == CBN_SELCHANGE) {
+                const auto selected = SendMessageW(reinterpret_cast<HWND>(lParam),CB_GETCURSEL,0,0);
+                if (selected >= 0 && selected < 5) {
+                    if (controlId == kSettingsLanguageId) state->settings.displayLanguage = codex_monitor::kDisplayLanguages[selected];
+                    else { state->settings.displayCurrency = codex_monitor::kDisplayCurrencies[selected]; displayCurrency = state->settings.displayCurrency; }
+                    PersistSettings(*state);
+                }
+                return 0;
+            }
+            if (HIWORD(wParam) != BN_CLICKED) break;
+            if (controlId == kSettingsSubscriptionSaveId) {
+                wchar_t date[11]{};
+                GetWindowTextW(state->settingsSubscriptionDate,date,11);
+                const std::wstring wide(date);
+                const std::string value(wide.begin(),wide.end());
+                if (std::any_of(wide.begin(),wide.end(),[](wchar_t c){return c > 127;}) || !codex_monitor::IsSubscriptionDate(value)) {
+                    SetWindowTextW(state->settingsDisplayHint,codex_monitor::Localized(L"请填写有效日期 YYYY-MM-DD；留空可取消。"));
+                } else { state->settings.subscriptionDate = value; PersistSettings(*state); }
+                return 0;
+            }
+            if (controlId == kSettingsBillingId) {
+                ShellExecuteW(window,L"open",L"https://chatgpt.com/#settings/Account",nullptr,nullptr,SW_SHOWNORMAL);
+                return 0;
+            }
             if (controlId >= kSettingsVisibleBaseId &&
                 controlId < kSettingsVisibleBaseId + static_cast<int>(codex_monitor::kModuleCount)) {
                 const std::size_t index = static_cast<std::size_t>(controlId - kSettingsVisibleBaseId);
@@ -3473,7 +3552,7 @@ LRESULT CALLBACK SettingsWindowProcedure(HWND window, UINT message,
                     static_cast<double>(threshold);
                 if (state->settingsWeeklyAlertThresholdLabel) {
                     const std::wstring label =
-                        L"提醒阈值：" + std::to_wstring(threshold) + L"%";
+                        codex_monitor::Localized(L"提醒阈值：") + std::to_wstring(threshold) + L"%";
                     SetWindowTextW(state->settingsWeeklyAlertThresholdLabel,
                                    label.c_str());
                 }
@@ -4217,6 +4296,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand) {
     AppState state;
     state.settingsPath = codex_monitor::DefaultSettingsPath();
     state.settings = codex_monitor::LoadSettingsFile(state.settingsPath);
+    displayCurrency = state.settings.displayCurrency;
+    codex_monitor::hudLanguage = state.settings.displayLanguage;
     if (!state.settingsPath.empty()) {
         state.quotaHistoryPath =
             state.settingsPath.parent_path() / L"quota-usage-history.txt";

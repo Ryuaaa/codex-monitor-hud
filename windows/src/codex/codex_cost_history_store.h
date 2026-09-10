@@ -24,6 +24,7 @@ inline constexpr std::size_t kCodexCostHistoryCacheMaximumRows = 32768;
 struct CodexCostHistoryParserSnapshot {
     std::string currentModel = "unknown";
     bool baselinePending = false;
+    bool inheritedBaselinePending = false;
     bool hasRawTotalsWatermark = false;
     CodexTokenUsage rawTotalsWatermark;
 };

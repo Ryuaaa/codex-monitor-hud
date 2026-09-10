@@ -2,8 +2,14 @@
 
 #include "system_io_rate.h"
 
+#ifdef _WIN32
 #include <windows.h>
 #include <pdh.h>
+#else
+// Only opaque members are needed by portable scheduling tests.
+using PDH_HQUERY = void*;
+using PDH_HCOUNTER = void*;
+#endif
 
 namespace codex_monitor {
 

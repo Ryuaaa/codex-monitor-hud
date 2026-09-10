@@ -27,7 +27,9 @@ constexpr double kNoLongContextRate = 0.0;
 
 // USD per one million tokens. This intentionally mirrors the frozen macOS 1.0
 // table in overlay/CodexCostHistory.m, including cache-write fallback pricing.
-constexpr std::array<Pricing, 17> kPrices{{
+constexpr std::array<Pricing, 18> kPrices{{
+    {"gpt-6-astra", 10.0, 1.0, 50.0, 12.5,
+     20.0, 2.0, 75.0, 25.0, 272000},
     {"gpt-5", 1.25, 0.125, 10.0, kUseInputRate,
      kNoLongContextRate, 0.0, 0.0, 0.0, 0},
     {"gpt-5-mini", 0.25, 0.025, 2.0, kUseInputRate,
@@ -56,8 +58,8 @@ constexpr std::array<Pricing, 17> kPrices{{
      10.0, 1.0, 45.0, kUseInputRate, 272000},
     {"gpt-5.5-pro", 30.0, 30.0, 180.0, kUseInputRate,
      60.0, 60.0, 270.0, kUseInputRate, 272000},
-    {"gpt-5.6-sol", 5.0, 0.5, 30.0, 6.25,
-     10.0, 1.0, 45.0, 12.5, 272000},
+    {"gpt-5.6-sol", 4.0, 0.4, 20.0, 5.0,
+     8.0, 0.8, 30.0, 10.0, 272000},
     {"gpt-5.6-terra", 2.0, 0.2, 12.0, 2.5,
      4.0, 0.4, 18.0, 5.0, 272000},
     {"gpt-5.6-luna", 0.2, 0.02, 1.2, 0.25,

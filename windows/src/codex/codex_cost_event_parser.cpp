@@ -345,6 +345,7 @@ struct InfoRecord {
 };
 
 struct PayloadRecord {
+    bool inherited = false;
     std::optional<std::string> type;
     std::optional<std::string> model;
     std::optional<InfoRecord> info;
@@ -513,6 +514,37 @@ struct RootRecord {
             parsed = ParseOptionalString(cursor, output.model);
         } else if (key == "info") {
             parsed = ParseOptionalInfo(cursor, output.info);
+        } else if (key == "parent_thread_id" || key == "forked_from_id") {
+            cursor.SkipWhitespace();
+            if (cursor.position < cursor.input.size() && cursor.input[cursor.position] == '"') {
+                output.inherited = true;
+            }
+            parsed = SkipJsonValue(cursor, 1);
+        } else if (key == "source") {
+            cursor.SkipWhitespace();
+            if (cursor.position < cursor.input.size() && cursor.input[cursor.position] == '{') {
+                ++cursor.position;
+                cursor.SkipWhitespace();
+                if (cursor.position < cursor.input.size() && cursor.input[cursor.position] == '}') {
+                    ++cursor.position;
+                } else {
+                    while (true) {
+                        std::string sourceKey;
+                        if (!ParseJsonString(cursor, &sourceKey) || !cursor.Consume(':')) return false;
+                        cursor.SkipWhitespace();
+                        if (sourceKey == "subagent" && cursor.position < cursor.input.size() &&
+                            cursor.input[cursor.position] == '{') output.inherited = true;
+                        if (!SkipJsonValue(cursor, 2)) return false;
+                        cursor.SkipWhitespace();
+                        if (cursor.position >= cursor.input.size()) return false;
+                        const char end = cursor.input[cursor.position++];
+                        if (end == '}') break;
+                        if (end != ',') return false;
+                    }
+                }
+            } else {
+                parsed = SkipJsonValue(cursor, 1);
+            }
         } else {
             parsed = SkipJsonValue(cursor, 1);
         }
@@ -581,13 +613,14 @@ struct RootRecord {
 
 [[nodiscard]] std::optional<CodexTokenUsage> BuildTokenTuple(
     const std::optional<UsageRecord>& raw) noexcept {
-    if (!raw || !raw->valid) return std::nullopt;
+    if (!raw || !raw->valid || (!raw->input && !raw->output)) return std::nullopt;
     const std::int64_t input = raw->input.value_or(0);
     const std::int64_t cached = raw->cached.value_or(0);
     std::int64_t write = raw->cacheWrite.value_or(0);
     if (write == 0) write = raw->cacheCreation.value_or(0);
     const std::int64_t output = raw->output.value_or(0);
-    if (input <= 0 && cached <= 0 && write <= 0 && output <= 0) {
+    if (input < 0 || cached < 0 || write < 0 || output < 0 ||
+        raw->cacheCreation.value_or(0) < 0) {
         return std::nullopt;
     }
     return CodexTokenUsage{NonNegative(input), NonNegative(cached),
@@ -795,6 +828,13 @@ CodexCostLineParseResult ParseCodexCostJsonlLine(
         return {};
     }
 
+    if (*root.type == "session_meta") {
+        if (!state.hasRawTotalsWatermark && root.payload->inherited) {
+            state.inheritedBaselinePending = true;
+            return {CodexCostLineDisposition::kStateUpdated, std::nullopt};
+        }
+        return {};
+    }
     if (*root.type == "turn_context") {
         if (!root.payload->model || root.payload->model->empty()) return {};
         state.currentModel = NormalizeCodexCostModel(*root.payload->model);
@@ -817,6 +857,8 @@ CodexCostLineParseResult ParseCodexCostJsonlLine(
     if (total) {
         if (state.hasRawTotalsWatermark) {
             counted = DeltaAboveWatermark(*total, state.rawTotalsWatermark);
+        } else if (state.inheritedBaselinePending) {
+            counted = {};
         } else if (state.baselinePending) {
             counted = last.value_or(CodexTokenUsage{});
         } else {
@@ -827,6 +869,7 @@ CodexCostLineParseResult ParseCodexCostJsonlLine(
                 ? UpdatedWatermark(*total, state.rawTotalsWatermark)
                 : *total;
         state.hasRawTotalsWatermark = true;
+        state.inheritedBaselinePending = false;
         stateUpdated = true;
     } else if (last) {
         counted = *last;

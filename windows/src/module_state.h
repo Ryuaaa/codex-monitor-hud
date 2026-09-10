@@ -65,6 +65,9 @@ struct WindowPlacement {
 };
 
 struct SettingsState {
+    std::string displayLanguage = "zh-Hans";
+    std::string displayCurrency = "CNY";
+    std::string subscriptionDate;
     Page currentPage = Page::kHome;
     bool alwaysOnTop = true;
     std::vector<ModuleId> homeOrder;

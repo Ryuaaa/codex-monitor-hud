@@ -1,4 +1,7 @@
 #include "codex_worker.h"
+#ifdef CODEX_MONITOR_DISPLAY_EXCHANGE_RATES
+#include "exchange_rates_win32.h"
+#endif
 
 #include "codex_executable.h"
 #include "codex_cost_file_scan.h"
@@ -409,6 +412,7 @@ bool CodexWorker::ActivateAndRefresh() {
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (!started_) return false;
+        fullQuotaDetailsPending_ = true;
         changed = schedule_.IsActive() ? schedule_.Request()
                                        : schedule_.Activate();
         if (changed) nextAutomaticRefresh_.reset();
@@ -422,6 +426,7 @@ bool CodexWorker::RequestRefresh() {
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (!started_) return false;
+        fullQuotaDetailsPending_ = true;
         changed = schedule_.Request();
         if (changed) nextAutomaticRefresh_.reset();
     }
@@ -516,6 +521,7 @@ void CodexWorker::Run() {
         std::uint64_t costEpoch = 0;
         bool forecastEnabled = false;
         bool costEnabled = false;
+        bool excludeResetCreditDetails = false;
         std::string clientVersion;
         std::filesystem::path quotaHistoryPath;
         std::filesystem::path costHistoryCachePath;
@@ -534,6 +540,8 @@ void CodexWorker::Run() {
 
                 item = schedule_.TakeNext();
                 if (item) {
+                    excludeResetCreditDetails = !fullQuotaDetailsPending_;
+                    fullQuotaDetailsPending_ = false;
                     refreshEpoch =
                         cancellationEpoch_.load(std::memory_order_acquire);
                     clientVersion = clientVersion_;
@@ -557,6 +565,10 @@ void CodexWorker::Run() {
         }
 
         RefreshResult refresh;
+#ifdef CODEX_MONITOR_DISPLAY_EXCHANGE_RATES
+        if (costEnabled && apartmentInitialized)
+            ::codex_monitor::RefreshDisplayExchangeRates(costHistoryCachePath.parent_path());
+#endif
         std::optional<std::filesystem::path> refreshedCodexHome;
         if (!apartmentInitialized) {
             refresh = FailureResult(
@@ -576,7 +588,7 @@ void CodexWorker::Run() {
                         [this, refreshEpoch] {
                             return cancellationEpoch_.load(
                                        std::memory_order_acquire) != refreshEpoch;
-                        });
+                        }, excludeResetCreditDetails);
                     refresh.data = client.data();
                     if (costEnabled) refreshedCodexHome = client.codexHome();
                 }

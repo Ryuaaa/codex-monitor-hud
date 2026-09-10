@@ -31,7 +31,7 @@
 namespace codex_monitor::codex {
 namespace {
 
-constexpr std::string_view kVersionLine = "version=2";
+constexpr std::string_view kVersionLine = "version=3";
 constexpr std::int64_t kMaximumUnixSeconds = 253402300799LL;
 constexpr std::size_t kMaximumFileIdBytes = 96;
 constexpr std::size_t kMaximumModelBytes = 128;
@@ -308,7 +308,8 @@ SnapshotValidation SerializeSnapshot(
                  << "\tcomplete=" << (file->complete ? 1 : 0)
                  << "\tcurrent_model=" << HexEncode(file->parser.currentModel)
                  << "\tbaseline_pending="
-                 << (file->parser.baselinePending ? 1 : 0)
+                 << ((file->parser.baselinePending ? 1 : 0) |
+                     (file->parser.inheritedBaselinePending ? 2 : 0))
                  << "\thas_watermark="
                  << (file->parser.hasRawTotalsWatermark ? 1 : 0)
                  << "\twi=" << file->parser.rawTotalsWatermark.inputTokens
@@ -443,7 +444,8 @@ CodexCostHistoryLoadStatus ParseContents(
                              : CodexCostHistoryLoadStatus::kCorrupt;
     }
     if (lines->empty()) return CodexCostHistoryLoadStatus::kCorrupt;
-    if ((*lines)[0] != kVersionLine) {
+    const bool legacyCounting = (*lines)[0] == "version=2";
+    if ((*lines)[0] != kVersionLine && !legacyCounting) {
         return StartsWith((*lines)[0], "version=")
                    ? CodexCostHistoryLoadStatus::kUnsupportedVersion
                    : CodexCostHistoryLoadStatus::kCorrupt;
@@ -504,6 +506,7 @@ CodexCostHistoryLoadStatus ParseContents(
         file.fileId.assign(values[0]);
         const auto currentModel = HexDecode(values[7]);
         std::uint64_t rawRowCount = 0;
+        std::uint64_t baselineFlags = 0;
         if (!IsSafeFileId(file.fileId) ||
             !ParseUnsigned(values[1], file.observedSizeBytes) ||
             !ParseSigned(values[2], file.modifiedUnixNanoseconds) ||
@@ -511,7 +514,7 @@ CodexCostHistoryLoadStatus ParseContents(
             !ParseBoolean(values[4], file.discardingOversizedLine) ||
             !ParseBoolean(values[5], file.hasSkippedOversizedLine) ||
             !ParseBoolean(values[6], file.complete) || !currentModel ||
-            !ParseBoolean(values[8], file.parser.baselinePending) ||
+            !ParseUnsigned(values[8], baselineFlags) || baselineFlags > 3 ||
             !ParseBoolean(values[9], file.parser.hasRawTotalsWatermark) ||
             !ParseSigned(values[10],
                          file.parser.rawTotalsWatermark.inputTokens) ||
@@ -571,6 +574,8 @@ CodexCostHistoryLoadStatus ParseContents(
             row.model = *model;
             file.rows.push_back(std::move(row));
         }
+        file.parser.baselinePending = (baselineFlags & 1) != 0;
+        file.parser.inheritedBaselinePending = (baselineFlags & 2) != 0;
         snapshot.files.push_back(std::move(file));
     }
     if (lineIndex != lines->size()) {
@@ -586,6 +591,9 @@ CodexCostHistoryLoadStatus ParseContents(
     if (validation != SnapshotValidation::kOk || validatedRows != totalRows) {
         return CodexCostHistoryLoadStatus::kCorrupt;
     }
+    // Retain installation boundary, never reuse legacy counted rows or offsets.
+    // The bounded scanner rebuilds them from source with inheritance protection.
+    if (legacyCounting) snapshot.files.clear();
     return CodexCostHistoryLoadStatus::kOk;
 }
 
@@ -621,7 +629,7 @@ ExistingVersionStatus CheckExistingVersion(
     }
     if (!firstLine.empty() && firstLine.back() == '\r') firstLine.pop_back();
     if (StartsWith(firstLine, "version=") && firstLine != kVersionLine &&
-        firstLine != "version=1") {
+        firstLine != "version=1" && firstLine != "version=2") {
         return ExistingVersionStatus::kUnsupported;
     }
     return ExistingVersionStatus::kWritable;
@@ -809,6 +817,24 @@ CodexCostHistorySaveResult CodexCostHistoryStore::Save(
             return result;
         }
 
+        // Immutable recovery copy before replacing a legacy accounting cache.
+        {
+            std::ifstream previous(path_, std::ios::binary);
+            std::string first;
+            std::getline(previous, first);
+            if (first == "version=2") {
+                auto backup = path_;
+                backup += ".before-counting-repair";
+                std::error_code backupError;
+                std::filesystem::copy_file(path_, backup,
+                    std::filesystem::copy_options::skip_existing, backupError);
+                if (backupError) {
+                    result.status = CodexCostHistorySaveStatus::kIoError;
+                    result.error = backupError;
+                    return result;
+                }
+            }
+        }
         TemporaryFileGuard temporary(TemporaryPathFor(path_));
         {
             std::ofstream output(temporary.path(),

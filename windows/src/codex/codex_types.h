@@ -72,6 +72,7 @@ struct RateLimitWindow {
 };
 
 struct RateLimitsData {
+    std::optional<bool> ordinaryUsageAllowed;
     std::optional<std::wstring> planType;
     std::optional<RateLimitWindow> primary;
     std::optional<RateLimitWindow> secondary;

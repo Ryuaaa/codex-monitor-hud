@@ -814,7 +814,7 @@ def main() -> None:
             "version 3 settings retain explicit visibility when the service module is added",
         "TestVersionOneMigrationPreservesOldHomeChoices":
             "version 1 settings migrate without enabling new Home work",
-        '"version=11\\n"': "the current persisted settings schema is version 11",
+        '"version=12\\n"': "the current persisted settings schema is version 12",
         '"version=10\\n"': "the previous alert schema has an explicit migration fixture",
         '"version=9\\n"': "the previous appearance schema has an explicit migration fixture",
         '"version=1\\n"': "the previous settings schema has an explicit migration fixture",
@@ -882,7 +882,7 @@ def main() -> None:
         "resetAfterTruncation": "rewritten rollout files invalidate retained parser state",
         "kCodexCostHistoryCacheMaximumBytes":
             "restart cache size is bounded independently from source scanning",
-        'kVersionLine = "version=2"':
+        'kVersionLine = "version=3"':
             "restart cache has an explicit format version",
         "CodexCostHistoryAtomicReplace":
             "restart cache commits through an atomic replacement boundary",

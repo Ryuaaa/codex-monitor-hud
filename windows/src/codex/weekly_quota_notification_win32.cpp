@@ -1,3 +1,4 @@
+#include "localization.h"
 #include "codex/weekly_quota_notification_win32.h"
 
 #include <shellapi.h>
@@ -14,8 +15,8 @@ constexpr UINT kWeeklyQuotaNotificationIconId = 0x434D5701;
 
 [[nodiscard]] const wchar_t* PeriodLabel(WeeklyQuotaAlertMode mode) noexcept {
     return mode == WeeklyQuotaAlertMode::kNaturalDay
-               ? L"今天"
-               : L"最近24小时";
+               ? codex_monitor::Localized(L"今天")
+               : codex_monitor::Localized(L"最近24小时");
 }
 
 void CopyBounded(wchar_t* destination,
@@ -98,9 +99,9 @@ bool WeeklyQuotaNotificationWin32::Show(
     data.uID = kWeeklyQuotaNotificationIconId;
     data.uFlags = NIF_INFO;
     CopyBounded(data.szInfoTitle, std::size(data.szInfoTitle),
-                L"Codex 周额度提醒");
+                codex_monitor::Localized(L"Codex 周额度提醒"));
     swprintf_s(data.szInfo, std::size(data.szInfo),
-               L"%ls已使用约 %d%%，达到你设置的 %d%% 阈值。",
+               codex_monitor::Localized(L"%ls已使用约 %d%%，达到你设置的 %d%% 阈值。"),
                PeriodLabel(notification.mode), consumed, threshold);
     data.dwInfoFlags = NIIF_INFO | NIIF_NOSOUND | NIIF_RESPECT_QUIET_TIME;
     // Shell balloon/toast notifications never activate or foreground owner_.

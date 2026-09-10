@@ -247,6 +247,7 @@ CodexCostHistoryState::ExportSnapshot(
             exported.complete = file.cursor.complete;
             exported.parser.currentModel = file.parser.currentModel;
             exported.parser.baselinePending = file.parser.baselinePending;
+            exported.parser.inheritedBaselinePending = file.parser.inheritedBaselinePending;
             exported.parser.hasRawTotalsWatermark =
                 file.parser.hasRawTotalsWatermark;
             exported.parser.rawTotalsWatermark =
@@ -303,6 +304,7 @@ bool CodexCostHistoryState::ImportSnapshot(
             file.cursor.resetAfterTruncation = false;
             file.parser.currentModel = imported.parser.currentModel;
             file.parser.baselinePending = imported.parser.baselinePending;
+            file.parser.inheritedBaselinePending = imported.parser.inheritedBaselinePending;
             file.parser.hasRawTotalsWatermark =
                 imported.parser.hasRawTotalsWatermark;
             file.parser.rawTotalsWatermark =
@@ -381,35 +383,7 @@ CodexCostHistoryApplyResult CodexCostHistoryState::Apply(
                 NormalizeCodexCostModel(cursor.baselineModel);
             if (!seededModel.empty() && seededModel != "unknown") {
                 existing->parser.currentModel = seededModel;
-                std::vector<CodexCostEvent> reattributed;
-                for (auto iterator = existing->rows.begin();
-                     iterator != existing->rows.end();) {
-                    if (iterator->first.second != "unknown") {
-                        ++iterator;
-                        continue;
-                    }
-                    CodexCostEvent event = std::move(iterator->second);
-                    iterator = existing->rows.erase(iterator);
-                    event.model = seededModel;
-                    event.fingerprint = existing->cursor.fileId + "|" +
-                        event.localDate + "|" + seededModel;
-                    const CodexCostEstimate estimate =
-                        EstimateCodexApiEquivalentCost(seededModel,
-                                                       event.usage);
-                    event.cachedEstimatedUsd =
-                        estimate.available ? estimate.estimatedUsd : 0.0;
-                    bool saturated = false;
-                    event.cachedPricedTokens = estimate.available
-                        ? CountPricedTokens(event.usage, saturated)
-                        : 0;
-                    output.saturated = output.saturated || saturated;
-                    reattributed.push_back(std::move(event));
-                }
-                for (CodexCostEvent& event : reattributed) {
-                    const std::pair<std::string, std::string> key{
-                        event.localDate, event.model};
-                    existing->rows.emplace(key, std::move(event));
-                }
+                // A later model is not evidence for earlier unknown-model rows.
             }
         }
         if (cursor.resetAfterTruncation) {

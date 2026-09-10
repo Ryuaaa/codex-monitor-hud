@@ -49,6 +49,7 @@ struct ResponseEnvelope {
     EnvelopeKind kind = EnvelopeKind::kMalformed;
     std::int32_t id = 0;
     bool isError = false;
+    bool invalidParams = false;
     std::string resultJson;
 };
 
@@ -162,6 +163,10 @@ ResponseEnvelope ParseEnvelope(std::string_view line) {
 
         envelope.kind = EnvelopeKind::kResponse;
         envelope.isError = hasError;
+        if (hasError && error->ValueType() == JsonValueType::Object) {
+            const auto code = FindValue(error->GetObject(), L"code");
+            envelope.invalidParams = code && code->ValueType() == JsonValueType::Number && code->GetNumber() == -32602;
+        }
         if (hasResult) envelope.resultJson = winrt::to_string(result->Stringify());
         return envelope;
     } catch (const winrt::hresult_error&) {
@@ -212,7 +217,8 @@ void FailPendingMethods(CodexDataState& data,
 AppServerRefreshReport CodexAppServerClient::Refresh(
     const std::filesystem::path& executable,
     std::string_view clientVersion,
-    const std::function<bool()>& isCancelled) {
+    const std::function<bool()>& isCancelled,
+    bool excludeResetCreditDetails) {
     // Never let a failed, cancelled, or incompatible refresh leave a stale
     // filesystem root available to a later local scan.
     codexHome_.reset();
@@ -315,7 +321,9 @@ AppServerRefreshReport CodexAppServerClient::Refresh(
     try {
         writes = {
             BuildInitializedNotification(),
-            BuildNullParamsRequest(kRateLimitsRequestId, L"account/rateLimits/read"),
+            excludeResetCreditDetails ?
+                "{\"id\":2,\"method\":\"account/rateLimits/read\",\"params\":{\"excludeResetCreditDetails\":true}}" :
+                BuildNullParamsRequest(kRateLimitsRequestId, L"account/rateLimits/read"),
             BuildAccountRequest(),
             BuildNullParamsRequest(kUsageRequestId, L"account/usage/read"),
             BuildThreadListRequest(),
@@ -372,6 +380,12 @@ AppServerRefreshReport CodexAppServerClient::Refresh(
 
         switch (envelope.id) {
             case kRateLimitsRequestId:
+                if (excludeResetCreditDetails && envelope.invalidParams) {
+                    excludeResetCreditDetails = false;
+                    // One compatibility retry only; other errors retain last value.
+                    const auto fallback = BuildNullParamsRequest(kRateLimitsRequestId, L"account/rateLimits/read");
+                    if (process.WriteLine(fallback)) break;
+                }
                 if (report.rateLimitsResponseReceived) {
                     ++report.ignoredUnknownIdCount;
                     break;

@@ -230,7 +230,7 @@ void TestRoundTripAndPrivacyWhitelist() {
     const std::string contents = ReadFile(path);
     Require(contents.size() <= kCodexCostHistoryCacheMaximumBytes,
             "serialized cache must respect the eight MiB cap");
-    Require(contents.rfind("version=2\nmeta\tstarted_at=", 0) == 0,
+    Require(contents.rfind("version=3\nmeta\tstarted_at=", 0) == 0,
             "cache must start with the exact version and metadata records");
     Require(contents.find("path=") == std::string::npos &&
                 contents.find("account") == std::string::npos &&
@@ -298,7 +298,7 @@ void TestLegacyVersionCanBeReplacedByInstallBaseline() {
             "the pre-install-history cache must not be imported");
     Require(CodexCostHistoryStore(path).Save(Snapshot()).written(),
             "a validated installation baseline may replace version one");
-    Require(ReadFile(path).rfind("version=2\nmeta\tstarted_at=", 0) == 0,
+    Require(ReadFile(path).rfind("version=3\nmeta\tstarted_at=", 0) == 0,
             "legacy replacement must write the installation start marker");
 }
 
@@ -754,6 +754,31 @@ void TestMissingCacheIsAnEmptySuccess() {
 }  // namespace
 
 int main() {
+    {
+        TemporaryDirectory temporary;
+        const auto path = temporary.path() / "legacy-counting.txt";
+        auto source = Snapshot();
+        Require(CodexCostHistoryStore(path).Save(source).status == CodexCostHistorySaveStatus::kWritten,"fixture saved");
+        auto old = ReadFile(path);
+        old.replace(0,9,"version=2");
+        WriteFile(path,old);
+        const auto migrated = CodexCostHistoryStore(path).Load();
+        Require(migrated.status == CodexCostHistoryLoadStatus::kOk && migrated.snapshot.files.empty() &&
+                migrated.snapshot.trackingStartedAtUnixSeconds == source.trackingStartedAtUnixSeconds,
+                "legacy counted rows discarded, installation start preserved");
+        Require(CodexCostHistoryStore(path).Save(migrated.snapshot).status == CodexCostHistorySaveStatus::kWritten,
+                "repaired snapshot can replace legacy cache");
+        Require(ReadFile(path.string()+".before-counting-repair") == old,"original preserved before migration");
+        source.files[0].parser.inheritedBaselinePending = true;
+        Require(CodexCostHistoryStore(path).Save(source).status == CodexCostHistorySaveStatus::kWritten,"pending child saved");
+        const auto restored = CodexCostHistoryStore(path).Load();
+        bool retainedInheritance = false;
+        for (const auto& file : restored.snapshot.files)
+            if (file.fileId == source.files[0].fileId) retainedInheritance = file.parser.inheritedBaselinePending;
+        Require(restored.status == CodexCostHistoryLoadStatus::kOk && retainedInheritance,
+                "child inheritance survives process restart and sorted serialization");
+        Require(ReadFile(path.string()+".before-counting-repair") == old,"recovery copy immutable");
+    }
     TestRoundTripAndPrivacyWhitelist();
     TestUnknownVersionIsNeverOverwritten();
     TestLegacyVersionCanBeReplacedByInstallBaseline();

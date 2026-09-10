@@ -7,7 +7,7 @@
 namespace codex_monitor::codex {
 
 inline constexpr std::string_view kCodexCostPricingVersion =
-    "OpenAI 2026-08-08";
+    "OpenAI Standard reference 2026-09-11";
 
 struct CodexTokenUsage {
     std::int64_t inputTokens = 0;
