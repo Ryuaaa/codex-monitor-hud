@@ -93,7 +93,7 @@ void TestDisabledByDefaultAndThresholdBounds() {
     Require(IsValidWeeklyQuotaAlertPolicy(NaturalPolicy(5.0)) &&
                 IsValidWeeklyQuotaAlertPolicy(RollingPolicy(100.0)),
             "inclusive five-to-one-hundred threshold bounds must be valid");
-    Require(!IsValidWeeklyQuotaAlertPolicy(NaturalPolicy(4.999)) &&
+    Require(!IsValidWeeklyQuotaAlertPolicy(NaturalPolicy(0.999)) &&
                 !IsValidWeeklyQuotaAlertPolicy(RollingPolicy(100.001)) &&
                 !IsValidWeeklyQuotaAlertPolicy(NaturalPolicy(
                     std::numeric_limits<double>::quiet_NaN())),

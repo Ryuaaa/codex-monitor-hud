@@ -15,6 +15,10 @@ jobs:
         run: '"/private/tmp/codex-monitor-hud-build/Codex Monitor HUD.app/Contents/MacOS/CodexMonitorHUD" --logic-diagnostic'
       - name: Run protocol compatibility fixtures
         run: sh tests/test-codex-protocol.sh
+      - name: Run maintenance failure and recovery fixtures
+        run: sh tests/test-maintenance.sh
+      - name: Validate language coverage and placeholders
+        run: ruby tests/test-localizations.rb
       - name: Run settings and window size test
         run: '"/private/tmp/codex-monitor-hud-build/Codex Monitor HUD.app/Contents/MacOS/CodexMonitorHUD" --ui-diagnostic'
       - name: Run updater security test

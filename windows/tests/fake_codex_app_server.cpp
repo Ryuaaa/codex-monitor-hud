@@ -160,7 +160,7 @@ void SignalConfiguredReadyEvent() {
     CloseHandle(event);
 }
 
-bool ReadAndValidateAppServerRequests() {
+bool ReadAndValidateAppServerRequests(bool light = false) {
     std::vector<std::string> requests;
     for (int index = 0; index < 5; ++index) {
         std::string line;
@@ -179,7 +179,7 @@ bool ReadAndValidateAppServerRequests() {
         rateLimits = rateLimits ||
             (Contains(request, "\"id\":2") &&
              Contains(request, "\"method\":\"account/rateLimits/read\"") &&
-             Contains(request, "\"params\":null"));
+             (light ? Contains(request, "\"excludeResetCreditDetails\":true") : Contains(request, "\"params\":null")));
         account = account ||
             (Contains(request, "\"id\":3") &&
              Contains(request, "\"method\":\"account/read\"") &&
@@ -268,7 +268,13 @@ int RunAppServerScenario(const std::wstring& scenario,
     if (!WriteLine(output, initializeResponse)) {
         return 23;
     }
-    if (!ReadAndValidateAppServerRequests()) return 24;
+    if (!ReadAndValidateAppServerRequests(scenario == L"app-light" || scenario == L"app-light-fallback")) return 24;
+    if (scenario == L"app-light-fallback") {
+        if (!WriteLine(output,R"({"id":2,"error":{"code":-32602,"message":"synthetic invalid params"}})")) return 24;
+        std::string fallback;
+        if (!ReadInputLine(fallback) || !Contains(fallback,"\"id\":2") ||
+            !Contains(fallback,"\"params\":null")) return 24;
+    }
 
     if (scenario == L"app-cancel") {
         if (SpawnHangingChild() == 0) return 29;

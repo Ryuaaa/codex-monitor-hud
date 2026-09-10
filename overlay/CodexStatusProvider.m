@@ -1,3 +1,4 @@
+#import "HUDLocalization.h"
 #import "CodexStatusProvider.h"
 #import "CodexCostHistory.h"
 #import "CodexProtocolCompatibility.h"
@@ -197,13 +198,13 @@ NSDictionary<NSString *, id> *CodexScanRecentActivityAtRoot(NSDictionary<NSStrin
     }
     NSInteger unresolvedCount = unresolvedRecentThreadIDs.count;
     if (readableCandidateCount == 0 && unresolvedCount > 0) {
-        return @{ @"available": @NO, @"error": @"近期会话记录已迁移、压缩或暂不可读，无法可靠判断活动", @"partial": @NO, @"note": @"", @"unresolvedRecent": @(unresolvedCount), @"count": @0, @"longest": @0, @"names": @[] };
+        return @{ @"available": @NO, @"error": HUDL(@"近期会话记录已迁移、压缩或暂不可读，无法可靠判断活动"), @"partial": @NO, @"note": @"", @"unresolvedRecent": @(unresolvedCount), @"count": @0, @"longest": @0, @"names": @[] };
     }
     if (candidates.count == 0 && !rootAvailable) {
-        return @{ @"available": @NO, @"error": @"未找到本机会话记录", @"partial": @NO, @"note": @"", @"unresolvedRecent": @0, @"count": @0, @"longest": @0, @"names": @[] };
+        return @{ @"available": @NO, @"error": HUDL(@"未找到本机会话记录"), @"partial": @NO, @"note": @"", @"unresolvedRecent": @0, @"count": @0, @"longest": @0, @"names": @[] };
     }
     BOOL partial = unresolvedCount > 0;
-    NSString *note = partial ? @"部分近期会话记录已迁移、压缩或暂不可读" : @"";
+    NSString *note = partial ? HUDL(@"部分近期会话记录已迁移、压缩或暂不可读") : @"";
     return @{ @"available": @YES, @"error": @"", @"partial": @(partial), @"note": note, @"unresolvedRecent": @(unresolvedCount), @"count": @(activeCount), @"longest": @(longest), @"names": activeNames };
 }
 
@@ -214,10 +215,13 @@ static NSDictionary<NSString *, id> *CodexScanRecentActivity(NSDictionary<NSStri
 
 NSDictionary<NSString *, id> *CodexCalendarUsage(NSArray *buckets, NSDate *now) {
     NSMutableDictionary<NSString *, NSNumber *> *tokensByDate = [NSMutableDictionary dictionary];
-    for (NSDictionary *bucket in buckets ?: @[]) {
+    NSUInteger invalidBuckets = 0;
+    for (id bucket in [buckets isKindOfClass:NSArray.class] ? buckets : @[]) {
+        if (![bucket isKindOfClass:NSDictionary.class]) { invalidBuckets++; continue; }
         NSString *date = [bucket[@"startDate"] isKindOfClass:NSString.class] ? bucket[@"startDate"] : nil;
-        if (date.length == 0) continue;
-        long long total = [tokensByDate[date] longLongValue] + [bucket[@"tokens"] longLongValue];
+        NSNumber *count = CodexProtocolTokenCount(bucket[@"tokens"]);
+        if (date.length == 0 || !count) { invalidBuckets++; continue; }
+        long long total = CodexAddTokenCounts([tokensByDate[date] longLongValue], count.longLongValue);
         tokensByDate[date] = @(total);
     }
     NSCalendar *calendar = [NSCalendar calendarWithIdentifier:NSCalendarIdentifierGregorian];
@@ -230,34 +234,38 @@ NSDictionary<NSString *, id> *CodexCalendarUsage(NSArray *buckets, NSDate *now) 
     NSString *todayKey = [dateFormatter stringFromDate:startOfToday];
     BOOL todayAvailable = tokensByDate[todayKey] != nil;
     NSString *latestDate = nil;
+    NSMutableArray *invalidDates = [NSMutableArray array];
     for (NSString *date in tokensByDate) {
         NSDate *parsed = [dateFormatter dateFromString:date];
-        if (!parsed || ![[dateFormatter stringFromDate:parsed] isEqualToString:date] || [date compare:todayKey] == NSOrderedDescending) continue;
+        if (!parsed || ![[dateFormatter stringFromDate:parsed] isEqualToString:date] || [date compare:todayKey] == NSOrderedDescending) { invalidBuckets++; [invalidDates addObject:date]; continue; }
         if (!latestDate || [date compare:latestDate] == NSOrderedDescending) latestDate = date;
     }
+    [tokensByDate removeObjectsForKeys:invalidDates];
+    todayAvailable = tokensByDate[todayKey] != nil;
     NSDate *anchorDate = latestDate ? [dateFormatter dateFromString:latestDate] : startOfToday;
     for (NSInteger dayOffset = 0; dayOffset < 30; dayOffset++) {
         NSDate *date = [calendar dateByAddingUnit:NSCalendarUnitDay value:-dayOffset toDate:anchorDate options:0];
         long long tokens = [tokensByDate[[dateFormatter stringFromDate:date]] longLongValue];
-        thirty += tokens;
-        if (dayOffset < 7) recent += tokens;
-        else if (dayOffset < 14) previous += tokens;
+        thirty = CodexAddTokenCounts(thirty, tokens);
+        if (dayOffset < 7) recent = CodexAddTokenCounts(recent, tokens);
+        else if (dayOffset < 14) previous = CodexAddTokenCounts(previous, tokens);
     }
     NSDateComponents *currentMonth = [calendar components:NSCalendarUnitYear | NSCalendarUnitMonth fromDate:startOfToday];
     NSDate *monthStart = [calendar dateFromComponents:currentMonth];
     for (NSString *date in tokensByDate) {
         NSDate *parsed = [dateFormatter dateFromString:date];
         if (!parsed || [parsed compare:monthStart] == NSOrderedAscending || [parsed compare:startOfToday] == NSOrderedDescending) continue;
-        monthToDate += [tokensByDate[date] longLongValue];
+        monthToDate = CodexAddTokenCounts(monthToDate, [tokensByDate[date] longLongValue]);
     }
     NSInteger latestMonthDay = latestDate ? [calendar component:NSCalendarUnitDay fromDate:[dateFormatter dateFromString:latestDate]] : 0;
     NSRange monthDays = [calendar rangeOfUnit:NSCalendarUnitDay inUnit:NSCalendarUnitMonth forDate:startOfToday];
-    long long monthForecast = latestMonthDay > 0 ? (long long)llround((double)monthToDate / (double)latestMonthDay * (double)monthDays.length) : 0;
+    double forecast = latestMonthDay > 0 ? (double)monthToDate / latestMonthDay * monthDays.length : 0;
+    long long monthForecast = forecast >= 0x1p63 ? LLONG_MAX : llround(forecast);
     if (todayAvailable) today = [tokensByDate[todayKey] longLongValue];
     long long latestTokens = latestDate ? [tokensByDate[latestDate] longLongValue] : 0;
     return @{ @"today": @(today), @"todayAvailable": @(todayAvailable), @"recent": @(recent), @"previous": @(previous),
               @"thirty": @(thirty), @"monthToDate": @(monthToDate), @"monthForecast": @(monthForecast),
-              @"latestDate": latestDate ?: @"", @"latestTokens": @(latestTokens) };
+              @"latestDate": latestDate ?: @"", @"latestTokens": @(latestTokens), @"invalidBuckets": @(invalidBuckets) };
 }
 
 @implementation CodexStatusSnapshot
@@ -290,6 +298,7 @@ NSDictionary<NSString *, id> *CodexCalendarUsage(NSArray *buckets, NSDate *now) 
 @property(nonatomic) BOOL quotaForecastInProgress;
 @property(nonatomic, copy) NSDictionary<NSString *, id> *pendingQuotaForecastSample;
 @property(nonatomic, copy) NSDictionary<NSString *, NSDictionary *> *threadMetadataByID;
+@property(nonatomic, copy) NSSet<NSNumber *> *fetchRequestIDs;
 - (void)finishFetch;
 - (void)maybeFinishFetch;
 - (void)consumeThreads:(NSDictionary *)result;
@@ -305,7 +314,7 @@ NSDictionary<NSString *, id> *CodexCalendarUsage(NSArray *buckets, NSDate *now) 
     self = [super init];
     if (!self) return nil;
     _snapshot = [CodexStatusSnapshot new];
-    _snapshot.statusText = @"正在连接本机Codex";
+    _snapshot.statusText = HUDL(@"正在连接本机Codex");
     _snapshot.activeTaskNames = @[];
     _snapshot.recentTasks = @[];
     _snapshot.interfaceFailureKinds = @{};
@@ -315,6 +324,8 @@ NSDictionary<NSString *, id> *CodexCalendarUsage(NSArray *buckets, NSDate *now) 
     _costHistoryEnabled = YES;
     _quotaForecastEnabled = YES;
     _accountDataEnabled = YES;
+    _enabledRequestIDs = [NSSet setWithArray:@[@2, @3, @4, @5]];
+    _taskActivityEnabled = YES;
     return self;
 }
 
@@ -351,14 +362,20 @@ NSDictionary<NSString *, id> *CodexCalendarUsage(NSArray *buckets, NSDate *now) 
 - (void)startFetchInBackground:(BOOL)background {
     if (!self.accountDataEnabled) return;
     if (self.task.running) return;
-    self.receivedQuota = self.receivedAccount = self.receivedUsage = self.receivedThreads = NO;
+    self.fetchRequestIDs = self.enabledRequestIDs;
+    if (self.fetchRequestIDs.count == 0) return;
+    self.receivedQuota = ![self.fetchRequestIDs containsObject:@2];
+    self.receivedAccount = ![self.fetchRequestIDs containsObject:@3];
+    self.receivedUsage = ![self.fetchRequestIDs containsObject:@4];
+    self.receivedThreads = ![self.fetchRequestIDs containsObject:@5];
+    for (NSNumber *requestID in @[@2, @3, @4, @5]) if (![self.fetchRequestIDs containsObject:requestID]) [self clearFailureForRequestID:requestID.integerValue];
     self.backgroundFetch = background;
     self.retriedLegacyQuota = NO;
     self.quotaRequestID = 2;
     NSString *executable = [self codexExecutable];
     if (!executable) {
         [self failPendingRequests:@"missing_executable"];
-        self.snapshot.activityErrorText = @"未找到本机会话数据";
+        self.snapshot.activityErrorText = HUDL(@"未找到本机会话数据");
         [self finishFetch];
         [self notifyUpdate];
         return;
@@ -370,10 +387,6 @@ NSDictionary<NSString *, id> *CodexCalendarUsage(NSArray *buckets, NSDate *now) 
     self.lightweightQuotaRequest = background && !self.legacyQuotaParameters;
 
     self.initialized = NO;
-    self.receivedQuota = NO;
-    self.receivedAccount = NO;
-    self.receivedUsage = NO;
-    self.receivedThreads = NO;
     self.intentionalStop = NO;
     self.outputBuffer.length = 0;
     self.inputPipe = [NSPipe pipe];
@@ -461,15 +474,19 @@ NSDictionary<NSString *, id> *CodexCalendarUsage(NSArray *buckets, NSDate *now) 
         self.initialized = YES;
         [self sendObject:@{ @"method": @"initialized", @"params": @{} }];
         self.quotaRequestID = 2;
-        [self sendObject:CodexQuotaReadRequest(@2, self.lightweightQuotaRequest)];
-        [self sendObject:@{ @"id": @3, @"method": @"account/read", @"params": @{ @"refreshToken": @NO } }];
-        [self sendObject:@{ @"id": @4, @"method": @"account/usage/read", @"params": NSNull.null }];
-        [self sendObject:@{ @"id": @5, @"method": @"thread/list", @"params": @{
+        NSSet *requests = self.fetchRequestIDs ?: self.enabledRequestIDs;
+        self.receivedQuota = ![requests containsObject:@2]; self.receivedAccount = ![requests containsObject:@3];
+        self.receivedUsage = ![requests containsObject:@4]; self.receivedThreads = ![requests containsObject:@5];
+        if (!self.receivedQuota) [self sendObject:CodexQuotaReadRequest(@2, self.lightweightQuotaRequest)];
+        if (!self.receivedAccount) [self sendObject:@{ @"id": @3, @"method": @"account/read", @"params": @{ @"refreshToken": @NO } }];
+        if (!self.receivedUsage) [self sendObject:@{ @"id": @4, @"method": @"account/usage/read", @"params": NSNull.null }];
+        if (!self.receivedThreads) [self sendObject:@{ @"id": @5, @"method": @"thread/list", @"params": @{
             @"limit": @64,
             @"sortKey": @"recency_at",
             @"sortDirection": @"desc",
             @"useStateDbOnly": @YES
         } }];
+        [self maybeFinishFetch];
         return;
     }
     if (requestID == 1 && !self.initialized) {
@@ -559,7 +576,7 @@ NSDictionary<NSString *, id> *CodexCalendarUsage(NSArray *buckets, NSDate *now) 
         NSDictionary<NSString *, id> *normalized = CodexNormalizedThreadMetadata(thread);
         NSString *threadID = normalized[@"id"];
         NSString *name = normalized[@"name"];
-        NSString *displayName = name.length > 0 ? name : @"未命名任务";
+        NSString *displayName = name.length > 0 ? name : HUDL(@"未命名任务");
         NSNumber *recencyAt = normalized[@"recencyAt"];
         NSString *path = normalized[@"path"];
         NSString *cwd = normalized[@"cwd"];
@@ -608,7 +625,7 @@ NSDictionary<NSString *, id> *CodexCalendarUsage(NSArray *buckets, NSDate *now) 
             self.snapshot.weeklyAvailable = NO;
             self.snapshot.weeklyDataState = @"expired";
         }
-        self.snapshot.quotaErrorText = retained ? @"本轮未返回，显示上次数据" : @"额度当前未返回";
+        self.snapshot.quotaErrorText = retained ? HUDL(@"本轮未返回，显示上次数据") : HUDL(@"额度当前未返回");
         self.snapshot.quotaAvailable = retained;
         self.snapshot.statusText = self.snapshot.quotaErrorText;
         [self notifyUpdate];
@@ -671,7 +688,7 @@ NSDictionary<NSString *, id> *CodexCalendarUsage(NSArray *buckets, NSDate *now) 
                 self.snapshot.modelQuotaName = name.length > 0 ? name : key;
                 self.snapshot.modelQuotaRemainingPercent = remaining;
                 self.snapshot.modelQuotaResetAt = [CodexProtocolNumber(window[@"resetsAt"]) doubleValue];
-                self.snapshot.modelQuotaWindowLabel = duration.doubleValue <= 0 ? @"周期未知" : (duration.doubleValue <= 24.0 * 60.0 ? @"短周期" : @"每周");
+                self.snapshot.modelQuotaWindowLabel = duration.doubleValue <= 0 ? HUDL(@"周期未知") : (duration.doubleValue <= 24.0 * 60.0 ? HUDL(@"短周期") : HUDL(@"每周"));
             }
         }
     }
@@ -714,9 +731,9 @@ NSDictionary<NSString *, id> *CodexCalendarUsage(NSArray *buckets, NSDate *now) 
     if (receivedAny) self.snapshot.quotaUpdatedAt = now;
     BOOL retainedPrevious = [self.snapshot.fiveHourDataState isEqualToString:@"previous"] ||
                             [self.snapshot.weeklyDataState isEqualToString:@"previous"];
-    self.snapshot.quotaErrorText = retainedPrevious ? @"本轮部分额度未返回，显示上次数据" : nil;
+    self.snapshot.quotaErrorText = retainedPrevious ? HUDL(@"本轮部分额度未返回，显示上次数据") : nil;
     self.snapshot.updatedAt = now;
-    self.snapshot.statusText = retainedPrevious ? self.snapshot.quotaErrorText : @"Codex额度已更新";
+    self.snapshot.statusText = retainedPrevious ? self.snapshot.quotaErrorText : HUDL(@"Codex额度已更新");
     [self notifyUpdate];
     if (self.quotaForecastEnabled) {
         NSMutableDictionary<NSString *, id> *sample = [NSMutableDictionary dictionary];
@@ -742,7 +759,7 @@ NSDictionary<NSString *, id> *CodexCalendarUsage(NSArray *buckets, NSDate *now) 
     if (plan.length > 0) {
         self.snapshot.accountAvailable = YES; self.snapshot.planType = plan;
         self.snapshot.accountUpdatedAt = NSDate.date.timeIntervalSince1970; self.snapshot.accountErrorText = nil;
-    } else self.snapshot.accountErrorText = @"订阅当前未返回";
+    } else self.snapshot.accountErrorText = HUDL(@"订阅当前未返回");
 }
 
 - (void)consumeUsage:(NSDictionary *)result {
@@ -753,31 +770,40 @@ NSDictionary<NSString *, id> *CodexCalendarUsage(NSArray *buckets, NSDate *now) 
     [self clearFailureForRequestID:4];
     NSArray *buckets = [result[@"dailyUsageBuckets"] isKindOfClass:NSArray.class] ? result[@"dailyUsageBuckets"] : nil;
     NSDictionary *summary = [result[@"summary"] isKindOfClass:NSDictionary.class] ? result[@"summary"] : nil;
-    if (!buckets && !summary) { self.snapshot.usageErrorText = @"用量当前未返回"; return; }
-    NSDictionary<NSString *, id> *usage = CodexCalendarUsage(buckets, NSDate.date);
-    self.snapshot.usageAvailable = YES;
-    self.snapshot.usageUpdatedAt = NSDate.date.timeIntervalSince1970;
-    self.snapshot.usageErrorText = nil;
-    self.snapshot.todayTokens = [usage[@"today"] longLongValue];
-    self.snapshot.todayUsageAvailable = [usage[@"todayAvailable"] boolValue];
-    self.snapshot.sevenDayTokens = [usage[@"recent"] longLongValue];
-    self.snapshot.previousSevenDayTokens = [usage[@"previous"] longLongValue];
-    self.snapshot.thirtyDayTokens = [usage[@"thirty"] longLongValue];
-    self.snapshot.monthToDateTokens = [usage[@"monthToDate"] longLongValue];
-    self.snapshot.monthForecastTokens = [usage[@"monthForecast"] longLongValue];
-    self.snapshot.latestUsageDate = usage[@"latestDate"];
-    self.snapshot.latestUsageTokens = [usage[@"latestTokens"] longLongValue];
-    self.snapshot.lifetimeTokens = [CodexProtocolNumber(summary[@"lifetimeTokens"]) longLongValue];
-    NSNumber *peakDaily = [summary[@"peakDailyTokens"] isKindOfClass:NSNumber.class] ? summary[@"peakDailyTokens"] : nil;
-    self.snapshot.peakDailyTokensAvailable = peakDaily != nil;
-    self.snapshot.peakDailyTokens = peakDaily.longLongValue;
-    self.snapshot.currentStreakDays = [CodexProtocolNumber(summary[@"currentStreakDays"]) integerValue];
-    NSNumber *longestTurn = [summary[@"longestRunningTurnSec"] isKindOfClass:NSNumber.class] ? summary[@"longestRunningTurnSec"] : nil;
-    self.snapshot.longestRunningTurnAvailable = longestTurn != nil;
-    self.snapshot.longestRunningTurnSec = longestTurn.integerValue;
-    NSNumber *longestStreak = [summary[@"longestStreakDays"] isKindOfClass:NSNumber.class] ? summary[@"longestStreakDays"] : nil;
-    self.snapshot.longestStreakAvailable = longestStreak != nil;
-    self.snapshot.longestStreakDays = longestStreak.integerValue;
+    if (!buckets && !summary) { self.snapshot.usageErrorText = HUDL(@"用量当前未返回"); return; }
+    NSDictionary *usage = buckets ? CodexCalendarUsage(buckets, NSDate.date) : nil;
+    BOOL invalid = [usage[@"invalidBuckets"] unsignedIntegerValue] > 0;
+    BOOL retained = !buckets && self.snapshot.usageAvailable;
+    if (buckets && !invalid) {
+        self.snapshot.usageAvailable = YES;
+        self.snapshot.usageUpdatedAt = NSDate.date.timeIntervalSince1970;
+        self.snapshot.todayTokens = [usage[@"today"] longLongValue];
+        self.snapshot.todayUsageAvailable = [usage[@"todayAvailable"] boolValue];
+        self.snapshot.sevenDayTokens = [usage[@"recent"] longLongValue];
+        self.snapshot.previousSevenDayTokens = [usage[@"previous"] longLongValue];
+        self.snapshot.thirtyDayTokens = [usage[@"thirty"] longLongValue];
+        self.snapshot.monthToDateTokens = [usage[@"monthToDate"] longLongValue];
+        self.snapshot.monthForecastTokens = [usage[@"monthForecast"] longLongValue];
+        self.snapshot.latestUsageDate = usage[@"latestDate"];
+        self.snapshot.latestUsageTokens = [usage[@"latestTokens"] longLongValue];
+    }
+    // Missing/null is not zero. Only allowlisted, independently valid fields replace old values.
+    NSDictionary *fields = @{@"lifetimeTokens": @"lifetimeTokens", @"peakDailyTokens": @"peakDailyTokens",
+        @"currentStreakDays": @"currentStreakDays", @"longestRunningTurnSec": @"longestRunningTurnSec", @"longestStreakDays": @"longestStreakDays"};
+    NSDictionary *availability = @{@"peakDailyTokens": @"peakDailyTokensAvailable", @"longestRunningTurnSec": @"longestRunningTurnAvailable", @"longestStreakDays": @"longestStreakAvailable"};
+    for (NSString *key in fields) {
+        id raw = summary[key];
+        NSNumber *number = CodexProtocolTokenCount(raw);
+        if (number) {
+            [self.snapshot setValue:number forKey:fields[key]];
+            if (availability[key]) [self.snapshot setValue:@YES forKey:availability[key]];
+        } else {
+            if (raw && raw != NSNull.null) invalid = YES;
+            retained |= availability[key] ? [[self.snapshot valueForKey:availability[key]] boolValue] : [[self.snapshot valueForKey:fields[key]] longLongValue] > 0;
+        }
+    }
+    if (invalid) [self recordFailure:@"protocol" requestID:4];
+    else self.snapshot.usageErrorText = retained ? HUDL(@"部分用量未返回，显示上次数据") : (!buckets ? HUDL(@"每日用量当前未返回") : nil);
 }
 
 - (void)sendObject:(NSDictionary *)object {
@@ -812,6 +838,12 @@ NSDictionary<NSString *, id> *CodexCalendarUsage(NSArray *buckets, NSDate *now) 
         dispatch_async(dispatch_get_main_queue(), ^{
             if (!weakSelf) return;
             weakSelf.costRefreshInProgress = NO;
+            if ([summary[@"preservePrevious"] boolValue]) {
+                weakSelf.snapshot.localCostErrorText = summary[@"error"];
+                weakSelf.snapshot.localCostScanIncomplete = YES;
+                [weakSelf notifyUpdate];
+                return;
+            }
             weakSelf.snapshot.localCostAvailable = [summary[@"available"] boolValue];
             weakSelf.snapshot.localCostUpdatedAt = [summary[@"updatedAt"] doubleValue] ?: NSDate.date.timeIntervalSince1970;
             weakSelf.snapshot.localCostErrorText = [summary[@"error"] length] > 0 ? summary[@"error"] : nil;
@@ -871,6 +903,7 @@ NSDictionary<NSString *, id> *CodexCalendarUsage(NSArray *buckets, NSDate *now) 
 }
 
 - (void)refreshActivity {
+    if (!self.taskActivityEnabled) return;
     if (self.activityRefreshInProgress) { self.activityRefreshPending = YES; return; }
     self.activityRefreshInProgress = YES;
     self.activityRefreshPending = NO;

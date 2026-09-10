@@ -380,6 +380,13 @@ int wmain(int argc, wchar_t** argv) {
     }
 
     TestSuccessfulRefresh(executable);
+    for (const wchar_t* name : {L"app-light", L"app-light-fallback"}) {
+        ScopedFakeScenario scenario(name);
+        CodexAppServerClient lightClient;
+        const auto report = lightClient.Refresh(executable,"test-version",{},true);
+        Expect(report.allMethodsCompleted() && lightClient.data().rateLimits.lastValue.has_value(),
+               "background lightweight quota and single legacy retry must finish normally");
+    }
     TestCodexHomeMissingAndUntrustedValuesAreNotRetained(executable);
     TestOutOfOrderResponsesAndNotification(executable);
     TestOneMethodErrorRetainsIndependentState(executable);

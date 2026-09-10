@@ -7,9 +7,14 @@ on:
         description: Existing stable SemVer tag, for example v1.0.0
         required: true
         type: string
+      windows_ci_run:
+        description: Successful Windows CI run for the exact release commit
+        required: true
+        type: string
 
 permissions:
   contents: write
+  actions: read
 
 jobs:
   macos-release:
@@ -20,11 +25,26 @@ jobs:
           ref: ${{ inputs.release_tag }}
           fetch-depth: 0
       - name: Verify tag matches app version
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
-          release_tag="${{ inputs.release_tag }}"
+          release_tag="$RELEASE_TAG"
+          [[ "$release_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
           test -n "$(git tag --list "$release_tag")"
           app_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' overlay/Info.plist)"
           test "v$app_version" = "$release_tag"
+      - name: Require synchronized Windows build before publishing
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WINDOWS_CI_RUN: ${{ inputs.windows_ci_run }}
+        run: |
+          [[ "$WINDOWS_CI_RUN" =~ ^[0-9]+$ ]]
+          app_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' overlay/Info.plist)"
+          windows_version="$(sed -nE 's/^project\(CodexMonitorHUDWindows VERSION ([0-9.]+).*$/\1/p' windows/CMakeLists.txt)"
+          test "$app_version" = "$windows_version"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$WINDOWS_CI_RUN" --jq .head_sha)" = "$(git rev-parse HEAD)"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$WINDOWS_CI_RUN" --jq .path)" = ".github/workflows/windows-ci.yml"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$WINDOWS_CI_RUN" --jq .conclusion)" = success
       - name: Build and test
         run: |
           ./build-overlay.sh
@@ -34,6 +54,7 @@ jobs:
           "$app" --update-diagnostic
           "$app" --singleton-diagnostic
           sh tests/test-codex-protocol.sh
+          sh tests/test-maintenance.sh
           ./report.py --self-test
       - name: Import Developer ID certificate
         env:
@@ -61,8 +82,9 @@ jobs:
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
-          release_tag="${{ inputs.release_tag }}"
+          release_tag="$RELEASE_TAG"
           if gh release view "$release_tag" >/dev/null 2>&1; then
             gh release upload "$release_tag" \
               Codex-Monitor-HUD.app.zip \

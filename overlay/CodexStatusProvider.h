@@ -111,6 +111,8 @@ FOUNDATION_EXPORT NSDictionary<NSString *, id> *CodexScanRecentActivityAtRoot(NS
 @property(nonatomic) BOOL costHistoryEnabled;
 @property(nonatomic) BOOL quotaForecastEnabled;
 @property(nonatomic) BOOL accountDataEnabled;
+@property(nonatomic, copy) NSSet<NSNumber *> *enabledRequestIDs;
+@property(nonatomic) BOOL taskActivityEnabled;
 - (void)start;
 - (void)refreshQuota;
 - (void)refreshQuotaInBackground;

@@ -66,7 +66,7 @@ constexpr wchar_t kWindowTitle[] = L"Codex Monitor HUD";
 constexpr wchar_t kSingletonName[] = L"Local\\CodexMonitorHUDWindowsFoundation";
 
 #ifndef CODEX_MONITOR_WINDOWS_VERSION
-#define CODEX_MONITOR_WINDOWS_VERSION "1.1.0"
+#define CODEX_MONITOR_WINDOWS_VERSION "1.3.0"
 #endif
 constexpr char kApplicationVersion[] = CODEX_MONITOR_WINDOWS_VERSION;
 
@@ -1168,6 +1168,12 @@ std::wstring BuildQuotaCardText(const AppState& state, bool weekly) {
     }
 
     const int used = std::clamp(static_cast<int>(window->usedPercent), 0, 100);
+    const auto now = static_cast<std::int64_t>(std::time(nullptr));
+    if ((window->resetsAtUnixSeconds && *window->resetsAtUnixSeconds <= now) ||
+        (method.lastValue->receivedAtUnixSeconds > 0 && now-method.lastValue->receivedAtUnixSeconds > 900)) {
+        output << codex_monitor::Localized(L"\r\n上次额度已过期，等待刷新");
+        return output.str();
+    }
     output << codex_monitor::Localized(L"\r\n剩余 ") << 100 - used << L"%";
     if (window->resetsAtUnixSeconds) {
         if (const auto reset = FormatUnixLocalTime(*window->resetsAtUnixSeconds)) {
@@ -1179,6 +1185,10 @@ std::wstring BuildQuotaCardText(const AppState& state, bool weekly) {
         output << codex_monitor::Localized(L"\r\n恢复时间：当前未返回");
     }
     AppendMethodRefreshWarning(method, output);
+    if (method.lastValue->ordinaryUsageAllowed && !method.lastFailure &&
+        method.lastValue->receivedAtUnixSeconds > 0 && now-method.lastValue->receivedAtUnixSeconds <= 900)
+        output << L"\r\n" << (*method.lastValue->ordinaryUsageAllowed ?
+            codex_monitor::Localized(L"普通包含用量允许") : codex_monitor::Localized(L"普通包含用量暂不可用"));
     return output.str();
 }
 
@@ -1289,8 +1299,24 @@ std::wstring BuildSubscriptionCardText(const AppState& state) {
 
     std::wostringstream output;
     output << CodexModuleHeading(codex_monitor::ModuleId::kCodexSubscriptionType);
-    output << codex_monitor::Localized(L"\r\n订阅日期（手动）：") << (state.settings.subscriptionDate.empty()
+    output << L"\r\n" << codex_monitor::Localized(L"截止/续费日（手动）：") << (state.settings.subscriptionDate.empty()
         ? codex_monitor::Localized(L"未设置") : std::wstring(state.settings.subscriptionDate.begin(), state.settings.subscriptionDate.end()));
+    if (!state.settings.subscriptionDate.empty() && codex_monitor::IsSubscriptionDate(state.settings.subscriptionDate)) {
+        SYSTEMTIME today{}, target{};
+        GetLocalTime(&today);
+        today.wHour=today.wMinute=today.wSecond=today.wMilliseconds=0;
+        target.wYear=static_cast<WORD>(std::stoi(state.settings.subscriptionDate.substr(0,4)));
+        target.wMonth=static_cast<WORD>(std::stoi(state.settings.subscriptionDate.substr(5,2)));
+        target.wDay=static_cast<WORD>(std::stoi(state.settings.subscriptionDate.substr(8,2)));
+        FILETIME a{}, b{};
+        if(SystemTimeToFileTime(&today,&a) && SystemTimeToFileTime(&target,&b)) {
+            ULARGE_INTEGER av{},bv{}; av.LowPart=a.dwLowDateTime; av.HighPart=a.dwHighDateTime;
+            bv.LowPart=b.dwLowDateTime; bv.HighPart=b.dwHighDateTime;
+            const auto days=(static_cast<long long>(bv.QuadPart)-static_cast<long long>(av.QuadPart))/864000000000LL;
+            output << L" · " << (days < 0 ? codex_monitor::Localized(L"已逾期") : codex_monitor::Localized(L"剩余"))
+                   << L' ' << (days < 0 ? -days : days) << L' ' << codex_monitor::Localized(L"天");
+        }
+    }
     if (!plan) {
         output << L"\r\n" << CodexFailureReason(state);
         return output.str();
@@ -2841,7 +2867,7 @@ void RefreshWeeklyQuotaAlertControls(AppState& state) {
     const int threshold = std::clamp(
         static_cast<int>(std::lround(
             state.settings.weeklyQuotaAlert.thresholdPercent)),
-        5, 100);
+        1, 100);
     if (state.settingsWeeklyAlertThresholdSlider) {
         SendMessageW(state.settingsWeeklyAlertThresholdSlider, TBM_SETPOS,
                      TRUE, threshold);
@@ -3114,6 +3140,7 @@ bool CreateSettingsControls(HWND window, AppState& state) {
     state.settingsSubscriptionDate = CreateWindowExW(WS_EX_CLIENTEDGE,L"EDIT",date.c_str(),
         WS_CHILD|WS_VISIBLE|WS_TABSTOP|ES_AUTOHSCROLL,0,0,0,0,window,nullptr,GetModuleHandleW(nullptr),nullptr);
     SendMessageW(state.settingsSubscriptionDate,EM_SETLIMITTEXT,10,0);
+    SendMessageW(state.settingsSubscriptionDate,EM_SETCUEBANNER,TRUE,reinterpret_cast<LPARAM>(L"YYYY-MM-DD"));
     state.settingsSubscriptionSave = CreateButton(window,codex_monitor::Localized(L"保存订阅日期"),kSettingsSubscriptionSaveId);
     state.settingsBilling = CreateButton(window,codex_monitor::Localized(L"打开官方账单页"),kSettingsBillingId);
     state.settingsHeading = CreateLabel(
@@ -3207,7 +3234,7 @@ bool CreateSettingsControls(HWND window, AppState& state) {
         GetModuleHandleW(nullptr), nullptr);
     if (state.settingsWeeklyAlertThresholdSlider) {
         SendMessageW(state.settingsWeeklyAlertThresholdSlider, TBM_SETRANGE,
-                     TRUE, MAKELPARAM(5, 100));
+                     TRUE, MAKELPARAM(1, 100));
         SendMessageW(state.settingsWeeklyAlertThresholdSlider,
                      TBM_SETTICFREQ, 5, 0);
         SendMessageW(state.settingsWeeklyAlertThresholdSlider,
@@ -3335,6 +3362,8 @@ LRESULT CALLBACK SettingsWindowProcedure(HWND window, UINT message,
                     if (controlId == kSettingsLanguageId) state->settings.displayLanguage = codex_monitor::kDisplayLanguages[selected];
                     else { state->settings.displayCurrency = codex_monitor::kDisplayCurrencies[selected]; displayCurrency = state->settings.displayCurrency; }
                     PersistSettings(*state);
+                    UpdateCodexCards(*state);
+                    LayoutControls(state->mainWindow,*state);
                 }
                 return 0;
             }
@@ -3346,7 +3375,12 @@ LRESULT CALLBACK SettingsWindowProcedure(HWND window, UINT message,
                 const std::string value(wide.begin(),wide.end());
                 if (std::any_of(wide.begin(),wide.end(),[](wchar_t c){return c > 127;}) || !codex_monitor::IsSubscriptionDate(value)) {
                     SetWindowTextW(state->settingsDisplayHint,codex_monitor::Localized(L"请填写有效日期 YYYY-MM-DD；留空可取消。"));
-                } else { state->settings.subscriptionDate = value; PersistSettings(*state); }
+                } else {
+                    state->settings.subscriptionDate = value;
+                    PersistSettings(*state);
+                    UpdateCodexCards(*state);
+                    LayoutControls(state->mainWindow,*state);
+                }
                 return 0;
             }
             if (controlId == kSettingsBillingId) {
@@ -3547,7 +3581,7 @@ LRESULT CALLBACK SettingsWindowProcedure(HWND window, UINT message,
                     static_cast<int>(SendMessageW(
                         state->settingsWeeklyAlertThresholdSlider,
                         TBM_GETPOS, 0, 0)),
-                    5, 100);
+                    1, 100);
                 state->settings.weeklyQuotaAlert.thresholdPercent =
                     static_cast<double>(threshold);
                 if (state->settingsWeeklyAlertThresholdLabel) {

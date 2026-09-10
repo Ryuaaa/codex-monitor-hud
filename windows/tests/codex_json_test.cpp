@@ -329,6 +329,16 @@ void TestMethodFailuresRetainOnlyTheirOwnLastValue() {
 
 int main() {
     winrt::init_apartment(winrt::apartment_type::multi_threaded);
+    for (const std::string value : {"true","false","null","42","\"true\""}) {
+        const auto parsed=codex_monitor::codex::ParseRateLimitsResultJson(
+            "{\"rateLimits\":{},\"ordinaryUsageAllowed\":"+value+"}");
+        Expect(parsed.ok(),"ordinary-usage unknown values cannot break quota parsing");
+        if(parsed.ok()) {
+            Expect(parsed.value->ordinaryUsageAllowed.has_value() == (value=="true" || value=="false"),
+                   "ordinary usage must be an explicit boolean, never inferred");
+            if(value=="false") Expect(parsed.value->ordinaryUsageAllowed==false,"false retained as distinct from null");
+        }
+    }
     TestInitializeCodexHomeValidation();
     TestCompletePayloadsAndCodexBucketPriority();
     TestMissingNullAndLegacyShapes();

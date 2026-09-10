@@ -1,4 +1,6 @@
+#import "HUDLocalization.h"
 #import "CodexCostHistory.h"
+#import "CodexProtocolCompatibility.h"
 #import <CommonCrypto/CommonDigest.h>
 #import <math.h>
 
@@ -10,7 +12,7 @@ static NSInteger const CodexCostCacheVersion = 5;
 static NSInteger const CodexCostMigratableCacheVersion = 4;
 static NSInteger const CodexCostTrackingMarkerVersion = 1;
 static NSTimeInterval const CodexCostTokenBucketSeconds = 5.0 * 60.0;
-static NSString *const CodexCostPricingVersion = @"OpenAI 2026-08-08";
+static NSString *const CodexCostPricingVersion = @"OpenAI Standard reference 2026-09-11";
 
 static NSDate *CodexCostParseTimestamp(id value) {
     if (![value isKindOfClass:NSString.class] || [value length] == 0) return nil;
@@ -93,7 +95,8 @@ static NSDictionary<NSString *, NSNumber *> *CodexPricingForModel(NSString *rawM
             @"gpt-5.4-pro": @{ @"i": @30.0, @"c": @30.0, @"o": @180.0, @"li": @60.0, @"lc": @60.0, @"lo": @270.0, @"t": @272000 },
             @"gpt-5.5": @{ @"i": @5.0, @"c": @0.5, @"o": @30.0, @"li": @10.0, @"lc": @1.0, @"lo": @45.0, @"t": @272000 },
             @"gpt-5.5-pro": @{ @"i": @30.0, @"c": @30.0, @"o": @180.0, @"li": @60.0, @"lc": @60.0, @"lo": @270.0, @"t": @272000 },
-            @"gpt-5.6-sol": @{ @"i": @5.0, @"c": @0.5, @"w": @6.25, @"o": @30.0, @"li": @10.0, @"lc": @1.0, @"lw": @12.5, @"lo": @45.0, @"t": @272000 },
+            @"gpt-6-astra": @{ @"i": @10.0, @"c": @1.0, @"w": @12.5, @"o": @50.0, @"li": @20.0, @"lc": @2.0, @"lw": @25.0, @"lo": @75.0, @"t": @272000 },
+            @"gpt-5.6-sol": @{ @"i": @4.0, @"c": @0.4, @"w": @5.0, @"o": @20.0, @"li": @8.0, @"lc": @0.8, @"lw": @10.0, @"lo": @30.0, @"t": @272000 },
             @"gpt-5.6-terra": @{ @"i": @2.0, @"c": @0.2, @"w": @2.5, @"o": @12.0, @"li": @4.0, @"lc": @0.4, @"lw": @5.0, @"lo": @18.0, @"t": @272000 },
             @"gpt-5.6-luna": @{ @"i": @0.2, @"c": @0.02, @"w": @0.25, @"o": @1.2, @"li": @0.4, @"lc": @0.04, @"lw": @0.5, @"lo": @1.8, @"t": @272000 }
         };
@@ -125,12 +128,16 @@ NSDictionary<NSString *, id> *CodexCostEstimateForTokens(NSString *model,
 
 static NSDictionary<NSString *, NSNumber *> *CodexTokenTuple(NSDictionary *usage) {
     if (![usage isKindOfClass:NSDictionary.class]) return nil;
+    for (NSString *key in @[@"input_tokens", @"cached_input_tokens", @"output_tokens", @"cache_write_input_tokens", @"cache_creation_input_tokens"]) {
+        if (usage[key] && !CodexProtocolTokenCount(usage[key])) return nil;
+    }
     long long input = [usage[@"input_tokens"] longLongValue];
     long long cached = [usage[@"cached_input_tokens"] longLongValue];
     long long output = [usage[@"output_tokens"] longLongValue];
     long long write = [usage[@"cache_write_input_tokens"] longLongValue];
     if (write == 0) write = [usage[@"cache_creation_input_tokens"] longLongValue];
-    if (input <= 0 && output <= 0 && cached <= 0 && write <= 0) return nil;
+    // An explicit zero total is a valid baseline for a newly spawned session.
+    if (!usage[@"input_tokens"] && !usage[@"output_tokens"]) return nil;
     return @{ @"i": @(MAX(0, input)), @"c": @(MAX(0, cached)), @"w": @(MAX(0, write)), @"o": @(MAX(0, output)) };
 }
 
@@ -165,6 +172,17 @@ static void CodexParseCostLine(NSString *line,
                                NSDateFormatter *dayFormatter) {
     NSUInteger prefixLength = MIN((NSUInteger)8192, line.length);
     NSRange prefixRange = NSMakeRange(0, prefixLength);
+    if ([line rangeOfString:@"\"type\":\"session_meta\"" options:0 range:prefixRange].location != NSNotFound) {
+        id object = [NSJSONSerialization JSONObjectWithData:[line dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil];
+        if (![object isKindOfClass:NSDictionary.class]) return;
+        NSDictionary *p = [object[@"payload"] isKindOfClass:NSDictionary.class] ? object[@"payload"] : nil;
+        NSDictionary *source = [p[@"source"] isKindOfClass:NSDictionary.class] ? p[@"source"] : nil;
+        if (!state[@"rawTotalsWatermark"] && ([source[@"subagent"] isKindOfClass:NSDictionary.class] ||
+            [p[@"parent_thread_id"] isKindOfClass:NSString.class] || [p[@"forked_from_id"] isKindOfClass:NSString.class])) {
+            state[@"inheritedBaselinePending"] = @YES;
+        }
+        return;
+    }
     BOOL isTurnContext = [line rangeOfString:@"\"type\":\"turn_context\"" options:0 range:prefixRange].location != NSNotFound;
     BOOL isEventMessage = [line rangeOfString:@"\"type\":\"event_msg\"" options:0 range:prefixRange].location != NSNotFound;
     if (!isTurnContext && !isEventMessage) return;
@@ -172,7 +190,7 @@ static void CodexParseCostLine(NSString *line,
         NSString *model = nil;
         NSData *data = line.length <= CodexCostMaxRetainedLineBytes ? [line dataUsingEncoding:NSUTF8StringEncoding] : nil;
         NSDictionary *object = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
-        NSDictionary *payload = [object[@"payload"] isKindOfClass:NSDictionary.class] ? object[@"payload"] : nil;
+        NSDictionary *payload = [object isKindOfClass:NSDictionary.class] && [object[@"payload"] isKindOfClass:NSDictionary.class] ? object[@"payload"] : nil;
         if ([payload[@"model"] isKindOfClass:NSString.class]) model = payload[@"model"];
         if (model.length == 0) {
             NSRegularExpression *modelPattern = [NSRegularExpression regularExpressionWithPattern:@"\\\"model\\\"\\s*:\\s*\\\"([^\\\"\\\\]+)\\\"" options:0 error:nil];
@@ -187,7 +205,7 @@ static void CodexParseCostLine(NSString *line,
     NSDictionary *object = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
     if (![object isKindOfClass:NSDictionary.class]) return;
     NSDictionary *payload = [object[@"payload"] isKindOfClass:NSDictionary.class] ? object[@"payload"] : nil;
-    if (![payload[@"type"] isEqualToString:@"token_count"]) return;
+    if (![payload[@"type"] isKindOfClass:NSString.class] || ![payload[@"type"] isEqualToString:@"token_count"]) return;
     NSDictionary *info = [payload[@"info"] isKindOfClass:NSDictionary.class] ? payload[@"info"] : nil;
     if (!info) return;
     BOOL hasExplicitModel = [info[@"model"] isKindOfClass:NSString.class];
@@ -201,12 +219,14 @@ static void CodexParseCostLine(NSString *line,
     NSDictionary<NSString *, NSNumber *> *counted = nil;
     if (total) {
         counted = watermark ? CodexTokenDeltaAboveWatermark(total, watermark) : (baselinePending ? last : total);
+        if ([state[@"inheritedBaselinePending"] boolValue] && !watermark) counted = nil;
         state[@"rawTotalsWatermark"] = CodexTokenWatermark(total, watermark);
+        [state removeObjectForKey:@"inheritedBaselinePending"];
     } else {
         counted = last;
     }
     if (baselinePending && (total || last)) [state removeObjectForKey:@"baselinePending"];
-    long long countedTokens = [counted[@"i"] longLongValue] + [counted[@"o"] longLongValue];
+    long long countedTokens = CodexAddTokenCounts([counted[@"i"] longLongValue], [counted[@"o"] longLongValue]);
     if (countedTokens <= 0) return;
     if (!counted) return;
     NSDate *timestamp = CodexCostParseTimestamp(object[@"timestamp"]);
@@ -260,19 +280,19 @@ static NSArray<NSDictionary<NSString *, id> *> *CodexCompactedCostEvents(NSArray
             rows[groupKey] = row;
         }
         for (NSString *tokenKey in @[@"i", @"c", @"w", @"o"]) {
-            row[tokenKey] = @([row[tokenKey] longLongValue] + MAX(0LL, [event[tokenKey] longLongValue]));
+            row[tokenKey] = @(CodexAddTokenCounts([row[tokenKey] longLongValue], [event[tokenKey] longLongValue]));
         }
-        long long eventTokens = MAX(0LL, [event[@"i"] longLongValue]) + MAX(0LL, [event[@"o"] longLongValue]);
+        long long eventTokens = CodexAddTokenCounts([event[@"i"] longLongValue], [event[@"o"] longLongValue]);
         NSNumber *storedCost = [event[@"x"] isKindOfClass:NSNumber.class] ? event[@"x"] : nil;
         NSNumber *storedPricedTokens = [event[@"p"] isKindOfClass:NSNumber.class] ? event[@"p"] : nil;
         if (storedCost && storedPricedTokens) {
             row[@"x"] = @([row[@"x"] doubleValue] + storedCost.doubleValue);
-            row[@"p"] = @([row[@"p"] longLongValue] + MIN(eventTokens, MAX(0LL, storedPricedTokens.longLongValue)));
+            row[@"p"] = @(CodexAddTokenCounts([row[@"p"] longLongValue], MIN(eventTokens, MAX(0LL, storedPricedTokens.longLongValue))));
         } else {
             NSDictionary *estimate = CodexCostEstimateForTokens(model, [event[@"i"] longLongValue], [event[@"c"] longLongValue], [event[@"w"] longLongValue], [event[@"o"] longLongValue]);
             if ([estimate[@"available"] boolValue]) {
                 row[@"x"] = @([row[@"x"] doubleValue] + [estimate[@"cost"] doubleValue]);
-                row[@"p"] = @([row[@"p"] longLongValue] + eventTokens);
+                row[@"p"] = @(CodexAddTokenCounts([row[@"p"] longLongValue], eventTokens));
             }
         }
     }
@@ -285,7 +305,7 @@ static NSArray<NSDictionary<NSString *, id> *> *CodexCompactedCostEvents(NSArray
     }];
 }
 
-static NSArray<NSURL *> *CodexCostCandidateFiles(NSURL *home, NSDate *now, NSDate *trackingStartedAt) {
+static NSArray<NSURL *> *CodexCostCandidateFiles(NSURL *home, NSDate *now, NSDate *trackingStartedAt, BOOL *limited) {
     if (home.path.length == 0) return @[];
     NSFileManager *fm = NSFileManager.defaultManager;
     NSCalendar *calendar = [NSCalendar calendarWithIdentifier:NSCalendarIdentifierGregorian];
@@ -302,6 +322,40 @@ static NSArray<NSURL *> *CodexCostCandidateFiles(NSURL *home, NSDate *now, NSDat
         NSURL *dir = [sessions URLByAppendingPathComponent:[folder stringFromDate:date] isDirectory:YES];
         NSArray<NSURL *> *dayFiles = [fm contentsOfDirectoryAtURL:dir includingPropertiesForKeys:@[NSURLContentModificationDateKey, NSURLFileSizeKey, NSURLIsRegularFileKey] options:NSDirectoryEnumerationSkipsHiddenFiles error:nil];
         for (NSURL *file in dayFiles ?: @[]) if ([file.pathExtension.lowercaseString isEqualToString:@"jsonl"]) [files addObject:file];
+    }
+    // Folder dates are conversation creation dates, not dates of the latest usage.
+    // Discover recently modified older rollouts using metadata only, once per cost refresh.
+    // Hard bounds preserve the existing low-priority/5-minute/64-MiB scan budget.
+    NSMutableSet *seen = [NSMutableSet setWithArray:[files valueForKey:@"path"]];
+    NSArray *keys = @[NSURLIsDirectoryKey, NSURLIsRegularFileKey, NSURLIsSymbolicLinkKey, NSURLContentModificationDateKey];
+    NSDirectoryEnumerator *older = [fm enumeratorAtURL:sessions includingPropertiesForKeys:keys options:NSDirectoryEnumerationSkipsHiddenFiles errorHandler:nil];
+    NSString *resolvedPrefix = [sessions.path.stringByStandardizingPath.stringByResolvingSymlinksInPath stringByAppendingString:@"/"];
+    NSDate *recentStart = [calendar dateByAddingUnit:NSCalendarUnitDay value:-(dayCount - 1) toDate:[calendar startOfDayForDate:referenceNow] options:0];
+    NSString *oldestRecentFolder = [folder stringFromDate:recentStart];
+    NSDate *earliestActivity = trackingStartedAt && [trackingStartedAt compare:recentStart] == NSOrderedDescending ? trackingStartedAt : recentStart;
+    NSUInteger visited = 0;
+    for (NSURL *file in older) {
+        if (++visited > 20000) { if (limited) *limited = YES; break; }
+        NSDictionary *values = [file resourceValuesForKeys:keys error:nil];
+        if ([values[NSURLIsSymbolicLinkKey] boolValue]) { [older skipDescendants]; continue; }
+        // Foundation may enumerate /var as /private/var. Keep logical cache keys stable.
+        NSString *resolvedPath = file.path.stringByStandardizingPath.stringByResolvingSymlinksInPath;
+        if (![resolvedPath hasPrefix:resolvedPrefix]) continue;
+        NSString *relative = [resolvedPath substringFromIndex:resolvedPrefix.length];
+        NSArray *parts = relative.pathComponents;
+        if ([values[NSURLIsDirectoryKey] boolValue]) {
+            NSString *name = parts.lastObject;
+            NSUInteger width = parts.count == 1 ? 4 : 2;
+            BOOL dateFolder = parts.count <= 3 && name.length == width && [name rangeOfCharacterFromSet:NSCharacterSet.decimalDigitCharacterSet.invertedSet].location == NSNotFound;
+            if (!dateFolder || (parts.count == 3 && [relative compare:oldestRecentFolder] != NSOrderedAscending)) [older skipDescendants];
+            continue;
+        }
+        if (parts.count != 4 || ![values[NSURLIsRegularFileKey] boolValue] || ![file.pathExtension.lowercaseString isEqualToString:@"jsonl"] || [seen containsObject:file.path]) continue;
+        NSDate *modified = values[NSURLContentModificationDateKey];
+        if (modified && [modified compare:earliestActivity] != NSOrderedAscending) {
+            NSURL *logicalFile = [sessions URLByAppendingPathComponent:relative];
+            if (![seen containsObject:logicalFile.path]) { [files addObject:logicalFile]; [seen addObject:logicalFile.path]; }
+        }
     }
     NSDate *oldestModification = trackingStartedAt
         ? trackingStartedAt
@@ -393,9 +447,31 @@ static NSDictionary *CodexLoadDictionary(NSURL *url) {
 
 static NSDictionary *CodexLoadCostCache(NSURL *url) {
     if (!url) return @{};
+    [url removeAllCachedResourceValues];
     NSNumber *size = [url resourceValuesForKeys:@[NSURLFileSizeKey] error:nil][NSURLFileSizeKey];
     if (!size || size.unsignedLongLongValue > CodexCostCacheMaximumBytes) return @{};
-    return CodexLoadDictionary(url);
+    NSDictionary *cache = CodexLoadDictionary(url);
+    if (!CodexProtocolNumber(cache[@"startedAt"]) || !CodexProtocolTokenCount(cache[@"version"]) || ![cache[@"files"] isKindOfClass:NSDictionary.class]) return @{};
+    if (cache[@"tokenBucketsStartedAt"] && !CodexProtocolNumber(cache[@"tokenBucketsStartedAt"])) return @{};
+    for (id key in cache[@"files"]) {
+        NSDictionary *entry = cache[@"files"][key];
+        if (![key isKindOfClass:NSString.class] || ![entry isKindOfClass:NSDictionary.class] ||
+            !CodexProtocolTokenCount(entry[@"size"]) || !CodexProtocolTokenCount(entry[@"parsedBytes"]) ||
+            !CodexProtocolNumber(entry[@"mtime"]) || !CodexProtocolBoolean(entry[@"complete"]) ||
+            ![entry[@"state"] isKindOfClass:NSDictionary.class] || ![entry[@"events"] isKindOfClass:NSArray.class]) return @{};
+        NSDictionary *state = entry[@"state"];
+        if (state[@"model"] && ![state[@"model"] isKindOfClass:NSString.class]) return @{};
+        if (state[@"baselinePending"] && !CodexProtocolBoolean(state[@"baselinePending"])) return @{};
+        id watermark = state[@"rawTotalsWatermark"];
+        if (watermark && ![watermark isKindOfClass:NSDictionary.class]) return @{};
+        for (NSString *field in @[@"i", @"c", @"w", @"o"]) if (watermark && !CodexProtocolTokenCount(watermark[field])) return @{};
+        for (id event in entry[@"events"]) {
+            if (![event isKindOfClass:NSDictionary.class] || ![event[@"k"] isKindOfClass:NSString.class] || ![event[@"d"] isKindOfClass:NSString.class] || ![event[@"m"] isKindOfClass:NSString.class]) return @{};
+            for (NSString *field in @[@"i", @"c", @"w", @"o"]) if (!CodexProtocolTokenCount(event[field])) return @{};
+            for (NSString *field in @[@"t", @"x", @"p"]) if (event[field] && !CodexProtocolNumber(event[field])) return @{};
+        }
+    }
+    return cache;
 }
 
 static BOOL CodexWriteJSONObject(id object, NSURL *url) {
@@ -403,6 +479,31 @@ static BOOL CodexWriteJSONObject(id object, NSURL *url) {
     [NSFileManager.defaultManager createDirectoryAtURL:url.URLByDeletingLastPathComponent withIntermediateDirectories:YES attributes:nil error:nil];
     NSData *data = [NSJSONSerialization dataWithJSONObject:object options:0 error:nil];
     return data && [data writeToURL:url options:NSDataWritingAtomic error:nil];
+}
+
+static NSURL *CodexCostBackupURL(NSURL *url) { return [url URLByAppendingPathExtension:@"previous"]; }
+
+static BOOL CodexWriteCostCache(NSDictionary *object, NSURL *url) {
+    NSData *data = [NSJSONSerialization dataWithJSONObject:object options:0 error:nil];
+    // Never write a cache that the next read will reject. Keep the last valid pair intact.
+    if (!data || data.length > CodexCostCacheMaximumBytes) return NO;
+    NSDictionary *previous = CodexLoadCostCache(url);
+    if (previous.count > 0) {
+        BOOL legacy = NO;
+        for (NSDictionary *entry in [previous[@"files"] allValues]) {
+            if ([entry[@"countingVersion"] integerValue] != 2) { legacy = YES; break; }
+        }
+        NSURL *migrationBackup = [url URLByAppendingPathExtension:@"before-counting-repair"];
+        if (legacy && ![NSFileManager.defaultManager fileExistsAtPath:migrationBackup.path] &&
+            !CodexWriteJSONObject(previous, migrationBackup)) return NO;
+        if (!CodexWriteJSONObject(previous, CodexCostBackupURL(url))) return NO;
+    } else if (CodexLoadCostCache(CodexCostBackupURL(url)).count == 0) {
+        if (!CodexWriteJSONObject(object, CodexCostBackupURL(url))) return NO;
+    }
+    [NSFileManager.defaultManager createDirectoryAtURL:url.URLByDeletingLastPathComponent withIntermediateDirectories:YES attributes:nil error:nil];
+    BOOL saved = [data writeToURL:url options:NSDataWritingAtomic error:nil];
+    [url removeAllCachedResourceValues];
+    return saved;
 }
 
 static BOOL CodexWriteTrackingStart(NSURL *url, NSDate *date) {
@@ -414,9 +515,9 @@ static BOOL CodexWriteTrackingStart(NSURL *url, NSDate *date) {
 
 static NSDate *CodexLoadTrackingStart(NSURL *url, NSDate *now) {
     NSDictionary *marker = CodexLoadDictionary(url);
-    NSTimeInterval value = [marker[@"startedAt"] doubleValue];
+    NSTimeInterval value = [CodexProtocolNumber(marker[@"startedAt"]) doubleValue];
     NSTimeInterval nowValue = (now ?: NSDate.date).timeIntervalSince1970;
-    if ([marker[@"version"] integerValue] != CodexCostTrackingMarkerVersion ||
+    if ([CodexProtocolTokenCount(marker[@"version"]) integerValue] != CodexCostTrackingMarkerVersion ||
         value <= 0 || value > nowValue + 60.0) return nil;
     return [NSDate dateWithTimeIntervalSince1970:value];
 }
@@ -459,13 +560,14 @@ static NSDictionary *CodexCreateCostBaseline(NSArray<NSURL *> *files,
         unsigned long long size = [values[NSURLFileSizeKey] unsignedLongLongValue];
         NSTimeInterval mtime = [values[NSURLContentModificationDateKey] timeIntervalSince1970];
         baselineFiles[CodexPathCacheKey(file.path)] = @{
+            @"countingVersion": @2, @"pricingVersion": CodexCostPricingVersion,
             @"size": @(size), @"mtime": @(mtime), @"parsedBytes": @(size),
             @"complete": @YES, @"state": @{ @"model": @"unknown", @"baselinePending": @YES },
             @"events": @[]
         };
     }
     BOOL wroteMarker = CodexWriteTrackingStart(trackingStartURL, start);
-    BOOL wroteCache = CodexWriteJSONObject(@{
+    BOOL wroteCache = CodexWriteCostCache(@{
         @"version": @(CodexCostCacheVersion),
         @"startedAt": @(start.timeIntervalSince1970),
         @"tokenBucketsStartedAt": @(start.timeIntervalSince1970),
@@ -477,7 +579,7 @@ static NSDictionary *CodexCreateCostBaseline(NSArray<NSURL *> *files,
             @"available": @NO, @"scanIncomplete": @NO,
             @"trackingStartedAt": @0,
             @"updatedAt": @(start.timeIntervalSince1970),
-            @"error": @"无法保存安装后统计起点",
+            @"error": HUDL(@"无法保存安装后统计起点"),
             @"pricingVersion": CodexCostPricingVersion
         };
     }
@@ -486,7 +588,7 @@ static NSDictionary *CodexCreateCostBaseline(NSArray<NSURL *> *files,
         @"trackingStartedAt": @(start.timeIntervalSince1970),
         @"tokenBucketsStartedAt": @(start.timeIntervalSince1970),
         @"updatedAt": @(start.timeIntervalSince1970),
-        @"error": @"已从现在开始记录安装后的Token与费用",
+        @"error": HUDL(@"已从现在开始记录安装后的Token与费用"),
         @"pricingVersion": CodexCostPricingVersion
     };
 }
@@ -513,7 +615,7 @@ static NSDictionary<NSString *, id> *CodexAggregateCostEventsFromTrackingStart(N
         NSDate *date = day ? [formatter dateFromString:day] : nil;
         if (!date || [date compare:today] == NSOrderedDescending) continue;
         long long input = [event[@"i"] longLongValue], cached = [event[@"c"] longLongValue], write = [event[@"w"] longLongValue], output = [event[@"o"] longLongValue];
-        long long tokens = MAX(0, input) + MAX(0, output);
+        long long tokens = CodexAddTokenCounts(input, output);
         if (tokens == 0) continue;
         NSString *model = [event[@"m"] isKindOfClass:NSString.class] ? event[@"m"] : @"unknown";
         NSNumber *storedCost = [event[@"x"] isKindOfClass:NSNumber.class] ? event[@"x"] : nil;
@@ -523,16 +625,16 @@ static NSDictionary<NSString *, id> *CodexAggregateCostEventsFromTrackingStart(N
         double cost = storedCost ? storedCost.doubleValue : ([estimate[@"available"] boolValue] ? [estimate[@"cost"] doubleValue] : 0);
         NSMutableDictionary *row = daily[day];
         if (!row) { row = [@{ @"tokens": @0LL, @"cost": @0.0, @"pricedTokens": @0LL } mutableCopy]; daily[day] = row; }
-        row[@"tokens"] = @([row[@"tokens"] longLongValue] + tokens);
+        row[@"tokens"] = @(CodexAddTokenCounts([row[@"tokens"] longLongValue], tokens));
         row[@"cost"] = @([row[@"cost"] doubleValue] + cost);
-        row[@"pricedTokens"] = @([row[@"pricedTokens"] longLongValue] + eventPricedTokens);
-        modelTokens[model] = @([modelTokens[model] longLongValue] + tokens);
-        totalTokens += tokens;
-        pricedTokens += eventPricedTokens;
+        row[@"pricedTokens"] = @(CodexAddTokenCounts([row[@"pricedTokens"] longLongValue], eventPricedTokens));
+        modelTokens[model] = @(CodexAddTokenCounts([modelTokens[model] longLongValue], tokens));
+        totalTokens = CodexAddTokenCounts(totalTokens, tokens);
+        pricedTokens = CodexAddTokenCounts(pricedTokens, eventPricedTokens);
         NSNumber *bucketTime = [event[@"t"] isKindOfClass:NSNumber.class] ? event[@"t"] : nil;
         if (bucketTime && bucketTime.doubleValue > 0) {
             NSNumber *key = @(floor(bucketTime.doubleValue / CodexCostTokenBucketSeconds) * CodexCostTokenBucketSeconds);
-            tokenBuckets[key] = @([tokenBuckets[key] longLongValue] + tokens);
+            tokenBuckets[key] = @(CodexAddTokenCounts([tokenBuckets[key] longLongValue], tokens));
         }
     }
     long long todayTokens = 0, sevenTokens = 0, thirtyTokens = 0;
@@ -544,8 +646,8 @@ static NSDictionary<NSString *, id> *CodexAggregateCostEventsFromTrackingStart(N
         NSDictionary *row = daily[key];
         long long tokens = [row[@"tokens"] longLongValue];
         double cost = [row[@"cost"] doubleValue];
-        thirtyTokens += tokens; thirtyCost += cost;
-        if (offset <= 6) { sevenTokens += tokens; sevenCost += cost; }
+        thirtyTokens = CodexAddTokenCounts(thirtyTokens, tokens); thirtyCost += cost;
+        if (offset <= 6) { sevenTokens = CodexAddTokenCounts(sevenTokens, tokens); sevenCost += cost; }
         if (offset == 0) { todayTokens = tokens; todayCost = cost; }
         if (offset <= 13) [trendRaw addObject:@(tokens)];
     }
@@ -603,7 +705,7 @@ NSDictionary<NSString *, id> *CodexTokenWindowSummary(NSArray<NSDictionary<NSStr
         if (!timestamp || !count) continue;
         NSTimeInterval value = timestamp.doubleValue;
         if (value < alignedStart || value >= windowEnd) continue;
-        tokens += MAX(0LL, count.longLongValue);
+        tokens = CodexAddTokenCounts(tokens, count.longLongValue);
         firstBucket = MIN(firstBucket, value);
         sawBucket = YES;
     }
@@ -627,6 +729,14 @@ NSDictionary<NSString *, id> *CodexScanCostHistoryAtHome(NSURL *codexHome, NSURL
     NSDate *referenceNow = now ?: NSDate.date;
     NSDate *trackingStartedAt = CodexLoadTrackingStart(trackingStartURL, referenceNow);
     NSDictionary *cache = CodexLoadCostCache(cacheURL);
+    if (cache.count == 0 || (trackingStartedAt && fabs([cache[@"startedAt"] doubleValue] - trackingStartedAt.timeIntervalSince1970) >= 1)) {
+        NSDictionary *backup = CodexLoadCostCache(CodexCostBackupURL(cacheURL));
+        if (backup.count && (!trackingStartedAt || fabs([backup[@"startedAt"] doubleValue] - trackingStartedAt.timeIntervalSince1970) < 1)) cache = backup;
+    }
+    if (!trackingStartedAt && cache.count && [cache[@"startedAt"] doubleValue] > 0 && [cache[@"startedAt"] doubleValue] <= referenceNow.timeIntervalSince1970 + 60) {
+        trackingStartedAt = [NSDate dateWithTimeIntervalSince1970:[cache[@"startedAt"] doubleValue]];
+        if (!CodexWriteTrackingStart(trackingStartURL, trackingStartedAt)) return @{@"available": @NO, @"preservePrevious": @YES, @"error": HUDL(@"统计起点恢复失败，保留上次数据")};
+    }
     NSTimeInterval cachedStart = [cache[@"startedAt"] doubleValue];
     NSInteger cacheVersion = [cache[@"version"] integerValue];
     BOOL supportedCacheVersion = cacheVersion == CodexCostCacheVersion || cacheVersion == CodexCostMigratableCacheVersion;
@@ -637,9 +747,15 @@ NSDictionary<NSString *, id> *CodexScanCostHistoryAtHome(NSURL *codexHome, NSURL
     if (validCache) trackingStartedAt = [NSDate dateWithTimeIntervalSince1970:cachedStart];
     NSTimeInterval tokenBucketsStartedAt = cacheVersion == CodexCostCacheVersion ? [cache[@"tokenBucketsStartedAt"] doubleValue] : referenceNow.timeIntervalSince1970;
     if (tokenBucketsStartedAt <= 0 || tokenBucketsStartedAt > referenceNow.timeIntervalSince1970 + 60.0) tokenBucketsStartedAt = referenceNow.timeIntervalSince1970;
-    NSArray<NSURL *> *files = CodexCostCandidateFiles(codexHome, referenceNow, trackingStartedAt ?: referenceNow);
-    if (!validCache) return CodexCreateCostBaseline(files, cacheURL, trackingStartURL, referenceNow);
-    if (files.count == 0) return @{ @"available": @NO, @"trackingStartedAt": @(trackingStartedAt.timeIntervalSince1970), @"tokenBucketsStartedAt": @(tokenBucketsStartedAt), @"error": @"安装后暂未找到本机会话Token记录", @"pricingVersion": CodexCostPricingVersion };
+    BOOL discoveryLimited = NO;
+    NSArray<NSURL *> *files = CodexCostCandidateFiles(codexHome, referenceNow, trackingStartedAt ?: referenceNow, &discoveryLimited);
+    if (!validCache) {
+        BOOL existing = trackingStartedAt || [NSFileManager.defaultManager fileExistsAtPath:cacheURL.path] || [NSFileManager.defaultManager fileExistsAtPath:trackingStartURL.path];
+        if (existing) return @{@"available": @NO, @"preservePrevious": @YES, @"scanIncomplete": @YES,
+            @"trackingStartedAt": @(trackingStartedAt.timeIntervalSince1970), @"error": HUDL(@"统计缓存异常或超过大小限制，已保留原起点和历史文件；未重新计数")};
+        return CodexCreateCostBaseline(files, cacheURL, trackingStartURL, referenceNow);
+    }
+    if (files.count == 0) return @{ @"available": @NO, @"scanIncomplete": @(discoveryLimited), @"trackingStartedAt": @(trackingStartedAt.timeIntervalSince1970), @"tokenBucketsStartedAt": @(tokenBucketsStartedAt), @"error": discoveryLimited ? HUDL(@"会话元数据超过本轮扫描上限，暂不能确认完整用量") : HUDL(@"安装后暂未找到本机会话Token记录"), @"pricingVersion": CodexCostPricingVersion };
     NSDictionary *cachedFiles = cache[@"files"];
     NSMutableDictionary *newFiles = [NSMutableDictionary dictionary];
     NSCalendar *calendar = [NSCalendar calendarWithIdentifier:NSCalendarIdentifierGregorian];
@@ -648,7 +764,7 @@ NSDictionary<NSString *, id> *CodexScanCostHistoryAtHome(NSURL *codexHome, NSURL
     NSDate *earliest = [trackingStartedAt compare:thirtyDayStart] == NSOrderedDescending ? trackingStartedAt : thirtyDayStart;
     NSDateFormatter *formatter = CodexCostDayFormatter();
     unsigned long long remainingBudget = CodexCostScanBudgetBytes;
-    BOOL incomplete = NO;
+    BOOL incomplete = discoveryLimited;
     for (NSURL *file in files) {
         NSDictionary *values = [file resourceValuesForKeys:@[NSURLContentModificationDateKey, NSURLFileSizeKey, NSURLIsRegularFileKey] error:nil];
         if (![values[NSURLIsRegularFileKey] boolValue]) continue;
@@ -656,12 +772,20 @@ NSDictionary<NSString *, id> *CodexScanCostHistoryAtHome(NSURL *codexHome, NSURL
         NSTimeInterval mtime = [values[NSURLContentModificationDateKey] timeIntervalSince1970];
         NSString *fileKey = CodexPathCacheKey(file.path);
         NSDictionary *old = [cachedFiles[fileKey] isKindOfClass:NSDictionary.class] ? cachedFiles[fileKey] : nil;
-        BOOL unchanged = old && [old[@"size"] unsignedLongLongValue] == size && fabs([old[@"mtime"] doubleValue] - mtime) < 0.001 && [old[@"complete"] boolValue];
-        if (unchanged) { newFiles[fileKey] = old; continue; }
+        BOOL verifiedCounting = [old[@"countingVersion"] integerValue] == 2 &&
+            [old[@"pricingVersion"] isEqual:CodexCostPricingVersion];
+        BOOL unchanged = verifiedCounting && old && [old[@"size"] unsignedLongLongValue] == size && fabs([old[@"mtime"] doubleValue] - mtime) < 0.001 && [old[@"complete"] boolValue];
+        if (unchanged) {
+            NSMutableDictionary *retained = [old mutableCopy];
+            retained[@"events"] = [old[@"events"] filteredArrayUsingPredicate:[NSPredicate predicateWithBlock:^BOOL(NSDictionary *event, __unused NSDictionary *bindings) {
+                return [event[@"d"] compare:[formatter stringFromDate:earliest]] != NSOrderedAscending;
+            }]];
+            newFiles[fileKey] = retained; continue;
+        }
         if (remainingBudget == 0) { if (old) newFiles[fileKey] = old; incomplete = YES; continue; }
         unsigned long long oldSize = [old[@"size"] unsignedLongLongValue];
         unsigned long long oldParsedBytes = [old[@"parsedBytes"] unsignedLongLongValue];
-        BOOL append = old && oldParsedBytes > 0 && oldParsedBytes < size && size >= oldSize &&
+        BOOL append = verifiedCounting && old && oldParsedBytes > 0 && oldParsedBytes < size && size >= oldSize &&
                       (([old[@"complete"] boolValue] && oldSize < size) || ![old[@"complete"] boolValue]);
         unsigned long long startOffset = append ? [old[@"parsedBytes"] unsignedLongLongValue] : 0;
         NSMutableArray *events = append && [old[@"events"] isKindOfClass:NSArray.class] ? [old[@"events"] mutableCopy] : [NSMutableArray array];
@@ -669,17 +793,8 @@ NSDictionary<NSString *, id> *CodexScanCostHistoryAtHome(NSURL *codexHome, NSURL
         if (append && [state[@"model"] isEqualToString:@"unknown"]) {
             NSString *seedModel = CodexCostModelBeforeOffset(file, startOffset);
             state[@"model"] = seedModel;
-            if (![seedModel isEqualToString:@"unknown"]) {
-                for (NSUInteger index = 0; index < events.count; index++) {
-                    NSDictionary *event = events[index];
-                    if (![event[@"m"] isEqualToString:@"unknown"]) continue;
-                    NSMutableDictionary *reattributed = [event mutableCopy];
-                    reattributed[@"m"] = seedModel;
-                    [reattributed removeObjectForKey:@"x"];
-                    [reattributed removeObjectForKey:@"p"];
-                    events[index] = reattributed;
-                }
-            }
+            // Never reprice a compacted unknown-model bucket as one long request.
+            // A later model observation cannot identify earlier requests.
         }
         if ([state[@"occurrences"] isKindOfClass:NSDictionary.class]) state[@"occurrences"] = [state[@"occurrences"] mutableCopy];
         BOOL complete = NO;
@@ -691,25 +806,25 @@ NSDictionary<NSString *, id> *CodexScanCostHistoryAtHome(NSURL *codexHome, NSURL
         remainingBudget = consumed >= remainingBudget ? 0 : remainingBudget - consumed;
         NSArray *compactedEvents = CodexCompactedCostEvents(events, fileKey);
         [state removeObjectForKey:@"occurrences"];
-        NSDictionary *entry = @{ @"size": @(size), @"mtime": @(mtime), @"parsedBytes": @(parsed), @"complete": @(complete), @"state": state, @"events": compactedEvents };
+        NSDictionary *entry = @{ @"countingVersion": @2, @"pricingVersion": CodexCostPricingVersion, @"size": @(size), @"mtime": @(mtime), @"parsedBytes": @(parsed), @"complete": @(complete), @"state": state, @"events": compactedEvents };
         newFiles[fileKey] = entry;
         if (!complete && !reachedEnd) incomplete = YES;
     }
-    if (!CodexWriteJSONObject(@{ @"version": @(CodexCostCacheVersion), @"startedAt": @(trackingStartedAt.timeIntervalSince1970), @"tokenBucketsStartedAt": @(tokenBucketsStartedAt), @"updatedAt": @(referenceNow.timeIntervalSince1970), @"files": newFiles }, cacheURL)) {
-        return @{ @"available": @NO, @"scanIncomplete": @NO,
+    if (!CodexWriteCostCache(@{ @"version": @(CodexCostCacheVersion), @"startedAt": @(trackingStartedAt.timeIntervalSince1970), @"tokenBucketsStartedAt": @(tokenBucketsStartedAt), @"updatedAt": @(referenceNow.timeIntervalSince1970), @"files": newFiles }, cacheURL)) {
+        return @{ @"available": @NO, @"scanIncomplete": @YES, @"preservePrevious": @YES,
                   @"trackingStartedAt": @(trackingStartedAt.timeIntervalSince1970),
                   @"tokenBucketsStartedAt": @(tokenBucketsStartedAt),
                   @"updatedAt": @(referenceNow.timeIntervalSince1970),
-                  @"error": @"安装后Token缓存保存失败",
+                  @"error": HUDL(@"Token缓存保存失败或超过大小限制，保留上次数据和原统计起点"),
                   @"pricingVersion": CodexCostPricingVersion };
     }
     NSMutableArray *allEvents = [NSMutableArray array];
-    for (NSDictionary *entry in newFiles.allValues) if ([entry[@"events"] isKindOfClass:NSArray.class]) [allEvents addObjectsFromArray:entry[@"events"]];
+    for (NSDictionary *entry in newFiles.allValues) if ([entry[@"countingVersion"] integerValue] == 2 && [entry[@"pricingVersion"] isEqual:CodexCostPricingVersion] && [entry[@"events"] isKindOfClass:NSArray.class]) [allEvents addObjectsFromArray:entry[@"events"]];
     NSMutableDictionary *aggregate = [CodexAggregateCostEventsFromTrackingStart(allEvents, referenceNow, incomplete, trackingStartedAt) mutableCopy];
     aggregate[@"trackingStartedAt"] = @(trackingStartedAt.timeIntervalSince1970);
     aggregate[@"tokenBucketsStartedAt"] = @(tokenBucketsStartedAt);
     aggregate[@"updatedAt"] = @(referenceNow.timeIntervalSince1970);
-    if (![aggregate[@"available"] boolValue]) aggregate[@"error"] = incomplete ? @"正在补齐本机Token历史" : @"本机记录暂时没有Token数据";
+    if (![aggregate[@"available"] boolValue]) aggregate[@"error"] = incomplete ? HUDL(@"正在补齐本机Token历史") : HUDL(@"本机记录暂时没有Token数据");
     return aggregate;
 }
 
@@ -732,10 +847,10 @@ NSDictionary<NSString *, id> *CodexQuotaForecastFromSamples(NSArray<NSDictionary
         [valid addObject:@{ @"t": timestamp, @"r": remaining }];
     }
     [valid sortUsingComparator:^NSComparisonResult(NSDictionary *left, NSDictionary *right) { return [left[@"t"] compare:right[@"t"]]; }];
-    if (valid.count < 3) return @{ @"available": @NO, @"detail": @"至少需要15分钟历史" };
+    if (valid.count < 3) return @{ @"available": @NO, @"detail": HUDL(@"至少需要15分钟历史") };
     NSTimeInterval firstTime = [valid.firstObject[@"t"] doubleValue];
     NSTimeInterval span = [valid.lastObject[@"t"] doubleValue] - firstTime;
-    if (span < 900.0) return @{ @"available": @NO, @"detail": @"至少需要15分钟历史" };
+    if (span < 900.0) return @{ @"available": @NO, @"detail": HUDL(@"至少需要15分钟历史") };
     double meanX = 0, meanY = 0;
     for (NSDictionary *sample in valid) { meanX += ([sample[@"t"] doubleValue] - firstTime) / 3600.0; meanY += [sample[@"r"] doubleValue]; }
     meanX /= valid.count; meanY /= valid.count;
@@ -746,15 +861,15 @@ NSDictionary<NSString *, id> *CodexQuotaForecastFromSamples(NSArray<NSDictionary
         numerator += (x - meanX) * (y - meanY); denominator += (x - meanX) * (x - meanX);
     }
     double ratePerHour = denominator > 0 ? MAX(0, -numerator / denominator) : 0;
-    NSString *confidence = span >= 6 * 3600.0 && valid.count >= 12 ? @"高" : (span >= 3600.0 && valid.count >= 6 ? @"中" : @"低");
+    NSString *confidence = span >= 6 * 3600.0 && valid.count >= 12 ? HUDL(@"高") : (span >= 3600.0 && valid.count >= 6 ? HUDL(@"中") : HUDL(@"低"));
     NSTimeInterval secondsToReset = currentResetAt - nowValue;
-    if (ratePerHour < 0.02) return @{ @"available": @YES, @"headline": @"近期用量平稳", @"detail": @"按当前速度可撑到重置", @"confidence": confidence, @"projectedRemaining": @(currentRemaining) };
+    if (ratePerHour < 0.02) return @{ @"available": @YES, @"headline": HUDL(@"近期用量平稳"), @"detail": HUDL(@"按当前速度可撑到重置"), @"confidence": confidence, @"projectedRemaining": @(currentRemaining) };
     double projected = currentRemaining - ratePerHour * secondsToReset / 3600.0;
     NSTimeInterval exhaustAt = nowValue + currentRemaining / ratePerHour * 3600.0;
-    if (projected > 0) return @{ @"available": @YES, @"headline": @"可撑到重置", @"detail": [NSString stringWithFormat:@"预计重置时剩余%.0f%% · %@可信", MIN(100.0, projected), confidence], @"confidence": confidence, @"projectedRemaining": @(projected), @"exhaustAt": @(exhaustAt) };
+    if (projected > 0) return @{ @"available": @YES, @"headline": HUDL(@"可撑到重置"), @"detail": [NSString stringWithFormat:HUDL(@"预计重置时剩余%.0f%% · %@可信"), MIN(100.0, projected), confidence], @"confidence": confidence, @"projectedRemaining": @(projected), @"exhaustAt": @(exhaustAt) };
     NSTimeInterval hours = MAX(0, (exhaustAt - nowValue) / 3600.0);
-    NSString *timeText = hours < 1.0 ? [NSString stringWithFormat:@"约%.0f分钟后", hours * 60.0] : [NSString stringWithFormat:@"约%.1f小时后", hours];
-    return @{ @"available": @YES, @"headline": @"可能提前用完", @"detail": [NSString stringWithFormat:@"%@ · %@可信", timeText, confidence], @"confidence": confidence, @"projectedRemaining": @(projected), @"exhaustAt": @(exhaustAt) };
+    NSString *timeText = hours < 1.0 ? [NSString stringWithFormat:HUDL(@"约%.0f分钟后"), hours * 60.0] : [NSString stringWithFormat:HUDL(@"约%.1f小时后"), hours];
+    return @{ @"available": @YES, @"headline": HUDL(@"可能提前用完"), @"detail": [NSString stringWithFormat:HUDL(@"%@ · %@可信"), timeText, confidence], @"confidence": confidence, @"projectedRemaining": @(projected), @"exhaustAt": @(exhaustAt) };
 }
 
 NSDictionary<NSString *, id> *CodexWeeklyConsumptionFromSamples(NSArray<NSDictionary<NSString *, id> *> *samples,
@@ -764,7 +879,7 @@ NSDictionary<NSString *, id> *CodexWeeklyConsumptionFromSamples(NSArray<NSDictio
                                                                   NSDate *now) {
     NSDate *referenceNow = now ?: NSDate.date;
     NSTimeInterval nowValue = referenceNow.timeIntervalSince1970;
-    if (currentResetAt <= nowValue) return @{ @"available": @NO, @"detail": @"额度窗口已经重置" };
+    if (currentResetAt <= nowValue) return @{ @"available": @NO, @"detail": HUDL(@"额度窗口已经重置") };
     BOOL naturalDay = [mode isEqualToString:@"naturalDay"];
     NSDate *periodDate = naturalDay ? [NSCalendar.currentCalendar startOfDayForDate:referenceNow] : [referenceNow dateByAddingTimeInterval:-24.0 * 3600.0];
     NSTimeInterval periodStart = periodDate.timeIntervalSince1970;
@@ -781,7 +896,7 @@ NSDictionary<NSString *, id> *CodexWeeklyConsumptionFromSamples(NSArray<NSDictio
         if (distance < bestDistance) { bestDistance = distance; baseline = sample; }
     }
     if (!baseline || bestDistance > 30.0 * 60.0) {
-        return @{ @"available": @NO, @"detail": naturalDay ? @"缺少接近今天零点的数据" : @"尚未积累完整24小时数据", @"periodStart": @(periodStart) };
+        return @{ @"available": @NO, @"detail": naturalDay ? HUDL(@"缺少接近今天零点的数据") : HUDL(@"尚未积累完整24小时数据"), @"periodStart": @(periodStart) };
     }
     double baselineRemaining = [baseline[@"w"] doubleValue];
     double consumed = MAX(0.0, MIN(100.0, baselineRemaining - currentRemaining));

@@ -113,7 +113,7 @@ bool ReadIntegerValue(const IJsonValue& value,
         return false;
     }
     const double number = value.GetNumber();
-    if (!std::isfinite(number) || std::trunc(number) != number) {
+    if (!std::isfinite(number) || std::trunc(number) != number || number < 0) {
         failure = Failure(MethodFailureKind::kUnexpectedType, field,
                           L"Expected a finite integer JSON number");
         return false;

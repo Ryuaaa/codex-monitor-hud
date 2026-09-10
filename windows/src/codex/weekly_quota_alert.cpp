@@ -60,7 +60,7 @@ bool IsValidWeeklyQuotaAlertPolicy(
     const WeeklyQuotaAlertPolicy& policy) noexcept {
     return IsValidMode(policy.mode) &&
            std::isfinite(policy.thresholdPercent) &&
-           policy.thresholdPercent >= 5.0 &&
+           policy.thresholdPercent >= 1.0 &&
            policy.thresholdPercent <= 100.0;
 }
 

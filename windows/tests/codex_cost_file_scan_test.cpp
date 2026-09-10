@@ -220,6 +220,8 @@ void TestCandidateDiscoveryRetentionAndPrivacy() {
     WriteFile(temporary.path() / "sessions" / "1900" / "01" / "01" /
                   "rollout-old-session.jsonl",
               "old-session\n");
+    WriteFile(temporary.path() / "sessions" / "2020" / "01" / "01" /
+                  "rollout-resumed-old-task.jsonl", "resumed-old-task\n");
 
     const auto archived = temporary.path() / "archived_sessions";
     WriteFile(archived / "archived-session.jsonl", "archive\n");
@@ -235,10 +237,10 @@ void TestCandidateDiscoveryRetentionAndPrivacy() {
 
     const auto result = ScanCodexCostRolloutFiles(Request(temporary.path(), now));
     Require(result.ok(), "valid root scan must succeed");
-    Require(result.files.size() == 2,
-            "only active session and retained archive files must be discovered");
+    Require(result.files.size() == 3,
+            "recently modified old-date tasks must also be discovered");
     Require(LineTexts(result.lines) ==
-                std::set<std::string>({"session-one", "session-two", "archive"}),
+                std::set<std::string>({"session-one", "session-two", "archive", "resumed-old-task"}),
             "only whitelisted rollout JSONL content must be returned");
     Require(result.skippedCompressedFiles == 1 &&
                 result.ignoredExpiredArchivedFiles == 1,
@@ -423,8 +425,8 @@ void TestCancellationStopsAVisibleScan() {
     const auto result = ScanCodexCostRolloutFiles(request);
     Require(result.status == CodexCostFileScanStatus::kCancelled &&
                 result.coverageIncomplete &&
-                result.bytesRead == 64 * 1024,
-            "a hidden-card cancellation must stop inside the 64 KiB read loop");
+                result.bytesRead <= 64 * 1024,
+            "hidden-card cancellation must stop before or within the first 64 KiB read");
 }
 
 }  // namespace

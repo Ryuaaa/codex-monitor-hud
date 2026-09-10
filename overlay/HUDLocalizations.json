@@ -1,0 +1,2448 @@
+{
+  "安装后近30天 · Token与API估算": {"en":"Since install, ≤30d · tokens & API estimate","ja":"導入後・最大30日 · Token/API換算","ko":"설치 후 최대 30일 · Token/API 추정"},
+  "剩余": {
+    "en": "Remaining",
+    "ja": "残り",
+    "ko": "잔여"
+  },
+  "等待接口": {
+    "en": "Waiting for API",
+    "ja": "API待機中",
+    "ko": "API 대기 중"
+  },
+  "当前未返回": {
+    "en": "Not returned",
+    "ja": "未取得",
+    "ko": "미반환"
+  },
+  "已预留显示位置": {
+    "en": "Reserved for data",
+    "ja": "データ表示欄",
+    "ko": "데이터 표시 공간"
+  },
+  "内存占用最高的软件": {
+    "en": "Top memory apps",
+    "ja": "メモリ使用量の多いアプリ",
+    "ko": "메모리 사용량 상위 앱"
+  },
+  "最近任务（历史记录）": {
+    "en": "Recent tasks (history)",
+    "ja": "最近のタスク（履歴）",
+    "ko": "최근 작업(기록)"
+  },
+  "官方任务列表 · 不代表正在运行": {
+    "en": "Official history · not live status",
+    "ja": "公式履歴・実行状態ではありません",
+    "ko": "공식 기록 · 실행 상태 아님"
+  },
+  "暂无任务记录": {
+    "en": "No task history",
+    "ja": "タスク履歴なし",
+    "ko": "작업 기록 없음"
+  },
+  "完整额度列表": {
+    "en": "All quota limits",
+    "ja": "すべての利用上限",
+    "ko": "전체 사용 한도"
+  },
+  "官方接口 · 高级显示": {
+    "en": "Official API · advanced",
+    "ja": "公式API・詳細表示",
+    "ko": "공식 API · 상세 표시"
+  },
+  "当前没有可显示的额度项": {
+    "en": "No quota data to display",
+    "ja": "表示できる利用枠なし",
+    "ko": "표시할 한도 없음"
+  },
+  "主页": {
+    "en": "Home",
+    "ja": "ホーム",
+    "ko": "홈"
+  },
+  "电脑性能": {
+    "en": "Computer",
+    "ja": "システム",
+    "ko": "컴퓨터 성능"
+  },
+  "最小化到程序栏": {
+    "en": "Minimize to Dock",
+    "ja": "Dockに最小化",
+    "ko": "Dock으로 최소화"
+  },
+  "取消置顶": {
+    "en": "Unpin window",
+    "ja": "最前面表示を解除",
+    "ko": "항상 위 해제"
+  },
+  "锁定位置和大小": {
+    "en": "Lock position and size",
+    "ja": "位置とサイズを固定",
+    "ko": "위치 및 크기 잠금"
+  },
+  "打开任务中心": {
+    "en": "Open Task Center",
+    "ja": "タスクセンターを開く",
+    "ko": "작업 센터 열기"
+  },
+  "设置": {
+    "en": "Settings",
+    "ja": "設定",
+    "ko": "설정"
+  },
+  "悬浮窗设置": {
+    "en": "HUD settings",
+    "ja": "HUD設定",
+    "ko": "HUD 설정"
+  },
+  "● 正在连接本机Codex": {
+    "en": "● Connecting to local Codex",
+    "ja": "● ローカルCodexに接続中",
+    "ko": "● 로컬 Codex 연결 중"
+  },
+  "任务活动（本机推测）": {
+    "en": "Task activity (inferred)",
+    "ja": "タスク動作（推定）",
+    "ko": "작업 활동(추정)"
+  },
+  "正在读取": {
+    "en": "Loading",
+    "ja": "読み込み中",
+    "ko": "불러오는 중"
+  },
+  "活跃5秒 · 空闲20秒": {
+    "en": "Active 5s · idle 20s",
+    "ja": "動作時5秒・待機時20秒",
+    "ko": "활성 5초 · 유휴 20초"
+  },
+  "5小时额度": {
+    "en": "5-hour quota",
+    "ja": "5時間利用枠",
+    "ko": "5시간 한도"
+  },
+  "每周额度": {
+    "en": "Weekly quota",
+    "ja": "週間利用枠",
+    "ko": "주간 한도"
+  },
+  "订阅": {
+    "en": "Subscription",
+    "ja": "契約",
+    "ko": "구독"
+  },
+  "不显示邮箱": {
+    "en": "Email hidden",
+    "ja": "メール非表示",
+    "ko": "이메일 숨김"
+  },
+  "账户Token统计": {
+    "en": "Account tokens",
+    "ja": "アカウントToken統計",
+    "ko": "계정 Token 통계"
+  },
+  "今日 --": {
+    "en": "Today --",
+    "ja": "今日 --",
+    "ko": "오늘 --"
+  },
+  "7天 -- · 不等于额度": {
+    "en": "7 days -- · not quota",
+    "ja": "7日 --・利用枠とは別",
+    "ko": "7일 -- · 한도와 별개"
+  },
+  "模型专属额度": {
+    "en": "Model-specific quota",
+    "ja": "モデル別利用枠",
+    "ko": "모델별 한도"
+  },
+  "高级显示": {
+    "en": "Advanced",
+    "ja": "詳細表示",
+    "ko": "상세 표시"
+  },
+  "Token用量与费用": {
+    "en": "Tokens & API-equivalent cost",
+    "ja": "TokenとAPI換算費用",
+    "ko": "Token 및 API 환산 비용"
+  },
+  "今日 -- · 7天 -- · 本月预计 --": {
+    "en": "Today -- · 7 days -- · month forecast --",
+    "ja": "今日 --・7日 --・月間予測 --",
+    "ko": "오늘 -- · 7일 -- · 월간 예측 --"
+  },
+  "5小时 Token": {
+    "en": "5-hour tokens",
+    "ja": "5時間Token",
+    "ko": "5시간 Token"
+  },
+  "本地统计 · 等待数据": {
+    "en": "Local count · waiting",
+    "ja": "ローカル集計・待機中",
+    "ko": "로컬 통계 · 대기 중"
+  },
+  "24小时 Token": {
+    "en": "24-hour tokens",
+    "ja": "24時間Token",
+    "ko": "24시간 Token"
+  },
+  "本周Token": {
+    "en": "Weekly tokens",
+    "ja": "週間Token",
+    "ko": "주간 Token"
+  },
+  "本地统计 · 基准100%": {
+    "en": "Local count · baseline 100%",
+    "ja": "ローカル集計・基準100%",
+    "ko": "로컬 통계 · 기준 100%"
+  },
+  "额度趋势预测": {
+    "en": "Quota forecast",
+    "ja": "利用枠の予測",
+    "ko": "한도 추세 예측"
+  },
+  "正在积累历史": {
+    "en": "Collecting history",
+    "ja": "履歴を蓄積中",
+    "ko": "기록 수집 중"
+  },
+  "至少需要15分钟数据": {
+    "en": "Needs 15 minutes of data",
+    "ja": "15分以上のデータが必要",
+    "ko": "15분 이상의 데이터 필요"
+  },
+  "OpenAI服务状态": {
+    "en": "OpenAI service status",
+    "ja": "OpenAIサービス状態",
+    "ko": "OpenAI 서비스 상태"
+  },
+  "正在检查": {
+    "en": "Checking",
+    "ja": "確認中",
+    "ko": "확인 중"
+  },
+  "官方状态页 · 低频刷新": {
+    "en": "Official status · low frequency",
+    "ja": "公式状態・低頻度更新",
+    "ko": "공식 상태 · 저빈도 갱신"
+  },
+  "最长单次任务": {
+    "en": "Longest task",
+    "ja": "最長タスク",
+    "ko": "최장 작업"
+  },
+  "账户历史记录": {
+    "en": "Account history",
+    "ja": "アカウント履歴",
+    "ko": "계정 기록"
+  },
+  "最长连续使用": {
+    "en": "Longest streak",
+    "ja": "最長連続利用",
+    "ko": "최장 연속 사용"
+  },
+  "历史单日峰值Token": {
+    "en": "Peak daily tokens",
+    "ja": "1日の最大Token",
+    "ko": "일일 최대 Token"
+  },
+  "来源  Codex本机接口": {
+    "en": "Source: local Codex API",
+    "ja": "情報源：ローカルCodex API",
+    "ko": "출처: 로컬 Codex API"
+  },
+  "● 正在读取电脑状态": {
+    "en": "● Reading system status",
+    "ja": "● システム状態を取得中",
+    "ko": "● 시스템 상태 읽는 중"
+  },
+  "当前瓶颈": {
+    "en": "Bottleneck",
+    "ja": "ボトルネック",
+    "ko": "병목"
+  },
+  "无": {
+    "en": "None",
+    "ja": "なし",
+    "ko": "없음"
+  },
+  "Codex影响 --": {
+    "en": "Codex impact --",
+    "ja": "Codexの影響 --",
+    "ko": "Codex 영향 --"
+  },
+  "电脑状态": {
+    "en": "System status",
+    "ja": "システム状態",
+    "ko": "시스템 상태"
+  },
+  "CPU -- · 内存 --": {
+    "en": "CPU -- · memory --",
+    "ja": "CPU --・メモリ --",
+    "ko": "CPU -- · 메모리 --"
+  },
+  "已用 -- / --G · 压力 --": {
+    "en": "Used -- / --G · pressure --",
+    "ja": "使用 -- / --G・負荷 --",
+    "ko": "사용 -- / --G · 압력 --"
+  },
+  "Codex：CPU --（整机） · 内存 --G（占总内存 --%）": {
+    "en": "Codex: CPU -- (system) · memory --G (--% of total)",
+    "ja": "Codex：CPU --（全体比）・メモリ --G（全体の --%）",
+    "ko": "Codex: CPU --(전체 기준) · 메모리 --G(전체의 --%)"
+  },
+  "CPU趋势": {
+    "en": "CPU trend",
+    "ja": "CPU推移",
+    "ko": "CPU 추세"
+  },
+  "平均 -- · 峰值 --": {
+    "en": "Average -- · peak --",
+    "ja": "平均 --・最大 --",
+    "ko": "평균 -- · 최대 --"
+  },
+  "电脑5秒起 · Codex智能刷新": {
+    "en": "System ≥5s · adaptive Codex refresh",
+    "ja": "システム5秒～・Codex自動調整",
+    "ko": "시스템 최소 5초 · Codex 자동 갱신"
+  },
+  "Codex影响": {
+    "en": "Codex impact",
+    "ja": "Codexの影響",
+    "ko": "Codex 영향"
+  },
+  "低": {
+    "en": "Low",
+    "ja": "低",
+    "ko": "낮음"
+  },
+  "整机CPU": {
+    "en": "System CPU",
+    "ja": "システムCPU",
+    "ko": "전체 CPU"
+  },
+  "整机内存": {
+    "en": "System memory",
+    "ja": "システムメモリ",
+    "ko": "전체 메모리"
+  },
+  "已用 --% · 压力 --": {
+    "en": "Used --% · pressure --",
+    "ja": "使用 --%・負荷 --",
+    "ko": "사용 --% · 압력 --"
+  },
+  "系统  Swap --  ·  热状态 --": {
+    "en": "System: swap -- · thermal --",
+    "ja": "システム：Swap --・熱状態 --",
+    "ko": "시스템: Swap -- · 열 상태 --"
+  },
+  "来源  macOS系统接口": {
+    "en": "Source: macOS system API",
+    "ja": "情報源：macOSシステムAPI",
+    "ko": "출처: macOS 시스템 API"
+  },
+  "开启置顶": {
+    "en": "Pin window",
+    "ja": "最前面に表示",
+    "ko": "항상 위"
+  },
+  "当前置顶，点击取消置顶": {
+    "en": "Pinned; click to unpin",
+    "ja": "最前面表示中・クリックで解除",
+    "ko": "항상 위 켜짐 · 클릭하여 해제"
+  },
+  "当前不置顶，点击置顶": {
+    "en": "Not pinned; click to pin",
+    "ja": "最前面表示なし・クリックで固定",
+    "ko": "항상 위 꺼짐 · 클릭하여 설정"
+  },
+  "解锁位置和大小": {
+    "en": "Unlock position and size",
+    "ja": "位置とサイズを解除",
+    "ko": "위치 및 크기 잠금 해제"
+  },
+  "位置和大小已锁定，点击解锁": {
+    "en": "Position and size locked; click to unlock",
+    "ja": "位置とサイズ固定中・クリックで解除",
+    "ko": "위치와 크기 잠김 · 클릭하여 해제"
+  },
+  "锁定位置和大小，防止误拖动": {
+    "en": "Lock to prevent accidental resizing",
+    "ja": "位置とサイズを固定して誤操作を防止",
+    "ko": "위치와 크기를 잠가 오작동 방지"
+  },
+  "恢复时间未返回": {
+    "en": "Reset time unavailable",
+    "ja": "回復時刻未取得",
+    "ko": "복구 시간 미반환"
+  },
+  "即将恢复": {
+    "en": "Resetting soon",
+    "ja": "まもなく回復",
+    "ko": "곧 복구"
+  },
+  "%ld分钟后恢复": {
+    "en": "Resets in %ld min",
+    "ja": "%ld分後に回復",
+    "ko": "%ld분 후 복구"
+  },
+  "%ld小时%ld分后恢复": {
+    "en": "Resets in %ldh %ldm",
+    "ja": "%ld時間%ld分後に回復",
+    "ko": "%ld시간 %ld분 후 복구"
+  },
+  "%ld小时后恢复": {
+    "en": "Resets in %ldh",
+    "ja": "%ld時間後に回復",
+    "ko": "%ld시간 후 복구"
+  },
+  "%ld天%ld小时后恢复": {
+    "en": "Resets in %ldd %ldh",
+    "ja": "%ld日%ld時間後に回復",
+    "ko": "%ld일 %ld시간 후 복구"
+  },
+  "周期未返回": {
+    "en": "Period unavailable",
+    "ja": "期間未取得",
+    "ko": "기간 미반환"
+  },
+  "5小时": {
+    "en": "5 hours",
+    "ja": "5時間",
+    "ko": "5시간"
+  },
+  "每周": {
+    "en": "Weekly",
+    "ja": "週間",
+    "ko": "주간"
+  },
+  "%ld天": {
+    "en": "%ld days",
+    "ja": "%ld日",
+    "ko": "%ld일"
+  },
+  "%ld小时": {
+    "en": "%ld hours",
+    "ja": "%ld時間",
+    "ko": "%ld시간"
+  },
+  "%ld分钟": {
+    "en": "%ld minutes",
+    "ja": "%ld分",
+    "ko": "%ld분"
+  },
+  "上次数据": {
+    "en": "Previous data",
+    "ja": "前回のデータ",
+    "ko": "이전 데이터"
+  },
+  "本轮未返回 · %@": {
+    "en": "Not returned · %@",
+    "ja": "今回未取得・%@",
+    "ko": "미반환 · %@"
+  },
+  "已过期": {
+    "en": "Stale",
+    "ja": "期限切れ",
+    "ko": "오래됨"
+  },
+  "上次数据已过期": {
+    "en": "Previous data expired",
+    "ja": "前回データは期限切れ",
+    "ko": "이전 데이터 만료"
+  },
+  "等待官方返回新周期": {
+    "en": "Waiting for new official period",
+    "ja": "新しい公式期間を待機中",
+    "ko": "새 공식 기간 대기 중"
+  },
+  "官方触顶": {
+    "en": "Official limit reached",
+    "ja": "公式上限に到達",
+    "ko": "공식 한도 도달"
+  },
+  "可撑到重置": {
+    "en": "Lasts until reset",
+    "ja": "回復まで利用可能",
+    "ko": "복구까지 사용 가능"
+  },
+  "可能提前用完": {
+    "en": "May run out early",
+    "ja": "回復前に上限到達の可能性",
+    "ko": "조기 소진 가능"
+  },
+  "近期用量平稳": {
+    "en": "Usage recently stable",
+    "ja": "最近の利用は安定",
+    "ko": "최근 사용량 안정"
+  },
+  "近期平稳": {
+    "en": "Stable recently",
+    "ja": "最近は安定",
+    "ko": "최근 안정"
+  },
+  "积累中": {
+    "en": "Collecting",
+    "ja": "蓄積中",
+    "ko": "수집 중"
+  },
+  "%ld秒": {
+    "en": "%ld seconds",
+    "ja": "%ld秒",
+    "ko": "%ld초"
+  },
+  "%ld小时%ld分": {
+    "en": "%ldh %ldm",
+    "ja": "%ld時間%ld分",
+    "ko": "%ld시간 %ld분"
+  },
+  "未知订阅": {
+    "en": "Unknown subscription",
+    "ja": "契約不明",
+    "ko": "알 수 없는 구독"
+  },
+  "还剩%ld天": {
+    "en": "%ld days left",
+    "ja": "残り%ld日",
+    "ko": "%ld일 남음"
+  },
+  "今天到期/续费": {
+    "en": "Expires/renews today",
+    "ja": "本日期限・更新日",
+    "ko": "오늘 만료/갱신"
+  },
+  "已过%ld天 · 请核对": {
+    "en": "%ld days past · verify",
+    "ja": "%ld日経過・要確認",
+    "ko": "%ld일 지남 · 확인 필요"
+  },
+  "%@ · 截止/续费 %@ · %@ · 手动": {
+    "en": "%@ · expires/renews %@ · %@ · manual",
+    "ja": "%@・期限/更新 %@・%@・手動",
+    "ko": "%@ · 만료/갱신 %@ · %@ · 수동"
+  },
+  "连接中": {
+    "en": "Connecting",
+    "ja": "接続中",
+    "ko": "연결 중"
+  },
+  "刚刚": {
+    "en": "Just now",
+    "ja": "たった今",
+    "ko": "방금"
+  },
+  "%ld秒前": {
+    "en": "%lds ago",
+    "ja": "%ld秒前",
+    "ko": "%ld초 전"
+  },
+  "%ld分钟前": {
+    "en": "%ldm ago",
+    "ja": "%ld分前",
+    "ko": "%ld분 전"
+  },
+  "失败·上次%@": {
+    "en": "Failed · last %@",
+    "ja": "失敗・前回%@",
+    "ko": "실패 · 이전 %@"
+  },
+  "失败": {
+    "en": "Failed",
+    "ja": "失敗",
+    "ko": "실패"
+  },
+  "已过期·上次%@": {
+    "en": "Stale · last %@",
+    "ja": "期限切れ・前回%@",
+    "ko": "오래됨 · 이전 %@"
+  },
+  "关于 Codex Monitor HUD": {
+    "en": "About Codex Monitor HUD",
+    "ja": "Codex Monitor HUDについて",
+    "ko": "Codex Monitor HUD 정보"
+  },
+  "显示悬浮窗": {
+    "en": "Show HUD",
+    "ja": "HUDを表示",
+    "ko": "HUD 표시"
+  },
+  "隐藏 Codex Monitor HUD": {
+    "en": "Hide Codex Monitor HUD",
+    "ja": "Codex Monitor HUDを隠す",
+    "ko": "Codex Monitor HUD 숨기기"
+  },
+  "检查更新…": {
+    "en": "Check for updates…",
+    "ja": "アップデートを確認…",
+    "ko": "업데이트 확인…"
+  },
+  "退出 Codex Monitor HUD": {
+    "en": "Quit Codex Monitor HUD",
+    "ja": "Codex Monitor HUDを終了",
+    "ko": "Codex Monitor HUD 종료"
+  },
+  "窗口": {
+    "en": "Window",
+    "ja": "ウインドウ",
+    "ko": "윈도우"
+  },
+  "暂时无法打开任务中心": {
+    "en": "Cannot open Task Center",
+    "ja": "タスクセンターを開けません",
+    "ko": "작업 센터를 열 수 없음"
+  },
+  "尚未找到已安装的 Codex Monitor 任务中心。悬浮窗会继续正常运行。": {
+    "en": "Task Center is not installed. The HUD will keep running.",
+    "ja": "タスクセンターが見つかりません。HUDは引き続き動作します。",
+    "ko": "작업 센터를 찾을 수 없습니다. HUD는 계속 실행됩니다."
+  },
+  "打开下载页": {
+    "en": "Open download page",
+    "ja": "ダウンロードページを開く",
+    "ko": "다운로드 페이지 열기"
+  },
+  "取消": {
+    "en": "Cancel",
+    "ja": "キャンセル",
+    "ko": "취소"
+  },
+  "任务中心已找到，但启动失败：%@": {
+    "en": "Task Center found but failed to launch: %@",
+    "ja": "タスクセンターの起動に失敗：%@",
+    "ko": "작업 센터 실행 실패: %@"
+  },
+  "未知错误": {
+    "en": "Unknown error",
+    "ja": "不明なエラー",
+    "ko": "알 수 없는 오류"
+  },
+  "正在检查官方状态": {
+    "en": "Checking official status",
+    "ja": "公式状態を確認中",
+    "ko": "공식 상태 확인 중"
+  },
+  "OpenAI整体状态未知": {
+    "en": "OpenAI overall status unknown",
+    "ja": "OpenAI全体の状態不明",
+    "ko": "OpenAI 전체 상태 알 수 없음"
+  },
+  "未读取账号信息 · 稍后重试": {
+    "en": "No account data accessed · retry later",
+    "ja": "アカウント情報未取得・後で再試行",
+    "ko": "계정 정보 미접근 · 나중에 재시도"
+  },
+  "未发现明显资源压力": {
+    "en": "No clear resource pressure",
+    "ja": "明確なリソース不足なし",
+    "ko": "뚜렷한 리소스 압박 없음"
+  },
+  "内存严重吃紧 · Codex很可能是主因": {
+    "en": "Severe memory pressure · Codex likely primary cause",
+    "ja": "深刻なメモリ不足・Codexが主因の可能性大",
+    "ko": "심각한 메모리 압박 · Codex가 주원인일 가능성"
+  },
+  "内存严重吃紧 · 主因待判断": {
+    "en": "Severe memory pressure · cause unclear",
+    "ja": "深刻なメモリ不足・主因不明",
+    "ko": "심각한 메모리 압박 · 원인 미확인"
+  },
+  "内存开始吃紧 · Codex可能是主因": {
+    "en": "Memory pressure rising · Codex may be the cause",
+    "ja": "メモリ不足傾向・Codexが原因の可能性",
+    "ko": "메모리 압박 증가 · Codex가 원인일 수 있음"
+  },
+  "内存开始吃紧 · 主因待判断": {
+    "en": "Memory pressure rising · cause unclear",
+    "ja": "メモリ不足傾向・主因不明",
+    "ko": "메모리 압박 증가 · 원인 미확인"
+  },
+  "系统热压力正在限制性能": {
+    "en": "Thermal pressure is limiting performance",
+    "ja": "熱負荷が性能を制限中",
+    "ko": "열 압박으로 성능 제한 중"
+  },
+  "CPU吃紧 · Codex很可能是主因": {
+    "en": "CPU saturated · Codex likely primary cause",
+    "ja": "CPU逼迫・Codexが主因の可能性大",
+    "ko": "CPU 포화 · Codex가 주원인일 가능성"
+  },
+  "CPU吃紧 · 主要是其他程序": {
+    "en": "CPU saturated · mostly other apps",
+    "ja": "CPU逼迫・主に他のアプリ",
+    "ko": "CPU 포화 · 주로 다른 앱"
+  },
+  "CPU负载较高": {
+    "en": "High CPU load",
+    "ja": "CPU負荷が高め",
+    "ko": "높은 CPU 부하"
+  },
+  "暂无": {
+    "en": "None yet",
+    "ja": "まだありません",
+    "ko": "아직 없음"
+  },
+  "内存": {
+    "en": "Memory",
+    "ja": "メモリ",
+    "ko": "메모리"
+  },
+  "高": {
+    "en": "High",
+    "ja": "高",
+    "ko": "높음"
+  },
+  "中等置信度 · 推断": {
+    "en": "Medium confidence · inferred",
+    "ja": "確度中・推定",
+    "ko": "중간 신뢰도 · 추정"
+  },
+  "待判断": {
+    "en": "Undetermined",
+    "ja": "未判定",
+    "ko": "미판정"
+  },
+  "低置信度": {
+    "en": "Low confidence",
+    "ja": "確度低",
+    "ko": "낮은 신뢰도"
+  },
+  "较高置信度 · 推断": {
+    "en": "Higher confidence · inferred",
+    "ja": "確度やや高・推定",
+    "ko": "높은 신뢰도 · 추정"
+  },
+  "中等置信度 · 其他程序": {
+    "en": "Medium confidence · other apps",
+    "ja": "確度中・他のアプリ",
+    "ko": "중간 신뢰도 · 다른 앱"
+  },
+  "CPU偏高": {
+    "en": "CPU elevated",
+    "ja": "CPU高め",
+    "ko": "CPU 높음"
+  },
+  "热压力": {
+    "en": "Thermal pressure",
+    "ja": "熱負荷",
+    "ko": "열 압박"
+  },
+  "未发现": {
+    "en": "Not detected",
+    "ja": "未検出",
+    "ko": "감지되지 않음"
+  },
+  "较低": {
+    "en": "Lower",
+    "ja": "低め",
+    "ko": "낮은 편"
+  },
+  "仅依据已监测指标": {
+    "en": "Based only on monitored metrics",
+    "ja": "監視した指標のみで判断",
+    "ko": "감시한 지표만을 근거로 판단"
+  },
+  "当前判断": {
+    "en": "Assessment",
+    "ja": "現在の判断",
+    "ko": "현재 판단"
+  },
+  "Codex影响 %@ · %@": {
+    "en": "Codex impact %@ · %@",
+    "ja": "Codexの影響 %@・%@",
+    "ko": "Codex 영향 %@ · %@"
+  },
+  "整机总算力占用": {
+    "en": "Share of total CPU capacity",
+    "ja": "システム全体のCPU使用率",
+    "ko": "전체 CPU 성능 대비 사용률"
+  },
+  "已用 %.0f%% · 压力 %@": {
+    "en": "Used %.0f%% · pressure %@",
+    "ja": "使用 %.0f%%・負荷 %@",
+    "ko": "사용 %.0f%% · 압력 %@"
+  },
+  "未知": {
+    "en": "Unknown",
+    "ja": "不明",
+    "ko": "알 수 없음"
+  },
+  "CPU %.0f%% · 内存 %.0f%%": {
+    "en": "CPU %.0f%% · memory %.0f%%",
+    "ja": "CPU %.0f%%・メモリ %.0f%%",
+    "ko": "CPU %.0f%% · 메모리 %.0f%%"
+  },
+  "已用 %.1f / %.0fG · 压力 %@": {
+    "en": "Used %.1f / %.0fG · pressure %@",
+    "ja": "使用 %.1f / %.0fG・負荷 %@",
+    "ko": "사용 %.1f / %.0fG · 압력 %@"
+  },
+  "Codex：CPU %.1f%%（整机） · 内存 %.1fG（占总内存 %.0f%%）": {
+    "en": "Codex: CPU %.1f%% (system) · memory %.1fG (%.0f%% of total)",
+    "ja": "Codex：CPU %.1f%%（全体比）・メモリ %.1fG（全体の %.0f%%）",
+    "ko": "Codex: CPU %.1f%%(전체 기준) · 메모리 %.1fG(전체의 %.0f%%)"
+  },
+  "系统  Swap %.1fG (%+.0fM/10分)  ·  热状态 %@": {
+    "en": "System: swap %.1fG (%+.0fM/10m) · thermal %@",
+    "ja": "システム：Swap %.1fG（%+.0fM/10分）・熱状態 %@",
+    "ko": "시스템: Swap %.1fG(%+.0fM/10분) · 열 상태 %@"
+  },
+  "CPU近10分钟": {
+    "en": "CPU: last 10 minutes",
+    "ja": "CPU：直近10分",
+    "ko": "CPU: 최근 10분"
+  },
+  "CPU已采样%.0f秒": {
+    "en": "CPU sampled for %.0fs",
+    "ja": "CPU測定 %.0f秒",
+    "ko": "CPU 측정 %.0f초"
+  },
+  "CPU已采样%ld分": {
+    "en": "CPU sampled for %ldm",
+    "ja": "CPU測定 %ld分",
+    "ko": "CPU 측정 %ld분"
+  },
+  "平均%.0f%% · 峰值%.0f%%": {
+    "en": "Average %.0f%% · peak %.0f%%",
+    "ja": "平均 %.0f%%・最大 %.0f%%",
+    "ko": "평균 %.0f%% · 최대 %.0f%%"
+  },
+  "来源  macOS系统接口 · 刚刚更新 · 每%.0f秒": {
+    "en": "Source: macOS · just updated · every %.0fs",
+    "ja": "情報源：macOS・更新済み・%.0f秒間隔",
+    "ko": "출처: macOS · 방금 갱신 · %.0f초 간격"
+  },
+  "任务活动暂时无法可靠判断": {
+    "en": "Task activity cannot be determined reliably",
+    "ja": "タスク動作を確実に判定できません",
+    "ko": "작업 활동을 신뢰성 있게 판단할 수 없음"
+  },
+  "官方：普通包含用量暂不可用": {
+    "en": "Official: included usage unavailable",
+    "ja": "公式：通常の含有利用枠は利用不可",
+    "ko": "공식: 기본 포함 사용량 이용 불가"
+  },
+  "正在连接本机Codex": {
+    "en": "Connecting to local Codex",
+    "ja": "ローカルCodexに接続中",
+    "ko": "로컬 Codex 연결 중"
+  },
+  "5小时额度暂未返回": {
+    "en": "5-hour quota not returned",
+    "ja": "5時間利用枠未取得",
+    "ko": "5시간 한도 미반환"
+  },
+  "每周额度暂未返回": {
+    "en": "Weekly quota not returned",
+    "ja": "週間利用枠未取得",
+    "ko": "주간 한도 미반환"
+  },
+  "订阅信息暂未返回": {
+    "en": "Subscription not returned",
+    "ja": "契約情報未取得",
+    "ko": "구독 정보 미반환"
+  },
+  "Token用量暂未返回": {
+    "en": "Token usage not returned",
+    "ja": "Token使用量未取得",
+    "ko": "Token 사용량 미반환"
+  },
+  "模型专属额度暂未返回": {
+    "en": "Model quota not returned",
+    "ja": "モデル別利用枠未取得",
+    "ko": "모델별 한도 미반환"
+  },
+  "任务活动暂未返回": {
+    "en": "Task activity not returned",
+    "ja": "タスク動作未取得",
+    "ko": "작업 활동 미반환"
+  },
+  "最近任务暂未返回": {
+    "en": "Recent tasks not returned",
+    "ja": "最近のタスク未取得",
+    "ko": "최근 작업 미반환"
+  },
+  "部分数据已过期，显示上次数据": {
+    "en": "Some data stale; showing previous values",
+    "ja": "一部期限切れ・前回値を表示",
+    "ko": "일부 데이터 만료 · 이전 값 표시"
+  },
+  "Codex数据正常": {
+    "en": "Codex data up to date",
+    "ja": "Codexデータ正常",
+    "ko": "Codex 데이터 정상"
+  },
+  "额度": {
+    "en": "Quota",
+    "ja": "利用枠",
+    "ko": "한도"
+  },
+  "模型额度": {
+    "en": "Model quota",
+    "ja": "モデル利用枠",
+    "ko": "모델 한도"
+  },
+  "订阅 %@": {
+    "en": "Subscription %@",
+    "ja": "契約 %@",
+    "ko": "구독 %@"
+  },
+  "用量 %@": {
+    "en": "Usage %@",
+    "ja": "使用量 %@",
+    "ko": "사용량 %@"
+  },
+  "任务活动 %@": {
+    "en": "Activity %@",
+    "ja": "タスク動作 %@",
+    "ko": "작업 활동 %@"
+  },
+  "最近任务 %@": {
+    "en": "Recent tasks %@",
+    "ja": "最近のタスク %@",
+    "ko": "최근 작업 %@"
+  },
+  "未启用Codex显示模块": {
+    "en": "No Codex modules enabled",
+    "ja": "Codex表示モジュール未選択",
+    "ko": "Codex 표시 모듈 미선택"
+  },
+  "本机Token历史正常": {
+    "en": "Local token history ready",
+    "ja": "ローカルToken履歴正常",
+    "ko": "로컬 Token 기록 정상"
+  },
+  "正在读取本机Token历史": {
+    "en": "Reading local token history",
+    "ja": "ローカルToken履歴を読み込み中",
+    "ko": "로컬 Token 기록 읽는 중"
+  },
+  "本机Token历史读取失败": {
+    "en": "Local token history read failed",
+    "ja": "ローカルToken履歴の取得失敗",
+    "ko": "로컬 Token 기록 읽기 실패"
+  },
+  "订阅 · 截止/续费": {
+    "en": "Subscription · expires/renews",
+    "ja": "契約・期限/更新",
+    "ko": "구독 · 만료/갱신"
+  },
+  "%@ · 手动设置": {
+    "en": "%@ · manually set",
+    "ja": "%@・手動設定",
+    "ko": "%@ · 수동 설정"
+  },
+  "不显示邮箱 · %@": {
+    "en": "Email hidden · %@",
+    "ja": "メール非表示・%@",
+    "ko": "이메일 숨김 · %@"
+  },
+  "当前无法可靠判断": {
+    "en": "Cannot determine reliably",
+    "ja": "確実に判定できません",
+    "ko": "신뢰성 있게 판단할 수 없음"
+  },
+  "本机会话记录 · 活跃5秒 · 空闲20秒": {
+    "en": "Local records · active 5s · idle 20s",
+    "ja": "ローカル記録・動作5秒・待機20秒",
+    "ko": "로컬 기록 · 활성 5초 · 유휴 20초"
+  },
+  "%ld个可确认活跃 · 最长%@": {
+    "en": "%ld confirmed active · longest %@",
+    "ja": "%ld件の動作確認・最長%@",
+    "ko": "확인된 활성 %ld개 · 최장 %@"
+  },
+  "%ld个活跃 · 最长%@": {
+    "en": "%ld active · longest %@",
+    "ja": "%ld件動作中・最長%@",
+    "ko": "활성 %ld개 · 최장 %@"
+  },
+  "暂无可确认的活跃任务": {
+    "en": "No confirmed active tasks",
+    "ja": "動作を確認できるタスクなし",
+    "ko": "확인된 활성 작업 없음"
+  },
+  "当前没有活跃任务": {
+    "en": "No active tasks",
+    "ja": "動作中タスクなし",
+    "ko": "활성 작업 없음"
+  },
+  "本机活动推测 · 活跃5秒 · 空闲20秒": {
+    "en": "Local inference · active 5s · idle 20s",
+    "ja": "ローカル推定・動作5秒・待機20秒",
+    "ko": "로컬 추정 · 활성 5초 · 유휴 20초"
+  },
+  "未命名任务": {
+    "en": "Untitled task",
+    "ja": "無題のタスク",
+    "ko": "제목 없는 작업"
+  },
+  "更新失败 · 显示上次列表": {
+    "en": "Update failed · previous list",
+    "ja": "更新失敗・前回の一覧",
+    "ko": "갱신 실패 · 이전 목록"
+  },
+  "官方任务历史 · 不代表正在运行": {
+    "en": "Official task history · not live status",
+    "ja": "公式タスク履歴・実行状態ではありません",
+    "ko": "공식 작업 기록 · 실행 상태 아님"
+  },
+  "今日 %@": {
+    "en": "Today %@",
+    "ja": "今日 %@",
+    "ko": "오늘 %@"
+  },
+  "今日数据未返回": {
+    "en": "Today's data unavailable",
+    "ja": "本日データ未取得",
+    "ko": "오늘 데이터 미반환"
+  },
+  "今日数据未返回 · ": {
+    "en": "Today's data unavailable · ",
+    "ja": "本日データ未取得・",
+    "ko": "오늘 데이터 미반환 · "
+  },
+  "%@7天 %@%@ · 保留上次数据": {
+    "en": "%@7 days %@%@ · previous data",
+    "ja": "%@7日 %@%@・前回データ",
+    "ko": "%@7일 %@%@ · 이전 데이터"
+  },
+  "%@7天 %@%@ · 不等于额度": {
+    "en": "%@7 days %@%@ · not quota",
+    "ja": "%@7日 %@%@・利用枠とは別",
+    "ko": "%@7일 %@%@ · 한도와 별개"
+  },
+  "不会换算成额度百分比": {
+    "en": "Not converted to quota percentage",
+    "ja": "利用枠の割合には換算しません",
+    "ko": "한도 비율로 환산하지 않음"
+  },
+  "安装后近30天 %@ · %@": {
+    "en": "Since install, ≤30d: %@ · %@",
+    "ja": "導入後・最大30日 %@・%@",
+    "ko": "설치 후 최대 30일 %@ · %@"
+  },
+  "今日 %@ · 近7天 %@ · 本月趋势 %@（估算）": {
+    "en": "Today %@ · 7d %@ · month forecast %@ (est.)",
+    "ja": "今日 %@・7日 %@・月間予測 %@（推定）",
+    "ko": "오늘 %@ · 7일 %@ · 월간 예측 %@(추정)"
+  },
+  " · 计价覆盖%.0f%%": {
+    "en": " · priced %.0f%%",
+    "ja": "・計価対応 %.0f%%",
+    "ko": " · 가격 적용 %.0f%%"
+  },
+  " · 模型样本更新中": {
+    "en": " · rebuilding model samples",
+    "ja": "・モデルデータ更新中",
+    "ko": " · 모델 데이터 갱신 중"
+  },
+  "当前不可用": {
+    "en": "Unavailable",
+    "ja": "現在利用不可",
+    "ko": "현재 이용 불가"
+  },
+  "只统计安装软件后的新增记录": {
+    "en": "Only new records since installation",
+    "ja": "導入後に追加された記録のみ",
+    "ko": "설치 이후의 새 기록만 집계"
+  },
+  "5小时 %@": {
+    "en": "5h %@",
+    "ja": "5時間 %@",
+    "ko": "5시간 %@"
+  },
+  "每周 %@": {
+    "en": "Weekly %@",
+    "ja": "週間 %@",
+    "ko": "주간 %@"
+  },
+  "提前": {
+    "en": "early",
+    "ja": "前倒し",
+    "ko": "조기"
+  },
+  "部分未更新 · 显示上次数据": {
+    "en": "Partially stale · previous data",
+    "ja": "一部未更新・前回データ",
+    "ko": "일부 미갱신 · 이전 데이터"
+  },
+  "账户历史最长": {
+    "en": "Account all-time longest",
+    "ja": "アカウント履歴の最長",
+    "ko": "계정 역대 최장"
+  },
+  "官方账户历史峰值": {
+    "en": "Official account peak",
+    "ja": "公式アカウント履歴の最大値",
+    "ko": "공식 계정 역대 최대"
+  },
+  "独立额度": {
+    "en": "Separate quota",
+    "ja": "独立利用枠",
+    "ko": "별도 한도"
+  },
+  "本机Token %@": {
+    "en": "Local tokens %@",
+    "ja": "ローカルToken %@",
+    "ko": "로컬 Token %@"
+  },
+  "电脑 刚刚": {
+    "en": "System: just now",
+    "ja": "システム：たった今",
+    "ko": "시스템: 방금"
+  },
+  "电脑 刚刚 · %@": {
+    "en": "System: just now · %@",
+    "ja": "システム：たった今・%@",
+    "ko": "시스템: 방금 · %@"
+  },
+  "正在积累": {
+    "en": "Collecting data",
+    "ja": "データ蓄積中",
+    "ko": "데이터 수집 중"
+  },
+  "本地统计 · 暂无完整时间点": {
+    "en": "Local count · timestamps incomplete",
+    "ja": "ローカル集計・時刻データ不完全",
+    "ko": "로컬 통계 · 시간 데이터 불완전"
+  },
+  "周基准100%": {
+    "en": "Weekly baseline 100%",
+    "ja": "週間基準100%",
+    "ko": "주간 기준 100%"
+  },
+  "周基准待完整": {
+    "en": "Weekly baseline incomplete",
+    "ja": "週間基準未完備",
+    "ko": "주간 기준 불완전"
+  },
+  "周占%.1f%%": {
+    "en": "%.1f%% of weekly",
+    "ja": "週間比%.1f%%",
+    "ko": "주간 대비 %.1f%%"
+  },
+  "周占待完整": {
+    "en": "Weekly share incomplete",
+    "ja": "週間比未完備",
+    "ko": "주간 비율 불완전"
+  },
+  "额度%.0f%%": {
+    "en": "Quota %.0f%%",
+    "ja": "利用枠%.0f%%",
+    "ko": "한도 %.0f%%"
+  },
+  "本地完整": {
+    "en": "Local complete",
+    "ja": "ローカル完全",
+    "ko": "로컬 완전"
+  },
+  "本地局部": {
+    "en": "Local partial",
+    "ja": "ローカル部分",
+    "ko": "로컬 부분"
+  },
+  "约5分钟精度": {
+    "en": "About 5-minute resolution",
+    "ja": "約5分精度",
+    "ko": "약 5분 단위"
+  },
+  "滚动24h": {
+    "en": "Rolling 24h",
+    "ja": "直近24時間",
+    "ko": "최근 24시간"
+  },
+  "官方周期": {
+    "en": "Official period",
+    "ja": "公式期間",
+    "ko": "공식 기간"
+  },
+  "等待官方短周期 · 本地统计": {
+    "en": "Waiting for short period · local count",
+    "ja": "短期枠待機・ローカル集計",
+    "ko": "단기 기간 대기 · 로컬 통계"
+  },
+  "等待官方每周周期 · 本地统计": {
+    "en": "Waiting for weekly period · local count",
+    "ja": "週間枠待機・ローカル集計",
+    "ko": "주간 기간 대기 · 로컬 통계"
+  },
+  "%@ · %@ · 剩余%.0f%% · %@": {
+    "en": "%@ · %@ · %.0f%% left · %@",
+    "ja": "%@・%@・残り%.0f%%・%@",
+    "ko": "%@ · %@ · 잔여 %.0f%% · %@"
+  },
+  "官方完整额度列表": {
+    "en": "Official full quota list",
+    "ja": "公式の全利用枠",
+    "ko": "공식 전체 한도 목록"
+  },
+  "可用恢复次数%ld": {
+    "en": "%ld resets available",
+    "ja": "回復可能回数%ld",
+    "ko": "복구 가능 횟수 %ld"
+  },
+  "恢复次数未返回": {
+    "en": "Reset count unavailable",
+    "ja": "回復回数未取得",
+    "ko": "복구 횟수 미반환"
+  },
+  "官方触顶：%@": {
+    "en": "Official limit reached: %@",
+    "ja": "公式上限到達：%@",
+    "ko": "공식 한도 도달: %@"
+  },
+  "普通包含用量允许": {
+    "en": "Included usage allowed",
+    "ja": "通常の含有利用枠が利用可能",
+    "ko": "기본 포함 사용량 이용 가능"
+  },
+  "普通包含用量暂不可用": {
+    "en": "Included usage unavailable",
+    "ja": "通常の含有利用枠は利用不可",
+    "ko": "기본 포함 사용량 이용 불가"
+  },
+  "今日": {
+    "en": "Today",
+    "ja": "今日",
+    "ko": "오늘"
+  },
+  "最近24小时": {
+    "en": "Last 24 hours",
+    "ja": "直近24時間",
+    "ko": "최근 24시간"
+  },
+  "%@已用周额度%.1f%% · 阈值%.0f%%": {
+    "en": "%@ used %.1f%% of weekly quota · threshold %.0f%%",
+    "ja": "%@に週間枠の%.1f%%を使用・閾値%.0f%%",
+    "ko": "%@ 주간 한도의 %.1f%% 사용 · 임계값 %.0f%%"
+  },
+  "Codex周额度提醒": {
+    "en": "Codex weekly quota alert",
+    "ja": "Codex週間利用枠の通知",
+    "ko": "Codex 주간 한도 알림"
+  },
+  "任务活动   %ld个%@ · 最长%@ · 本机推测": {
+    "en": "Activity: %ld %@ · longest %@ · inferred",
+    "ja": "動作：%ld件%@・最長%@・推定",
+    "ko": "활동: %ld개 %@ · 최장 %@ · 추정"
+  },
+  "可确认活跃": {
+    "en": "confirmed active",
+    "ja": "動作確認済み",
+    "ko": "확인된 활성"
+  },
+  "活跃": {
+    "en": "active",
+    "ja": "動作中",
+    "ko": "활성"
+  },
+  "任务活动   当前无法可靠判断": {
+    "en": "Activity: cannot determine reliably",
+    "ja": "動作：確実に判定不可",
+    "ko": "활동: 신뢰성 있게 판단 불가"
+  },
+  "最近任务   已读取%ld项 · 历史列表": {
+    "en": "Recent tasks: %ld entries · history",
+    "ja": "最近のタスク：%ld件・履歴",
+    "ko": "최근 작업: %ld개 · 기록"
+  },
+  "最近任务   当前未返回": {
+    "en": "Recent tasks: not returned",
+    "ja": "最近のタスク：未取得",
+    "ko": "최근 작업: 미반환"
+  },
+  "官方状态   %@ · %@": {
+    "en": "Official status: %@ · %@",
+    "ja": "公式状態：%@・%@",
+    "ko": "공식 상태: %@ · %@"
+  },
+  "官方状态   正在读取": {
+    "en": "Official status: loading",
+    "ja": "公式状態：読み込み中",
+    "ko": "공식 상태: 읽는 중"
+  },
+  "5小时 %.0f%%": {
+    "en": "5h %.0f%%",
+    "ja": "5時間 %.0f%%",
+    "ko": "5시간 %.0f%%"
+  },
+  "5小时未返回": {
+    "en": "5h not returned",
+    "ja": "5時間枠未取得",
+    "ko": "5시간 미반환"
+  },
+  "每周 %.0f%%": {
+    "en": "Weekly %.0f%%",
+    "ja": "週間 %.0f%%",
+    "ko": "주간 %.0f%%"
+  },
+  "每周未返回": {
+    "en": "Weekly not returned",
+    "ja": "週間枠未取得",
+    "ko": "주간 미반환"
+  },
+  "额度摘要   %@": {
+    "en": "Quota: %@",
+    "ja": "利用枠：%@",
+    "ko": "한도: %@"
+  },
+  "订阅类型   %@": {
+    "en": "Subscription: %@",
+    "ja": "契約：%@",
+    "ko": "구독: %@"
+  },
+  "最新%@ %@": {
+    "en": "Latest %@ %@",
+    "ja": "最新%@ %@",
+    "ko": "최신 %@ %@"
+  },
+  "今日未返回": {
+    "en": "Today not returned",
+    "ja": "本日未取得",
+    "ko": "오늘 미반환"
+  },
+  "用量摘要   %@ · 7天 %@": {
+    "en": "Usage: %@ · 7d %@",
+    "ja": "使用量：%@・7日 %@",
+    "ko": "사용량: %@ · 7일 %@"
+  },
+  "用量摘要   当前接口未返回": {
+    "en": "Usage: API not returned",
+    "ja": "使用量：API未取得",
+    "ko": "사용량: API 미반환"
+  },
+  "最长单次   %@": {
+    "en": "Longest task: %@",
+    "ja": "最長タスク：%@",
+    "ko": "최장 작업: %@"
+  },
+  "最长单次   当前接口未返回": {
+    "en": "Longest task: API not returned",
+    "ja": "最長タスク：API未取得",
+    "ko": "최장 작업: API 미반환"
+  },
+  "最长连续   %ld天": {
+    "en": "Longest streak: %ld days",
+    "ja": "最長連続：%ld日",
+    "ko": "최장 연속: %ld일"
+  },
+  "最长连续   当前接口未返回": {
+    "en": "Longest streak: API not returned",
+    "ja": "最長連続：API未取得",
+    "ko": "최장 연속: API 미반환"
+  },
+  "电脑摘要   CPU %.0f%% · 内存 %.1f/%.0fG (%.0f%%) · 压力 %@": {
+    "en": "System: CPU %.0f%% · memory %.1f/%.0fG (%.0f%%) · pressure %@",
+    "ja": "システム：CPU %.0f%%・メモリ %.1f/%.0fG（%.0f%%）・負荷 %@",
+    "ko": "시스템: CPU %.0f%% · 메모리 %.1f/%.0fG(%.0f%%) · 압력 %@"
+  },
+  "电脑摘要   正在采样": {
+    "en": "System: sampling",
+    "ja": "システム：測定中",
+    "ko": "시스템: 측정 중"
+  },
+  "Codex摘要  CPU %.1f%%（整机） · 内存 %.1fG（总量%.0f%%）": {
+    "en": "Codex: CPU %.1f%% (system) · memory %.1fG (%.0f%% of total)",
+    "ja": "Codex：CPU %.1f%%（全体比）・メモリ %.1fG（全体の%.0f%%）",
+    "ko": "Codex: CPU %.1f%%(전체 기준) · 메모리 %.1fG(전체의 %.0f%%)"
+  },
+  "Codex摘要  正在采样": {
+    "en": "Codex: sampling",
+    "ja": "Codex：測定中",
+    "ko": "Codex: 측정 중"
+  },
+  "齿轮可一次查看并修改全部显示选项": {
+    "en": "Use the gear to change all display options",
+    "ja": "歯車からすべての表示設定を変更できます",
+    "ko": "톱니바퀴에서 모든 표시 옵션 변경"
+  },
+  "5小时额度  剩余 %.0f%% · %@": {
+    "en": "5-hour quota: %.0f%% left · %@",
+    "ja": "5時間利用枠：残り %.0f%%・%@",
+    "ko": "5시간 한도: 잔여 %.0f%% · %@"
+  },
+  "5小时额度  当前接口未返回": {
+    "en": "5-hour quota: API not returned",
+    "ja": "5時間利用枠：API未取得",
+    "ko": "5시간 한도: API 미반환"
+  },
+  "每周额度   剩余 %.0f%% · %@": {
+    "en": "Weekly quota: %.0f%% left · %@",
+    "ja": "週間利用枠：残り %.0f%%・%@",
+    "ko": "주간 한도: 잔여 %.0f%% · %@"
+  },
+  "每周额度   当前接口未返回": {
+    "en": "Weekly quota: API not returned",
+    "ja": "週間利用枠：API未取得",
+    "ko": "주간 한도: API 미반환"
+  },
+  "用量趋势   %@ · 7天 %@ · 连续%ld天": {
+    "en": "Usage trend: %@ · 7d %@ · streak %ldd",
+    "ja": "使用推移：%@・7日 %@・連続%ld日",
+    "ko": "사용 추세: %@ · 7일 %@ · 연속 %ld일"
+  },
+  "用量趋势   当前接口未返回": {
+    "en": "Usage trend: API not returned",
+    "ja": "使用推移：API未取得",
+    "ko": "사용 추세: API 미반환"
+  },
+  "模型额度   %@ %.0f%%": {
+    "en": "Model quota: %@ %.0f%%",
+    "ja": "モデル枠：%@ %.0f%%",
+    "ko": "모델 한도: %@ %.0f%%"
+  },
+  "模型额度   当前未返回": {
+    "en": "Model quota: not returned",
+    "ja": "モデル枠：未取得",
+    "ko": "모델 한도: 미반환"
+  },
+  "数据来源   Codex本机接口 · 活跃5秒/空闲20秒 · 账户1–5分钟": {
+    "en": "Source: local Codex API · active 5s/idle 20s · account 1–5m",
+    "ja": "情報源：Codex API・動作5秒/待機20秒・アカウント1～5分",
+    "ko": "출처: Codex API · 활성 5초/유휴 20초 · 계정 1–5분"
+  },
+  "Codex %ld进程 · 渲染%ld · 工具%ld · 最大 %.1fG": {
+    "en": "Codex %ld processes · render %ld · tools %ld · largest %.1fG",
+    "ja": "Codex %ldプロセス・描画%ld・ツール%ld・最大 %.1fG",
+    "ko": "Codex %ld개 프로세스 · 렌더링 %ld · 도구 %ld · 최대 %.1fG"
+  },
+  "Codex磁盘  读 %@ · 写 %@": {
+    "en": "Codex disk: read %@ · write %@",
+    "ja": "Codexディスク：読取 %@・書込 %@",
+    "ko": "Codex 디스크: 읽기 %@ · 쓰기 %@"
+  },
+  "整机内存  %.1f/%.0fG (%.0f%%) · 压缩 %.1fG": {
+    "en": "Memory: %.1f/%.0fG (%.0f%%) · compressed %.1fG",
+    "ja": "メモリ：%.1f/%.0fG（%.0f%%）・圧縮 %.1fG",
+    "ko": "메모리: %.1f/%.0fG(%.0f%%) · 압축 %.1fG"
+  },
+  "CPU前列  %@": {
+    "en": "Top CPU: %@",
+    "ja": "CPU上位：%@",
+    "ko": "CPU 상위: %@"
+  },
+  "内存前列 %@": {
+    "en": "Top memory: %@",
+    "ja": "メモリ上位：%@",
+    "ko": "메모리 상위: %@"
+  },
+  "提醒阈值：%.0f%%": {
+    "en": "Alert threshold: %.0f%%",
+    "ja": "通知閾値：%.0f%%",
+    "ko": "알림 임계값: %.0f%%"
+  },
+  "当前：%@ · %@（手动设置）": {
+    "en": "Current: %@ · %@ (manual)",
+    "ja": "現在：%@・%@（手動設定）",
+    "ko": "현재: %@ · %@(수동)"
+  },
+  "当前：尚未设置": {
+    "en": "Current: not set",
+    "ja": "現在：未設定",
+    "ko": "현재: 미설정"
+  },
+  "填写本期订阅截止/续费日": {
+    "en": "Set subscription expiry/renewal date",
+    "ja": "契約期限・更新日を入力",
+    "ko": "구독 만료/갱신일 입력"
+  },
+  "请在官方账单页核对后填写。日期只保存在这台电脑。": {
+    "en": "Verify on the official billing page. Saved only on this Mac.",
+    "ja": "公式請求ページで確認してください。このMacにのみ保存します。",
+    "ko": "공식 결제 페이지에서 확인하세요. 이 Mac에만 저장됩니다."
+  },
+  "保存": {
+    "en": "Save",
+    "ja": "保存",
+    "ko": "저장"
+  },
+  "正在检查 GitHub 新版本…": {
+    "en": "Checking GitHub for updates…",
+    "ja": "GitHubで更新を確認中…",
+    "ko": "GitHub 업데이트 확인 중…"
+  },
+  "已经是最新版": {
+    "en": "You're up to date",
+    "ja": "最新版です",
+    "ko": "최신 버전입니다"
+  },
+  "暂时无法检查更新": {
+    "en": "Cannot check for updates now",
+    "ja": "現在更新を確認できません",
+    "ko": "지금 업데이트를 확인할 수 없음"
+  },
+  "好": {
+    "en": "OK",
+    "ja": "OK",
+    "ko": "확인"
+  },
+  "发现 Codex Monitor HUD %@": {
+    "en": "Codex Monitor HUD %@ available",
+    "ja": "Codex Monitor HUD %@が利用可能",
+    "ko": "Codex Monitor HUD %@ 사용 가능"
+  },
+  "新版本已经可以下载。": {
+    "en": "A new version is ready to download.",
+    "ja": "新しいバージョンをダウンロードできます。",
+    "ko": "새 버전을 다운로드할 수 있습니다."
+  },
+  "一键更新": {
+    "en": "Update now",
+    "ja": "今すぐ更新",
+    "ko": "지금 업데이트"
+  },
+  "稍后": {
+    "en": "Later",
+    "ja": "後で",
+    "ko": "나중에"
+  },
+  "查看发布页面": {
+    "en": "View release page",
+    "ja": "リリースページを見る",
+    "ko": "릴리스 페이지 보기"
+  },
+  "正在下载并验证更新…": {
+    "en": "Downloading and verifying…",
+    "ja": "ダウンロードと検証中…",
+    "ko": "다운로드 및 검증 중…"
+  },
+  "一键更新未完成": {
+    "en": "Update not completed",
+    "ja": "更新が完了しませんでした",
+    "ko": "업데이트 미완료"
+  },
+  "打开发布页面": {
+    "en": "Open release page",
+    "ja": "リリースページを開く",
+    "ko": "릴리스 페이지 열기"
+  },
+  "当前显示，点击后隐藏": {
+    "en": "Visible; click to hide",
+    "ja": "表示中・クリックで非表示",
+    "ko": "표시 중 · 클릭하여 숨기기"
+  },
+  "当前隐藏，点击后显示": {
+    "en": "Hidden; click to show",
+    "ja": "非表示・クリックで表示",
+    "ko": "숨김 · 클릭하여 표시"
+  },
+  "当前任务活动（本机推测）": {
+    "en": "Current activity (inferred)",
+    "ja": "現在の動作（ローカル推定）",
+    "ko": "현재 활동(로컬 추정)"
+  },
+  "最近任务（历史）": {
+    "en": "Recent tasks (history)",
+    "ja": "最近のタスク（履歴）",
+    "ko": "최근 작업(기록)"
+  },
+  "订阅类型": {
+    "en": "Subscription type",
+    "ja": "契約の種類",
+    "ko": "구독 종류"
+  },
+  "5小时/24小时/每周Token对比": {
+    "en": "5h / 24h / weekly token comparison",
+    "ja": "5時間/24時間/週間Token比較",
+    "ko": "5시간/24시간/주간 Token 비교"
+  },
+  "完整额度列表与恢复次数": {
+    "en": "All quotas and reset credits",
+    "ja": "全利用枠と回復回数",
+    "ko": "전체 한도 및 복구 횟수"
+  },
+  "最长单次任务时长": {
+    "en": "Longest single task",
+    "ja": "単一タスクの最長時間",
+    "ko": "단일 작업 최장 시간"
+  },
+  "历史最长连续天数": {
+    "en": "All-time longest streak",
+    "ja": "過去最長の連続利用日数",
+    "ko": "역대 최장 연속 사용 일수"
+  },
+  "瓶颈判断": {
+    "en": "Bottleneck assessment",
+    "ja": "ボトルネック判定",
+    "ko": "병목 판단"
+  },
+  "电脑核心状态": {
+    "en": "Core system status",
+    "ja": "主要システム状態",
+    "ko": "핵심 시스템 상태"
+  },
+  "Codex性能占用": {
+    "en": "Codex resource usage",
+    "ja": "Codexリソース使用量",
+    "ko": "Codex 리소스 사용량"
+  },
+  "内存占用排行": {
+    "en": "Memory usage ranking",
+    "ja": "メモリ使用量ランキング",
+    "ko": "메모리 사용량 순위"
+  },
+  "10分钟CPU趋势": {
+    "en": "10-minute CPU trend",
+    "ja": "10分間CPU推移",
+    "ko": "10분 CPU 추세"
+  },
+  "主页显示（勾选 = 显示）": {
+    "en": "Home (checked = visible)",
+    "ja": "ホーム（チェック＝表示）",
+    "ko": "홈(선택 = 표시)"
+  },
+  "Codex页面": {
+    "en": "Codex page",
+    "ja": "Codexページ",
+    "ko": "Codex 페이지"
+  },
+  "电脑性能页面": {
+    "en": "Computer page",
+    "ja": "システムページ",
+    "ko": "컴퓨터 페이지"
+  },
+  "任务活动": {
+    "en": "Task activity",
+    "ja": "タスク動作",
+    "ko": "작업 활동"
+  },
+  "最近任务": {
+    "en": "Recent tasks",
+    "ja": "最近のタスク",
+    "ko": "최근 작업"
+  },
+  "5小时与每周额度": {
+    "en": "5-hour and weekly quota",
+    "ja": "5時間・週間利用枠",
+    "ko": "5시간 및 주간 한도"
+  },
+  "订阅与账户Token统计": {
+    "en": "Subscription and account tokens",
+    "ja": "契約とアカウントToken",
+    "ko": "구독 및 계정 Token"
+  },
+  "历史峰值与连续使用": {
+    "en": "Historical peaks and streaks",
+    "ja": "過去の最大値と連続利用",
+    "ko": "역대 최대 및 연속 사용"
+  },
+  "瓶颈与电脑状态": {
+    "en": "Bottleneck and system status",
+    "ja": "ボトルネックとシステム状態",
+    "ko": "병목 및 시스템 상태"
+  },
+  "拖动 ≡ 调整主页中的上下顺序": {
+    "en": "Drag ≡ to reorder Home modules",
+    "ja": "≡をドラッグしてホームの順序を変更",
+    "ko": "≡를 드래그하여 홈 순서 변경"
+  },
+  "主页 · Codex模块排序": {
+    "en": "Home · Codex module order",
+    "ja": "ホーム・Codex表示順",
+    "ko": "홈 · Codex 모듈 순서"
+  },
+  "主页 · 电脑模块排序": {
+    "en": "Home · system module order",
+    "ja": "ホーム・システム表示順",
+    "ko": "홈 · 시스템 모듈 순서"
+  },
+  "启用周额度消耗提醒（默认关闭）": {
+    "en": "Weekly consumption alerts (off by default)",
+    "ja": "週間枠の消費通知（初期オフ）",
+    "ko": "주간 한도 소모 알림(기본 꺼짐)"
+  },
+  "同时发送静音系统通知（可选）": {
+    "en": "Also send silent system notifications (optional)",
+    "ja": "サイレントシステム通知も送信（任意）",
+    "ko": "무음 시스템 알림도 보내기(선택)"
+  },
+  "滚动24小时": {
+    "en": "Rolling 24 hours",
+    "ja": "直近24時間",
+    "ko": "최근 24시간"
+  },
+  "自然日（当天零点起）": {
+    "en": "Calendar day (since midnight)",
+    "ja": "当日（午前0時から）",
+    "ko": "오늘(자정부터)"
+  },
+  "统计方式": {
+    "en": "Counting period",
+    "ja": "集計期間",
+    "ko": "집계 기간"
+  },
+  "阈值可选1%—100%；数据不足不提醒，同一周额度周期只提醒一次。系统通知复用现有额度刷新，不增加轮询。": {
+    "en": "Threshold 1–100%; no alert without enough data. Once per weekly quota cycle. Uses existing refresh; no extra polling.",
+    "ja": "閾値1～100%。データ不足時は通知せず、週間枠の周期ごとに1回通知。既存の更新を利用し、追加ポーリングなし。",
+    "ko": "임계값 1–100%. 데이터 부족 시 알리지 않으며 주간 한도 주기당 한 번 알립니다. 기존 갱신을 사용하며 추가 조회는 없습니다."
+  },
+  "周额度消耗提醒": {
+    "en": "Weekly quota consumption alert",
+    "ja": "週間利用枠の消費通知",
+    "ko": "주간 한도 소모 알림"
+  },
+  "填写日期…": {
+    "en": "Set date…",
+    "ja": "日付を入力…",
+    "ko": "날짜 입력…"
+  },
+  "手动填写本期订阅截止或续费日期": {
+    "en": "Manually set subscription expiry or renewal",
+    "ja": "契約期限・更新日を手動入力",
+    "ko": "구독 만료 또는 갱신일 수동 입력"
+  },
+  "打开官方账单页": {
+    "en": "Open official billing page",
+    "ja": "公式請求ページを開く",
+    "ko": "공식 결제 페이지 열기"
+  },
+  "在浏览器打开ChatGPT官方账单设置，不读取浏览器数据": {
+    "en": "Open ChatGPT billing settings; no browser data read",
+    "ja": "ChatGPT公式請求設定を開きます。ブラウザデータは読み取りません",
+    "ko": "ChatGPT 공식 결제 설정 열기 · 브라우저 데이터는 읽지 않음"
+  },
+  "清除日期": {
+    "en": "Clear date",
+    "ja": "日付を消去",
+    "ko": "날짜 지우기"
+  },
+  "官方接口暂未提供个人订阅日期。这里的日期只保存在本机，不读取浏览器、Cookie或账号凭据，也不自动判断是否续费。": {
+    "en": "The official API does not provide subscription dates. This date stays on this Mac. No browser data, cookies or credentials are read; renewal is not inferred.",
+    "ja": "公式APIは個人契約日を提供していません。日付はこのMacのみ保存。ブラウザ、Cookie、認証情報は読み取らず、更新も推定しません。",
+    "ko": "공식 API는 개인 구독 날짜를 제공하지 않습니다. 이 Mac에만 저장되며 브라우저, Cookie, 인증 정보는 읽지 않고 갱신 여부도 추정하지 않습니다."
+  },
+  "本期订阅日期": {
+    "en": "Subscription date",
+    "ja": "契約日付",
+    "ko": "구독 날짜"
+  },
+  "拖动悬浮窗任意边角连续缩放；最小75%，最大尺寸按当前屏幕自动决定": {
+    "en": "Drag any HUD edge or corner to resize; minimum 75%, maximum determined by screen size",
+    "ja": "HUDの辺や角をドラッグして拡大縮小。最小75%、最大は画面サイズに応じます",
+    "ko": "HUD 가장자리나 모서리를 드래그하여 크기 조절. 최소 75%, 최대는 화면 크기에 따라 결정"
+  },
+  "恢复标准大小": {
+    "en": "Reset size",
+    "ja": "標準サイズに戻す",
+    "ko": "기본 크기 복원"
+  },
+  "始终置顶": {
+    "en": "Always on top",
+    "ja": "常に最前面",
+    "ko": "항상 위"
+  },
+  "显示详细信息": {
+    "en": "Show details",
+    "ja": "詳細表示",
+    "ko": "상세 정보 표시"
+  },
+  "保存每分钟趋势": {
+    "en": "Save minute-by-minute trends",
+    "ja": "1分ごとの推移を保存",
+    "ko": "분 단위 추세 저장"
+  },
+  "登录后自动启动": {
+    "en": "Launch at login",
+    "ja": "ログイン時に起動",
+    "ko": "로그인 시 실행"
+  },
+  "常驻与显示": {
+    "en": "Window behavior",
+    "ja": "常駐と表示",
+    "ko": "창 동작 및 표시"
+  },
+  "外观": {
+    "en": "Appearance",
+    "ja": "外観",
+    "ko": "모양"
+  },
+  "当前版本 %@ · 每天自动检查一次": {
+    "en": "Version %@ · checks daily",
+    "ja": "バージョン %@・毎日更新確認",
+    "ko": "버전 %@ · 매일 업데이트 확인"
+  },
+  "检查更新": {
+    "en": "Check for updates",
+    "ja": "更新を確認",
+    "ko": "업데이트 확인"
+  },
+  "软件更新": {
+    "en": "Software updates",
+    "ja": "ソフトウェア更新",
+    "ko": "소프트웨어 업데이트"
+  },
+  "电脑性能：macOS系统接口。  Codex额度、订阅类型、账户Token与任务历史：本机Codex官方接口。  订阅日期：用户手动填写并仅保存在本机。  5小时/24小时/每周Token与费用：只读取本机会话记录中的时间、模型和Token计数，属于本地统计。  OpenAI服务状态：官方公开状态页，不带账号信息且默认关闭。  任务活动：只读检查近期写入记录。  更新：仅访问本项目GitHub Release。": {
+    "en": "System: macOS APIs. Codex quota, plan, account tokens and task history: local official API. Subscription date: manual, local only. Windowed tokens/cost: local timestamp, model and token counters. Service status: public status page, off by default. Activity: inferred from recent records. Updates: project GitHub Releases.",
+    "ja": "システム：macOS API。Codex枠・契約・Token・履歴：ローカル公式API。契約日付：手動・端末内のみ。期間別Tokenと費用：時刻・モデル・Tokenのローカル集計。サービス状態：公開状態ページ、初期オフ。動作：最近の記録から推定。更新：プロジェクトのGitHub Release。",
+    "ko": "시스템: macOS API. Codex 한도·구독·계정 Token·작업 기록: 로컬 공식 API. 구독 날짜: 수동, 로컬 저장. 기간별 Token·비용: 로컬 시간·모델·Token 통계. 서비스 상태: 공개 상태 페이지, 기본 꺼짐. 활동: 최근 기록 기반 추정. 업데이트: 프로젝트 GitHub Releases."
+  },
+  "默认不需要屏幕录制、辅助功能、完全磁盘访问、浏览器Cookie或API密钥；费用缓存不保存提示词、回复或工具内容；单任务实时Token速度因无法连接桌面版同一接口实例，当前不会显示。": {
+    "en": "No screen recording, Accessibility, Full Disk Access, browser cookies or API key required by default. Cost cache stores no prompts, replies or tool content. Live per-task token speed is unavailable without the desktop app's own API instance.",
+    "ja": "初期設定では画面収録・アクセシビリティ・フルディスクアクセス・Cookie・APIキー不要。費用キャッシュは本文やツール内容を保存しません。デスクトップと同じAPIに接続できないため、タスク別リアルタイムToken速度は表示しません。",
+    "ko": "기본적으로 화면 기록, 손쉬운 사용, 전체 디스크 접근, Cookie, API 키가 필요 없습니다. 비용 캐시에 프롬프트·답변·도구 내용을 저장하지 않습니다. 데스크톱과 동일 API 연결이 없어 작업별 실시간 Token 속도는 표시하지 않습니다."
+  },
+  "数据来源与权限": {
+    "en": "Data sources & permissions",
+    "ja": "情報源と権限",
+    "ko": "데이터 출처 및 권한"
+  },
+  "所有勾选状态集中显示；主页扩展和长期历史默认关闭，按需勾选。": {
+    "en": "All visibility options in one place. Extra Home modules and long-term history are off by default.",
+    "ja": "表示設定を一覧で確認できます。ホーム拡張と長期履歴は初期オフです。",
+    "ko": "모든 표시 옵션을 한곳에서 확인합니다. 추가 홈 모듈과 장기 기록은 기본 꺼짐입니다."
+  },
+  "Codex Monitor HUD 设置": {
+    "en": "Codex Monitor HUD Settings",
+    "ja": "Codex Monitor HUD 設定",
+    "ko": "Codex Monitor HUD 설정"
+  },
+  "显示设置…": {
+    "en": "Display settings…",
+    "ja": "表示設定…",
+    "ko": "표시 설정…"
+  },
+  "显示页面": {
+    "en": "Page",
+    "ja": "表示ページ",
+    "ko": "표시 페이지"
+  },
+  "主页内容": {
+    "en": "Home modules",
+    "ja": "ホーム内容",
+    "ko": "홈 내용"
+  },
+  "分页面内容": {
+    "en": "Page modules",
+    "ja": "各ページの内容",
+    "ko": "페이지별 내용"
+  },
+  "模型专属额度（有数据时显示）": {
+    "en": "Model-specific quota (when available)",
+    "ja": "モデル別利用枠（データあり時）",
+    "ko": "모델별 한도(데이터 있을 때)"
+  },
+  "透明度": {
+    "en": "Opacity",
+    "ja": "不透明度",
+    "ko": "불투명도"
+  },
+  "绿色": {
+    "en": "Green",
+    "ja": "緑",
+    "ko": "초록"
+  },
+  "蓝色": {
+    "en": "Blue",
+    "ja": "青",
+    "ko": "파랑"
+  },
+  "紫色": {
+    "en": "Purple",
+    "ja": "紫",
+    "ko": "보라"
+  },
+  "橙色": {
+    "en": "Orange",
+    "ja": "オレンジ",
+    "ko": "주황"
+  },
+  "强调颜色": {
+    "en": "Accent color",
+    "ja": "アクセントカラー",
+    "ko": "강조 색상"
+  },
+  "%@秒": {
+    "en": "%@s",
+    "ja": "%@秒",
+    "ko": "%@초"
+  },
+  "电脑数据刷新": {
+    "en": "System refresh interval",
+    "ja": "システム更新間隔",
+    "ko": "시스템 갱신 간격"
+  },
+  "左下角": {
+    "en": "Bottom left",
+    "ja": "左下",
+    "ko": "왼쪽 아래"
+  },
+  "左上角": {
+    "en": "Top left",
+    "ja": "左上",
+    "ko": "왼쪽 위"
+  },
+  "右下角": {
+    "en": "Bottom right",
+    "ja": "右下",
+    "ko": "오른쪽 아래"
+  },
+  "右上角": {
+    "en": "Top right",
+    "ja": "右上",
+    "ko": "오른쪽 위"
+  },
+  "屏幕位置": {
+    "en": "Screen position",
+    "ja": "画面位置",
+    "ko": "화면 위치"
+  },
+  "退出窄栏模式": {
+    "en": "Exit narrow mode",
+    "ja": "細幅モードを解除",
+    "ko": "좁은 모드 해제"
+  },
+  "窄栏模式": {
+    "en": "Narrow mode",
+    "ja": "細幅モード",
+    "ko": "좁은 모드"
+  },
+  "打开趋势数据文件夹": {
+    "en": "Open trend data folder",
+    "ja": "推移データフォルダを開く",
+    "ko": "추세 데이터 폴더 열기"
+  },
+  "退出悬浮窗": {
+    "en": "Quit HUD",
+    "ja": "HUDを終了",
+    "ko": "HUD 종료"
+  },
+  "今日数据未返回 · 7天 7900953979 · 上升125% · 不等于额度": {
+    "en": "Today unavailable · 7d 7900953979 · up 125% · not quota",
+    "ja": "本日未取得・7日 7900953979・125%増・利用枠とは別",
+    "ko": "오늘 미반환 · 7일 7900953979 · 125% 증가 · 한도와 별개"
+  },
+  "待结算": {
+    "en": "Pending",
+    "ja": "集計待ち",
+    "ko": "집계 대기"
+  },
+  "手动设置": {
+    "en": "Manual",
+    "ja": "手動設定",
+    "ko": "수동 설정"
+  },
+  "近期会话记录已迁移、压缩或暂不可读，无法可靠判断活动": {
+    "en": "Recent session records moved, compacted or unreadable; activity cannot be determined reliably",
+    "ja": "最近の記録が移動・圧縮・読取不可のため動作判定できません",
+    "ko": "최근 기록이 이동·압축되었거나 읽을 수 없어 활동을 판단할 수 없음"
+  },
+  "部分近期会话记录已迁移、压缩或暂不可读": {
+    "en": "Some recent records moved, compacted or unreadable",
+    "ja": "一部の最近の記録が移動・圧縮・読取不可",
+    "ko": "일부 최근 기록이 이동·압축되었거나 읽을 수 없음"
+  },
+  "部分近期会话记录": {
+    "en": "Some recent session records",
+    "ja": "一部の最近の記録",
+    "ko": "일부 최근 기록"
+  },
+  "普通包含用量": {
+    "en": "Included usage",
+    "ja": "通常の含有利用枠",
+    "ko": "기본 포함 사용량"
+  },
+  "当前Codex不支持此接口": {
+    "en": "This Codex version does not support the API",
+    "ja": "このCodexはAPI未対応",
+    "ko": "이 Codex 버전은 API 미지원"
+  },
+  "接口参数不兼容": {
+    "en": "API parameters incompatible",
+    "ja": "API引数に互換性なし",
+    "ko": "API 매개변수 호환 불가"
+  },
+  "接口数据格式变化": {
+    "en": "API data format changed",
+    "ja": "APIデータ形式変更",
+    "ko": "API 데이터 형식 변경"
+  },
+  "需要检查Codex登录": {
+    "en": "Check Codex sign-in",
+    "ja": "Codexログインを確認",
+    "ko": "Codex 로그인 확인 필요"
+  },
+  "请求被限速，稍后重试": {
+    "en": "Rate limited; retry later",
+    "ja": "リクエスト制限・後で再試行",
+    "ko": "요청 속도 제한 · 나중에 재시도"
+  },
+  "官方报告用量限制": {
+    "en": "Official usage limit reported",
+    "ja": "公式使用上限の報告",
+    "ko": "공식 사용 한도 보고됨"
+  },
+  "Codex服务繁忙": {
+    "en": "Codex service busy",
+    "ja": "Codexサービス混雑中",
+    "ko": "Codex 서비스 혼잡"
+  },
+  "Codex服务异常": {
+    "en": "Codex service error",
+    "ja": "Codexサービス異常",
+    "ko": "Codex 서비스 오류"
+  },
+  "连接中断，稍后重试": {
+    "en": "Connection lost; retry later",
+    "ja": "接続切断・後で再試行",
+    "ko": "연결 끊김 · 나중에 재시도"
+  },
+  "接口读取超时": {
+    "en": "API read timed out",
+    "ja": "API読取タイムアウト",
+    "ko": "API 읽기 시간 초과"
+  },
+  "请求被策略阻止": {
+    "en": "Request blocked by policy",
+    "ja": "ポリシーによりブロック",
+    "ko": "정책에 의해 요청 차단"
+  },
+  "未找到Codex本机接口": {
+    "en": "Local Codex API not found",
+    "ja": "ローカルCodex APIなし",
+    "ko": "로컬 Codex API를 찾을 수 없음"
+  },
+  "无法启动Codex本机接口": {
+    "en": "Cannot start local Codex API",
+    "ja": "ローカルCodex API起動不可",
+    "ko": "로컬 Codex API 시작 불가"
+  },
+  "接口读取失败": {
+    "en": "API read failed",
+    "ja": "API読取失敗",
+    "ko": "API 읽기 실패"
+  },
+  "，显示上次数据": {
+    "en": "; showing previous data",
+    "ja": "・前回データを表示",
+    "ko": " · 이전 데이터 표시"
+  },
+  "不是macOS更新通道": {
+    "en": "Not the macOS update channel",
+    "ja": "macOS更新チャネルではありません",
+    "ko": "macOS 업데이트 채널 아님"
+  },
+  "最新版缺少应用更新包或安全摘要": {
+    "en": "Release lacks app package or security checksum",
+    "ja": "アプリ更新パッケージか検証用ハッシュがありません",
+    "ko": "릴리스에 앱 패키지 또는 검증용 해시 없음"
+  },
+  "更新列表格式错误": {
+    "en": "Invalid update list",
+    "ja": "更新一覧の形式不正",
+    "ko": "업데이트 목록 형식 오류"
+  },
+  "暂未找到macOS更新版本": {
+    "en": "No macOS update found",
+    "ja": "macOS更新版なし",
+    "ko": "macOS 업데이트 없음"
+  },
+  "命令退出码 %d": {
+    "en": "Command exit code %d",
+    "ja": "コマンド終了コード %d",
+    "ko": "명령 종료 코드 %d"
+  },
+  "升级恢复检查程序的签名无效，未替换当前版本": {
+    "en": "Recovery verifier signature invalid; current version retained",
+    "ja": "復旧確認プログラムの署名不正・現行版を保持",
+    "ko": "복구 검증 프로그램 서명 오류 · 현재 버전 유지"
+  },
+  "仓库还没有发布可更新版本": {
+    "en": "No update release published",
+    "ja": "更新版は未公開",
+    "ko": "공개된 업데이트 없음"
+  },
+  "GitHub更新检查失败": {
+    "en": "GitHub update check failed",
+    "ja": "GitHub更新確認失敗",
+    "ko": "GitHub 업데이트 확인 실패"
+  },
+  "更新信息格式错误": {
+    "en": "Invalid update information",
+    "ja": "更新情報の形式不正",
+    "ko": "업데이트 정보 형식 오류"
+  },
+  "发现新版 %@": {
+    "en": "New version %@",
+    "ja": "新バージョン %@",
+    "ko": "새 버전 %@"
+  },
+  "当前 %@ 已是最新版": {
+    "en": "%@ is up to date",
+    "ja": "%@は最新版です",
+    "ko": "%@은(는) 최신 버전"
+  },
+  "更新包信息不完整": {
+    "en": "Incomplete update package metadata",
+    "ja": "更新パッケージ情報不足",
+    "ko": "업데이트 패키지 정보 불완전"
+  },
+  "当前安装位置不可写，请从发布页面手动更新": {
+    "en": "Installation folder not writable; update manually from release page",
+    "ja": "設置先に書込不可・リリースページから手動更新",
+    "ko": "설치 위치에 쓰기 불가 · 릴리스 페이지에서 수동 업데이트"
+  },
+  "更新包下载失败": {
+    "en": "Update download failed",
+    "ja": "更新のダウンロード失敗",
+    "ko": "업데이트 다운로드 실패"
+  },
+  "无法保存更新包": {
+    "en": "Cannot save update package",
+    "ja": "更新パッケージ保存不可",
+    "ko": "업데이트 패키지 저장 불가"
+  },
+  "更新包安全摘要不匹配，已停止更新": {
+    "en": "Checksum mismatch; update stopped",
+    "ja": "ハッシュ不一致・更新停止",
+    "ko": "해시 불일치 · 업데이트 중지"
+  },
+  "更新包无法解压：%@": {
+    "en": "Cannot extract update: %@",
+    "ja": "更新展開失敗：%@",
+    "ko": "업데이트 압축 해제 실패: %@"
+  },
+  "更新包的应用身份或版本不正确": {
+    "en": "Update app identity or version mismatch",
+    "ja": "更新アプリの識別情報・バージョン不一致",
+    "ko": "업데이트 앱 식별 정보 또는 버전 불일치"
+  },
+  "新版要求更高的macOS版本，已保留当前版本": {
+    "en": "Newer macOS required; current version retained",
+    "ja": "新しいmacOSが必要・現行版を保持",
+    "ko": "더 최신 macOS 필요 · 현재 버전 유지"
+  },
+  "更新包签名校验失败：%@": {
+    "en": "Update signature verification failed: %@",
+    "ja": "更新署名の検証失敗：%@",
+    "ko": "업데이트 서명 검증 실패: %@"
+  },
+  "更新包不是本项目的官方签名，已停止更新": {
+    "en": "Update not signed by this project; stopped",
+    "ja": "本プロジェクトの公式署名ではないため停止",
+    "ko": "이 프로젝트의 공식 서명이 아니므로 중지"
+  },
+  "更新包未通过Apple安全验证：%@": {
+    "en": "Update failed Apple security check: %@",
+    "ja": "Apple安全検証失敗：%@",
+    "ko": "Apple 보안 검증 실패: %@"
+  },
+  "无法准备升级恢复检查，未替换当前版本": {
+    "en": "Cannot prepare recovery check; current version retained",
+    "ja": "復旧確認の準備不可・現行版を保持",
+    "ko": "복구 확인 준비 불가 · 현재 버전 유지"
+  },
+  "无法准备更新安装程序": {
+    "en": "Cannot prepare update installer",
+    "ja": "更新インストーラ準備不可",
+    "ko": "업데이트 설치 프로그램 준비 불가"
+  },
+  "无法启动更新安装程序": {
+    "en": "Cannot start update installer",
+    "ja": "更新インストーラ起動不可",
+    "ko": "업데이트 설치 프로그램 실행 불가"
+  },
+  "更新已验证，正在重启应用": {
+    "en": "Update verified; restarting app",
+    "ja": "更新検証済み・アプリ再起動中",
+    "ko": "업데이트 검증 완료 · 앱 재시작 중"
+  },
+  "无法保存安装后统计起点": {
+    "en": "Cannot save tracking start",
+    "ja": "統計開始時刻の保存不可",
+    "ko": "통계 시작 시점 저장 불가"
+  },
+  "已从现在开始记录安装后的Token与费用": {
+    "en": "Tracking new tokens and estimated costs from now",
+    "ja": "今から新規Tokenと推定費用を記録",
+    "ko": "지금부터 새 Token 및 추정 비용 기록"
+  },
+  "统计起点恢复失败，保留上次数据": {
+    "en": "Cannot restore tracking start; previous data retained",
+    "ja": "統計開始の復元失敗・前回データを保持",
+    "ko": "통계 시작 시점 복원 실패 · 이전 데이터 유지"
+  },
+  "统计缓存异常或超过大小限制，已保留原起点和历史文件；未重新计数": {
+    "en": "Cache invalid or too large; original start and history retained; no recount",
+    "ja": "キャッシュ異常・容量超過。元の開始時刻と履歴を保持し、再集計していません",
+    "ko": "캐시 오류 또는 크기 초과 · 기존 시작 시점과 기록 유지 · 재집계하지 않음"
+  },
+  "会话元数据超过本轮扫描上限，暂不能确认完整用量": {
+    "en": "Metadata scan limit reached; total usage not yet confirmed",
+    "ja": "メタデータ走査上限・全使用量未確認",
+    "ko": "메타데이터 검색 상한 도달 · 전체 사용량 미확인"
+  },
+  "安装后暂未找到本机会话Token记录": {
+    "en": "No local token records since installation",
+    "ja": "導入後のローカルToken記録なし",
+    "ko": "설치 후 로컬 Token 기록 없음"
+  },
+  "Token缓存保存失败或超过大小限制，保留上次数据和原统计起点": {
+    "en": "Token cache save failed or too large; previous data and start retained",
+    "ja": "Tokenキャッシュ保存失敗・容量超過。前回データと開始時刻を保持",
+    "ko": "Token 캐시 저장 실패 또는 크기 초과 · 이전 데이터와 시작 시점 유지"
+  },
+  "正在补齐本机Token历史": {
+    "en": "Rebuilding local token history",
+    "ja": "ローカルToken履歴を再構築中",
+    "ko": "로컬 Token 기록 재구성 중"
+  },
+  "本机记录暂时没有Token数据": {
+    "en": "No token data in local records",
+    "ja": "ローカル記録にTokenデータなし",
+    "ko": "로컬 기록에 Token 데이터 없음"
+  },
+  "至少需要15分钟历史": {
+    "en": "Needs 15 minutes of history",
+    "ja": "15分以上の履歴が必要",
+    "ko": "15분 이상의 기록 필요"
+  },
+  "中": {
+    "en": "Medium",
+    "ja": "中",
+    "ko": "중간"
+  },
+  "按当前速度可撑到重置": {
+    "en": "Current pace lasts until reset",
+    "ja": "現在のペースなら回復まで利用可能",
+    "ko": "현재 속도로 복구까지 사용 가능"
+  },
+  "预计重置时剩余%.0f%% · %@可信": {
+    "en": "Projected %.0f%% left at reset · %@ confidence",
+    "ja": "回復時の予想残量%.0f%%・確度%@",
+    "ko": "복구 시 예상 잔여 %.0f%% · 신뢰도 %@"
+  },
+  "约%.0f分钟后": {
+    "en": "In about %.0f minutes",
+    "ja": "約%.0f分後",
+    "ko": "약 %.0f분 후"
+  },
+  "约%.1f小时后": {
+    "en": "In about %.1f hours",
+    "ja": "約%.1f時間後",
+    "ko": "약 %.1f시간 후"
+  },
+  "%@ · %@可信": {
+    "en": "%@ · %@ confidence",
+    "ja": "%@・確度%@",
+    "ko": "%@ · 신뢰도 %@"
+  },
+  "额度窗口已经重置": {
+    "en": "Quota period has reset",
+    "ja": "利用枠の期間がリセット済み",
+    "ko": "한도 기간이 초기화됨"
+  },
+  "缺少接近今天零点的数据": {
+    "en": "No sample near today's midnight",
+    "ja": "本日午前0時付近のデータなし",
+    "ko": "오늘 자정 근처 데이터 없음"
+  },
+  "尚未积累完整24小时数据": {
+    "en": "Full 24-hour history not yet available",
+    "ja": "24時間分の履歴が未完備",
+    "ko": "24시간 전체 기록이 아직 없음"
+  },
+  "未找到本机会话记录": {
+    "en": "Local session records not found",
+    "ja": "ローカルセッション記録なし",
+    "ko": "로컬 세션 기록 없음"
+  },
+  "未找到本机会话数据": {
+    "en": "Local session data not found",
+    "ja": "ローカルセッションデータなし",
+    "ko": "로컬 세션 데이터 없음"
+  },
+  "本轮未返回，显示上次数据": {
+    "en": "Not returned this time; previous data",
+    "ja": "今回未取得・前回データを表示",
+    "ko": "이번에 미반환 · 이전 데이터 표시"
+  },
+  "额度当前未返回": {
+    "en": "Quota not returned",
+    "ja": "利用枠未取得",
+    "ko": "한도 미반환"
+  },
+  "周期未知": {
+    "en": "Unknown period",
+    "ja": "期間不明",
+    "ko": "기간 불명"
+  },
+  "短周期": {
+    "en": "Short period",
+    "ja": "短期",
+    "ko": "단기"
+  },
+  "本轮部分额度未返回，显示上次数据": {
+    "en": "Some quotas not returned; previous data",
+    "ja": "一部利用枠未取得・前回データを表示",
+    "ko": "일부 한도 미반환 · 이전 데이터 표시"
+  },
+  "Codex额度已更新": {
+    "en": "Codex quota updated",
+    "ja": "Codex利用枠更新済み",
+    "ko": "Codex 한도 갱신됨"
+  },
+  "订阅当前未返回": {
+    "en": "Subscription not returned",
+    "ja": "契約未取得",
+    "ko": "구독 미반환"
+  },
+  "用量当前未返回": {
+    "en": "Usage not returned",
+    "ja": "使用量未取得",
+    "ko": "사용량 미반환"
+  },
+  "部分用量未返回，显示上次数据": {
+    "en": "Some usage missing; previous data",
+    "ja": "一部使用量未取得・前回データを表示",
+    "ko": "일부 사용량 미반환 · 이전 데이터 표시"
+  },
+  "每日用量当前未返回": {
+    "en": "Daily usage not returned",
+    "ja": "日別使用量未取得",
+    "ko": "일별 사용량 미반환"
+  },
+  "正常": {
+    "en": "Normal",
+    "ja": "正常",
+    "ko": "정상"
+  },
+  "严重": {
+    "en": "Critical",
+    "ja": "深刻",
+    "ko": "심각"
+  },
+  "注意": {
+    "en": "Warning",
+    "ja": "注意",
+    "ko": "주의"
+  },
+  "未采集": {
+    "en": "Not sampled",
+    "ja": "未測定",
+    "ko": "미측정"
+  },
+  "略高": {
+    "en": "Slightly high",
+    "ja": "やや高い",
+    "ko": "약간 높음"
+  },
+  "较高": {
+    "en": "Elevated",
+    "ja": "高め",
+    "ko": "높은 편"
+  },
+  "Codex服务正常": {
+    "en": "Codex service operational",
+    "ja": "Codexサービス正常",
+    "ko": "Codex 서비스 정상"
+  },
+  "Codex服务性能下降": {
+    "en": "Codex performance degraded",
+    "ja": "Codexサービス性能低下",
+    "ko": "Codex 서비스 성능 저하"
+  },
+  "Codex服务部分故障": {
+    "en": "Codex partial outage",
+    "ja": "Codexサービス一部障害",
+    "ko": "Codex 서비스 일부 장애"
+  },
+  "Codex服务严重故障": {
+    "en": "Codex major outage",
+    "ja": "Codexサービス重大障害",
+    "ko": "Codex 서비스 심각한 장애"
+  },
+  "Codex服务维护中": {
+    "en": "Codex under maintenance",
+    "ja": "Codexサービス保守中",
+    "ko": "Codex 서비스 유지보수 중"
+  },
+  "OpenAI服务正常": {
+    "en": "OpenAI operational",
+    "ja": "OpenAIサービス正常",
+    "ko": "OpenAI 서비스 정상"
+  },
+  "OpenAI部分服务异常": {
+    "en": "Some OpenAI services degraded",
+    "ja": "OpenAIの一部サービス異常",
+    "ko": "OpenAI 일부 서비스 이상"
+  },
+  "OpenAI服务发生故障": {
+    "en": "OpenAI outage",
+    "ja": "OpenAIサービス障害",
+    "ko": "OpenAI 서비스 장애"
+  },
+  "OpenAI服务严重故障": {
+    "en": "OpenAI major outage",
+    "ja": "OpenAIサービス重大障害",
+    "ko": "OpenAI 서비스 심각한 장애"
+  },
+  "OpenAI服务维护中": {
+    "en": "OpenAI under maintenance",
+    "ja": "OpenAIサービス保守中",
+    "ko": "OpenAI 서비스 유지보수 중"
+  },
+  "OpenAI状态未知": {
+    "en": "OpenAI status unknown",
+    "ja": "OpenAI状態不明",
+    "ko": "OpenAI 상태 불명"
+  },
+  "OpenAI整体正常": {
+    "en": "OpenAI overall operational",
+    "ja": "OpenAI全体正常",
+    "ko": "OpenAI 전체 정상"
+  },
+  "OpenAI整体故障": {
+    "en": "OpenAI overall outage",
+    "ja": "OpenAI全体障害",
+    "ko": "OpenAI 전체 장애"
+  },
+  "OpenAI整体严重故障": {
+    "en": "OpenAI overall major outage",
+    "ja": "OpenAI全体重大障害",
+    "ko": "OpenAI 전체 심각한 장애"
+  },
+  "OpenAI整体维护中": {
+    "en": "OpenAI overall maintenance",
+    "ja": "OpenAI全体保守中",
+    "ko": "OpenAI 전체 유지보수 중"
+  },
+  "来源 OpenAI官方状态页": {
+    "en": "Source: official OpenAI status page",
+    "ja": "情報源：OpenAI公式状態ページ",
+    "ko": "출처: OpenAI 공식 상태 페이지"
+  },
+  "更新失败，显示上次状态": {
+    "en": "Update failed; showing previous status",
+    "ja": "更新失敗・前回状態を表示",
+    "ko": "갱신 실패 · 이전 상태 표시"
+  },
+  "官方状态页暂不可达": {
+    "en": "Official status page unreachable",
+    "ja": "公式状態ページに接続不可",
+    "ko": "공식 상태 페이지 연결 불가"
+  },
+  "语言与币种": {
+    "en": "Language & currency",
+    "ja": "言語と通貨",
+    "ko": "언어 및 통화"
+  },
+  "界面语言（重新打开悬浮窗后生效）": {
+    "en": "Language (applies after reopening HUD)",
+    "ja": "表示言語（HUDを再起動後に適用）",
+    "ko": "표시 언어(HUD를 다시 열면 적용)"
+  },
+  "显示币种（立即生效）": {
+    "en": "Currency (applies immediately)",
+    "ja": "表示通貨（すぐに適用）",
+    "ko": "표시 통화(즉시 적용)"
+  },
+  "金额是按参考API标准价格折算的估值，不是订阅实际账单；未包含Fast等加价。子任务继承量不重复计入，无法可靠计价的记录不猜价格。": {
+    "en": "API-equivalent estimate at reference Standard prices, not your subscription bill; excludes Fast and other surcharges. Inherited child usage is excluded; unknown prices are not guessed.",
+    "ja": "API標準参考価格による換算であり契約の請求額ではありません。Fastなどの加算は含みません。子タスクの継承量を重複計上せず、不明な価格は推定しません。",
+    "ko": "API 표준 참고 가격으로 환산한 추정치이며 구독 청구액이 아닙니다. Fast 등 추가 요금은 제외합니다. 하위 작업의 상속량을 중복 집계하지 않으며 모르는 가격은 추정하지 않습니다."
+  },
+  "参考价格：2026-09-11 · 汇率日期：%@ · 每天最多更新一次，失败保留上次汇率": {
+    "en": "Price reference: 2026-09-11 · FX date: %@ · at most daily; previous rate retained on failure",
+    "ja": "参考価格：2026-09-11・為替日：%@・最大1日1回、失敗時は前回値を保持",
+    "ko": "참고 가격: 2026-09-11 · 환율 날짜: %@ · 하루 최대 한 번, 실패 시 이전 환율 유지"
+  }
+}

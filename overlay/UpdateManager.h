@@ -18,6 +18,8 @@ typedef NS_ENUM(NSInteger, HUDUpdateCheckResult) {
 NSComparisonResult HUDCompareVersions(NSString *left, NSString *right);
 NSString *HUDSHA256ForFile(NSURL *fileURL);
 NSString *HUDInstallHelperScript(void);
+BOOL HUDPrepareInstallProbe(NSURL *trustedBundleURL, NSURL *workURL, NSError **error);
+int HUDUpdateProcessProbe(NSString *targetPath, BOOL stop);
 HUDReleaseInfo *HUDReleaseInfoFromDictionary(NSDictionary *dictionary, NSError **error);
 HUDReleaseInfo *HUDLatestMacReleaseInfoFromArray(NSArray *releases, NSError **error);
 

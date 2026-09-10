@@ -36,6 +36,8 @@ jobs:
 
       - name: Run Windows source contract checks
         run: python windows/tests/static_checks.py
+      - name: Verify shared localization catalog
+        run: ruby windows/tests/generate_localizations.rb --check
 
       - name: Configure with installed MSVC
         run: cmake -S windows -B windows/out/build -A x64

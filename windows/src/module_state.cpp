@@ -171,7 +171,7 @@ constexpr std::array<ModuleDefinition, kModuleCount> kRegistry{{
      false,
      true,
      false,
-     true},
+     false},
 }};
 
 std::string_view PageKey(Page page) {
@@ -451,7 +451,7 @@ std::string SerializeSettings(const SettingsState& settings) {
             std::isfinite(configuredAlertThreshold)
                 ? configuredAlertThreshold
                 : 15.0)),
-        5, 100);
+        1, 100);
     output << "weekly_quota_alert_threshold=" << alertThreshold << '\n';
     output << "weekly_quota_alert_mode="
            << WeeklyQuotaAlertModeKey(settings.weeklyQuotaAlert.mode) << '\n';
@@ -553,7 +553,7 @@ SettingsState ParseSettings(std::string_view text) {
             }
         } else if (key == "weekly_quota_alert_threshold") {
             const std::optional<int> parsed = ParseInt(value);
-            if (weeklyAlertThreshold || !parsed || *parsed < 5 ||
+            if (weeklyAlertThreshold || !parsed || *parsed < 1 ||
                 *parsed > 100) {
                 weeklyAlertSettingsMalformed = true;
             } else {

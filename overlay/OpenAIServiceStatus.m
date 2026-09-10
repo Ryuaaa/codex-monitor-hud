@@ -1,31 +1,32 @@
+#import "HUDLocalization.h"
 #import "OpenAIServiceStatus.h"
 
 static NSString *HUDServiceHeadline(NSString *componentStatus, NSString *overallIndicator) {
     NSDictionary<NSString *, NSString *> *componentLabels = @{
-        @"operational": @"Codex服务正常",
-        @"degraded_performance": @"Codex服务性能下降",
-        @"partial_outage": @"Codex服务部分故障",
-        @"major_outage": @"Codex服务严重故障",
-        @"under_maintenance": @"Codex服务维护中"
+        @"operational": HUDL(@"Codex服务正常"),
+        @"degraded_performance": HUDL(@"Codex服务性能下降"),
+        @"partial_outage": HUDL(@"Codex服务部分故障"),
+        @"major_outage": HUDL(@"Codex服务严重故障"),
+        @"under_maintenance": HUDL(@"Codex服务维护中")
     };
     if (componentLabels[componentStatus]) return componentLabels[componentStatus];
     NSDictionary<NSString *, NSString *> *overallLabels = @{
-        @"none": @"OpenAI服务正常",
-        @"minor": @"OpenAI部分服务异常",
-        @"major": @"OpenAI服务发生故障",
-        @"critical": @"OpenAI服务严重故障",
-        @"maintenance": @"OpenAI服务维护中"
+        @"none": HUDL(@"OpenAI服务正常"),
+        @"minor": HUDL(@"OpenAI部分服务异常"),
+        @"major": HUDL(@"OpenAI服务发生故障"),
+        @"critical": HUDL(@"OpenAI服务严重故障"),
+        @"maintenance": HUDL(@"OpenAI服务维护中")
     };
-    return overallLabels[overallIndicator] ?: @"OpenAI状态未知";
+    return overallLabels[overallIndicator] ?: HUDL(@"OpenAI状态未知");
 }
 
 static NSString *HUDOverallDetail(NSString *indicator) {
-    if ([indicator isEqualToString:@"none"]) return @"OpenAI整体正常";
-    if ([indicator isEqualToString:@"minor"]) return @"OpenAI部分服务异常";
-    if ([indicator isEqualToString:@"major"]) return @"OpenAI整体故障";
-    if ([indicator isEqualToString:@"critical"]) return @"OpenAI整体严重故障";
-    if ([indicator isEqualToString:@"maintenance"]) return @"OpenAI整体维护中";
-    return @"OpenAI整体状态未知";
+    if ([indicator isEqualToString:@"none"]) return HUDL(@"OpenAI整体正常");
+    if ([indicator isEqualToString:@"minor"]) return HUDL(@"OpenAI部分服务异常");
+    if ([indicator isEqualToString:@"major"]) return HUDL(@"OpenAI整体故障");
+    if ([indicator isEqualToString:@"critical"]) return HUDL(@"OpenAI整体严重故障");
+    if ([indicator isEqualToString:@"maintenance"]) return HUDL(@"OpenAI整体维护中");
+    return HUDL(@"OpenAI整体状态未知");
 }
 
 NSDictionary<NSString *, id> *HUDOpenAIServiceStatusFromJSONData(NSData *data) {
@@ -82,8 +83,8 @@ static NSData *HUDOpenAIServiceStatusViaSystemCurl(NSURL *url) {
     self = [super init];
     if (!self) return nil;
     _snapshot = [HUDOpenAIServiceStatusSnapshot new];
-    _snapshot.headline = @"正在检查官方状态";
-    _snapshot.detail = @"来源 OpenAI官方状态页";
+    _snapshot.headline = HUDL(@"正在检查官方状态");
+    _snapshot.detail = HUDL(@"来源 OpenAI官方状态页");
     return self;
 }
 
@@ -102,7 +103,7 @@ static NSData *HUDOpenAIServiceStatusViaSystemCurl(NSURL *url) {
             if (!strongSelf) return;
             strongSelf.task = nil;
             if (parsed.count == 0) {
-                strongSelf.snapshot.errorText = strongSelf.snapshot.available ? @"更新失败，显示上次状态" : @"官方状态页暂不可达";
+                strongSelf.snapshot.errorText = strongSelf.snapshot.available ? HUDL(@"更新失败，显示上次状态") : HUDL(@"官方状态页暂不可达");
             } else {
                 strongSelf.snapshot.available = YES;
                 strongSelf.snapshot.updatedAt = NSDate.date.timeIntervalSince1970;

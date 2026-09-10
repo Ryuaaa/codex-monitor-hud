@@ -1,6 +1,8 @@
+#import "HUDLocalization.h"
 #import "CodexProtocolCompatibility.h"
 #import <CoreFoundation/CoreFoundation.h>
 #import <math.h>
+#import <limits.h>
 
 NSNumber *CodexProtocolNumber(id value) {
     if (![value isKindOfClass:NSNumber.class] || CFGetTypeID((__bridge CFTypeRef)value) == CFBooleanGetTypeID()) return nil;
@@ -9,6 +11,18 @@ NSNumber *CodexProtocolNumber(id value) {
 
 NSNumber *CodexProtocolBoolean(id value) {
     return [value isKindOfClass:NSNumber.class] && CFGetTypeID((__bridge CFTypeRef)value) == CFBooleanGetTypeID() ? value : nil;
+}
+
+NSNumber *CodexProtocolTokenCount(id value) {
+    NSNumber *number = CodexProtocolNumber(value);
+    double count = number.doubleValue;
+    if (!number || count < 0 || count >= 0x1p63 || floor(count) != count) return nil;
+    return number;
+}
+
+long long CodexAddTokenCounts(long long left, long long right) {
+    left = MAX(0LL, left); right = MAX(0LL, right);
+    return left > LLONG_MAX - right ? LLONG_MAX : left + right;
 }
 
 NSDictionary *CodexQuotaReadRequest(NSNumber *requestID, BOOL background) {
@@ -57,12 +71,12 @@ BOOL CodexQuotaNeedsLegacyRetry(id error, BOOL lightweight, BOOL retried) {
 }
 
 NSString *CodexProtocolFailureText(NSString *kind, BOOL hasPrevious) {
-    NSDictionary *labels = @{ @"unsupported": @"当前Codex不支持此接口", @"invalid_parameters": @"接口参数不兼容",
-        @"protocol": @"接口数据格式变化", @"authentication": @"需要检查Codex登录",
-        @"rate_limited": @"请求被限速，稍后重试", @"quota_exhausted": @"官方报告用量限制",
-        @"overloaded": @"Codex服务繁忙", @"server": @"Codex服务异常", @"network": @"连接中断，稍后重试",
-        @"timeout": @"接口读取超时", @"policy_blocked": @"请求被策略阻止", @"missing_executable": @"未找到Codex本机接口",
-        @"launch_failed": @"无法启动Codex本机接口", @"unknown": @"接口读取失败" };
+    NSDictionary *labels = @{ @"unsupported": HUDL(@"当前Codex不支持此接口"), @"invalid_parameters": HUDL(@"接口参数不兼容"),
+        @"protocol": HUDL(@"接口数据格式变化"), @"authentication": HUDL(@"需要检查Codex登录"),
+        @"rate_limited": HUDL(@"请求被限速，稍后重试"), @"quota_exhausted": HUDL(@"官方报告用量限制"),
+        @"overloaded": HUDL(@"Codex服务繁忙"), @"server": HUDL(@"Codex服务异常"), @"network": HUDL(@"连接中断，稍后重试"),
+        @"timeout": HUDL(@"接口读取超时"), @"policy_blocked": HUDL(@"请求被策略阻止"), @"missing_executable": HUDL(@"未找到Codex本机接口"),
+        @"launch_failed": HUDL(@"无法启动Codex本机接口"), @"unknown": HUDL(@"接口读取失败") };
     NSString *label = labels[kind] ?: labels[@"unknown"];
-    return hasPrevious ? [label stringByAppendingString:@"，显示上次数据"] : label;
+    return hasPrevious ? [label stringByAppendingString:HUDL(@"，显示上次数据")] : label;
 }

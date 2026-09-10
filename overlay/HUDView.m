@@ -1,3 +1,4 @@
+#import "HUDLocalization.h"
 #import "HUDView.h"
 
 @implementation HUDProgressView
@@ -35,13 +36,13 @@
     self.borderColor = [NSColor colorWithWhite:1 alpha:0.08];
     self.borderWidth = 1; self.cornerRadius = 10; self.contentViewMargins = NSMakeSize(10, 8);
     _titleLabel = [self text:title size:11 color:NSColor.secondaryLabelColor weight:NSFontWeightMedium];
-    _windowLabel = [self text:@"剩余" size:10.5 color:NSColor.tertiaryLabelColor weight:NSFontWeightRegular];
+    _windowLabel = [self text:HUDL(@"剩余") size:10.5 color:NSColor.tertiaryLabelColor weight:NSFontWeightRegular];
     NSStackView *head = [NSStackView stackViewWithViews:@[_titleLabel, _windowLabel]];
     head.orientation = NSUserInterfaceLayoutOrientationHorizontal; head.distribution = NSStackViewDistributionFill;
     [_titleLabel setContentHuggingPriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
     [_windowLabel setContentHuggingPriority:NSLayoutPriorityRequired forOrientation:NSLayoutConstraintOrientationHorizontal];
     _valueLabel = [self text:@"--" size:19 color:NSColor.systemGreenColor weight:NSFontWeightBold];
-    _resetLabel = [self text:@"等待接口" size:10.5 color:NSColor.tertiaryLabelColor weight:NSFontWeightRegular];
+    _resetLabel = [self text:HUDL(@"等待接口") size:10.5 color:NSColor.tertiaryLabelColor weight:NSFontWeightRegular];
     _progressView = [HUDProgressView new];
     NSStackView *stack = [NSStackView stackViewWithViews:@[head, _valueLabel, _resetLabel, _progressView]];
     stack.orientation = NSUserInterfaceLayoutOrientationVertical; stack.alignment = NSLayoutAttributeLeading; stack.spacing = 3;
@@ -54,11 +55,11 @@
     return self;
 }
 - (void)showAvailable:(BOOL)available remaining:(double)remaining reset:(NSString *)reset accent:(NSColor *)accent {
-    self.windowLabel.stringValue = available ? @"剩余" : @"等待接口";
-    self.valueLabel.stringValue = available ? [NSString stringWithFormat:@"%.0f%%", remaining] : @"当前未返回";
+    self.windowLabel.stringValue = available ? HUDL(@"剩余") : HUDL(@"等待接口");
+    self.valueLabel.stringValue = available ? [NSString stringWithFormat:@"%.0f%%", remaining] : HUDL(@"当前未返回");
     self.valueLabel.font = [NSFont monospacedDigitSystemFontOfSize:(available ? 19 : 14) weight:NSFontWeightBold];
     self.valueLabel.textColor = available ? accent : NSColor.tertiaryLabelColor;
-    self.resetLabel.stringValue = available ? reset : @"已预留显示位置";
+    self.resetLabel.stringValue = available ? reset : HUDL(@"已预留显示位置");
     self.progressView.accentColor = accent; self.progressView.progress = available ? remaining / 100.0 : 0;
 }
 @end
@@ -101,7 +102,7 @@
     self.boxType = NSBoxCustom; self.titlePosition = NSNoTitle;
     self.fillColor = [NSColor colorWithWhite:1 alpha:0.032]; self.borderColor = [NSColor colorWithWhite:1 alpha:0.075];
     self.borderWidth = 1; self.cornerRadius = 9; self.contentViewMargins = NSMakeSize(9, 7);
-    NSTextField *title = [NSTextField labelWithString:@"内存占用最高的软件"];
+    NSTextField *title = [NSTextField labelWithString:HUDL(@"内存占用最高的软件")];
     title.font = [NSFont systemFontOfSize:10.5 weight:NSFontWeightMedium]; title.textColor = NSColor.tertiaryLabelColor;
     NSMutableArray<NSTextField *> *rows = [NSMutableArray array];
     for (NSInteger index = 0; index < 5; index++) {
@@ -145,7 +146,7 @@
     self.boxType = NSBoxCustom; self.titlePosition = NSNoTitle;
     self.fillColor = [NSColor colorWithWhite:1 alpha:0.032]; self.borderColor = [NSColor colorWithWhite:1 alpha:0.075];
     self.borderWidth = 1; self.cornerRadius = 9; self.contentViewMargins = NSMakeSize(9, 7);
-    NSTextField *title = [NSTextField labelWithString:@"最近任务（历史记录）"];
+    NSTextField *title = [NSTextField labelWithString:HUDL(@"最近任务（历史记录）")];
     title.font = [NSFont systemFontOfSize:10.5 weight:NSFontWeightMedium]; title.textColor = NSColor.tertiaryLabelColor;
     NSMutableArray<NSTextField *> *rows = [NSMutableArray array];
     for (NSInteger index = 0; index < 3; index++) {
@@ -155,7 +156,7 @@
         [rows addObject:row];
     }
     _rows = rows;
-    _footerLabel = [NSTextField labelWithString:@"官方任务列表 · 不代表正在运行"];
+    _footerLabel = [NSTextField labelWithString:HUDL(@"官方任务列表 · 不代表正在运行")];
     _footerLabel.font = [NSFont systemFontOfSize:9.5]; _footerLabel.textColor = NSColor.tertiaryLabelColor;
     NSMutableArray<NSView *> *views = [NSMutableArray arrayWithObject:title]; [views addObjectsFromArray:rows]; [views addObject:_footerLabel];
     NSStackView *stack = [NSStackView stackViewWithViews:views];
@@ -169,9 +170,9 @@
 }
 - (void)updateRows:(NSArray<NSString *> *)rows footer:(NSString *)footer {
     for (NSUInteger index = 0; index < self.rows.count; index++) {
-        self.rows[index].stringValue = index < rows.count ? rows[index] : (index == 0 ? @"暂无任务记录" : @"");
+        self.rows[index].stringValue = index < rows.count ? rows[index] : (index == 0 ? HUDL(@"暂无任务记录") : @"");
     }
-    self.footerLabel.stringValue = footer.length > 0 ? footer : @"官方任务列表 · 不代表正在运行";
+    self.footerLabel.stringValue = footer.length > 0 ? footer : HUDL(@"官方任务列表 · 不代表正在运行");
 }
 @end
 
@@ -187,11 +188,11 @@
     self.boxType = NSBoxCustom; self.titlePosition = NSNoTitle;
     self.fillColor = [NSColor colorWithWhite:1 alpha:0.032]; self.borderColor = [NSColor colorWithWhite:1 alpha:0.075];
     self.borderWidth = 1; self.cornerRadius = 9; self.contentViewMargins = NSMakeSize(9, 7);
-    NSTextField *title = [NSTextField labelWithString:@"完整额度列表"];
+    NSTextField *title = [NSTextField labelWithString:HUDL(@"完整额度列表")];
     title.font = [NSFont systemFontOfSize:10.5 weight:NSFontWeightMedium]; title.textColor = NSColor.tertiaryLabelColor;
     _rowsStack = [NSStackView stackViewWithViews:@[]];
     _rowsStack.orientation = NSUserInterfaceLayoutOrientationVertical; _rowsStack.alignment = NSLayoutAttributeLeading; _rowsStack.spacing = 3;
-    _footerLabel = [NSTextField labelWithString:@"官方接口 · 高级显示"];
+    _footerLabel = [NSTextField labelWithString:HUDL(@"官方接口 · 高级显示")];
     _footerLabel.font = [NSFont systemFontOfSize:9.5]; _footerLabel.textColor = NSColor.tertiaryLabelColor;
     NSStackView *stack = [NSStackView stackViewWithViews:@[title, _rowsStack, _footerLabel]];
     stack.orientation = NSUserInterfaceLayoutOrientationVertical; stack.alignment = NSLayoutAttributeLeading; stack.spacing = 3;
@@ -206,7 +207,7 @@
 }
 - (void)updateRows:(NSArray<NSString *> *)rows footer:(NSString *)footer {
     for (NSView *view in [self.rowsStack.arrangedSubviews copy]) { [self.rowsStack removeArrangedSubview:view]; [view removeFromSuperview]; }
-    NSArray<NSString *> *safeRows = rows.count > 0 ? rows : @[@"当前没有可显示的额度项"];
+    NSArray<NSString *> *safeRows = rows.count > 0 ? rows : @[HUDL(@"当前没有可显示的额度项")];
     for (NSString *text in safeRows) {
         NSTextField *row = [NSTextField labelWithString:text ?: @""];
         row.font = [NSFont monospacedDigitSystemFontOfSize:10.5 weight:NSFontWeightMedium]; row.textColor = NSColor.labelColor;
@@ -214,7 +215,7 @@
         [row setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
         [self.rowsStack addArrangedSubview:row];
     }
-    self.footerLabel.stringValue = footer.length > 0 ? footer : @"官方接口 · 高级显示";
+    self.footerLabel.stringValue = footer.length > 0 ? footer : HUDL(@"官方接口 · 高级显示");
 }
 @end
 
@@ -296,30 +297,30 @@
     ]];
     self.accentColor = NSColor.systemGreenColor;
 
-    _tabs = [NSSegmentedControl segmentedControlWithLabels:@[@"主页", @"Codex", @"电脑性能"] trackingMode:NSSegmentSwitchTrackingSelectOne target:self action:@selector(tabSelected:)];
+    _tabs = [NSSegmentedControl segmentedControlWithLabels:@[HUDL(@"主页"), @"Codex", HUDL(@"电脑性能")] trackingMode:NSSegmentSwitchTrackingSelectOne target:self action:@selector(tabSelected:)];
     _tabs.selectedSegment = 0;
     _tabs.controlSize = NSControlSizeSmall;
     _tabs.segmentStyle = NSSegmentStyleRounded;
     _tabs.font = [NSFont systemFontOfSize:11.5 weight:NSFontWeightSemibold];
-    _minimizeButton = [NSButton buttonWithImage:[NSImage imageWithSystemSymbolName:@"minus" accessibilityDescription:@"最小化到程序栏"] target:self action:@selector(toggleMinimize:)];
+    _minimizeButton = [NSButton buttonWithImage:[NSImage imageWithSystemSymbolName:@"minus" accessibilityDescription:HUDL(@"最小化到程序栏")] target:self action:@selector(toggleMinimize:)];
     _minimizeButton.bezelStyle = NSBezelStyleInline; _minimizeButton.bordered = NO;
-    _minimizeButton.contentTintColor = [NSColor colorWithWhite:1 alpha:0.68]; _minimizeButton.toolTip = @"最小化到程序栏";
-    _pinButton = [NSButton buttonWithImage:[NSImage imageWithSystemSymbolName:@"pin.fill" accessibilityDescription:@"取消置顶"] target:self action:@selector(togglePin:)];
+    _minimizeButton.contentTintColor = [NSColor colorWithWhite:1 alpha:0.68]; _minimizeButton.toolTip = HUDL(@"最小化到程序栏");
+    _pinButton = [NSButton buttonWithImage:[NSImage imageWithSystemSymbolName:@"pin.fill" accessibilityDescription:HUDL(@"取消置顶")] target:self action:@selector(togglePin:)];
     _pinButton.bezelStyle = NSBezelStyleInline;
     _pinButton.bordered = NO;
-    _lockButton = [NSButton buttonWithImage:[NSImage imageWithSystemSymbolName:@"lock.open" accessibilityDescription:@"锁定位置和大小"] target:self action:@selector(togglePositionLock:)];
+    _lockButton = [NSButton buttonWithImage:[NSImage imageWithSystemSymbolName:@"lock.open" accessibilityDescription:HUDL(@"锁定位置和大小")] target:self action:@selector(togglePositionLock:)];
     _lockButton.bezelStyle = NSBezelStyleInline;
     _lockButton.bordered = NO;
-    _taskCenterButton = [NSButton buttonWithImage:[NSImage imageWithSystemSymbolName:@"rectangle.grid.2x2" accessibilityDescription:@"打开任务中心"] target:self action:@selector(openTaskCenter:)];
+    _taskCenterButton = [NSButton buttonWithImage:[NSImage imageWithSystemSymbolName:@"rectangle.grid.2x2" accessibilityDescription:HUDL(@"打开任务中心")] target:self action:@selector(openTaskCenter:)];
     _taskCenterButton.bezelStyle = NSBezelStyleInline;
     _taskCenterButton.bordered = NO;
     _taskCenterButton.contentTintColor = [NSColor colorWithWhite:1 alpha:0.76];
-    _taskCenterButton.toolTip = @"打开任务中心";
-    _settingsButton = [NSButton buttonWithImage:[NSImage imageWithSystemSymbolName:@"gearshape" accessibilityDescription:@"设置"] target:self action:@selector(showSettings:)];
+    _taskCenterButton.toolTip = HUDL(@"打开任务中心");
+    _settingsButton = [NSButton buttonWithImage:[NSImage imageWithSystemSymbolName:@"gearshape" accessibilityDescription:HUDL(@"设置")] target:self action:@selector(showSettings:)];
     _settingsButton.bezelStyle = NSBezelStyleInline;
     _settingsButton.bordered = NO;
     _settingsButton.contentTintColor = [NSColor colorWithWhite:1 alpha:0.76];
-    _settingsButton.toolTip = @"悬浮窗设置";
+    _settingsButton.toolTip = HUDL(@"悬浮窗设置");
     NSStackView *header = [NSStackView stackViewWithViews:@[_tabs, _minimizeButton, _pinButton, _lockButton, _taskCenterButton, _settingsButton]];
     header.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     header.alignment = NSLayoutAttributeCenterY;
@@ -338,115 +339,115 @@
     headerSeparator.fillColor = [NSColor colorWithWhite:1 alpha:0.085];
     headerSeparator.borderWidth = 0;
 
-    _codexStatusLabel = [self label:@"● 正在连接本机Codex" size:13 color:self.accentColor];
+    _codexStatusLabel = [self label:HUDL(@"● 正在连接本机Codex") size:13 color:self.accentColor];
     _codexStatusLabel.font = [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold];
-    _taskActivityCard = [[HUDMetricCard alloc] initWithTitle:@"任务活动（本机推测）" value:@"正在读取" subtitle:@"活跃5秒 · 空闲20秒"];
+    _taskActivityCard = [[HUDMetricCard alloc] initWithTitle:HUDL(@"任务活动（本机推测）") value:HUDL(@"正在读取") subtitle:HUDL(@"活跃5秒 · 空闲20秒")];
     _recentTasksCard = [HUDRecentTasksCard new];
-    _fiveHourCard = [[HUDQuotaCard alloc] initWithTitle:@"5小时额度"];
-    _weeklyCard = [[HUDQuotaCard alloc] initWithTitle:@"每周额度"];
+    _fiveHourCard = [[HUDQuotaCard alloc] initWithTitle:HUDL(@"5小时额度")];
+    _weeklyCard = [[HUDQuotaCard alloc] initWithTitle:HUDL(@"每周额度")];
     _quotaRow = [NSStackView stackViewWithViews:@[_fiveHourCard, _weeklyCard]];
     _quotaRow.orientation = NSUserInterfaceLayoutOrientationHorizontal; _quotaRow.distribution = NSStackViewDistributionFillEqually; _quotaRow.spacing = 8;
-    _planCard = [[HUDMetricCard alloc] initWithTitle:@"订阅" value:@"等待接口" subtitle:@"不显示邮箱"];
-    _usageCard = [[HUDMetricCard alloc] initWithTitle:@"账户Token统计" value:@"今日 --" subtitle:@"7天 -- · 不等于额度"];
-    _modelQuotaCard = [[HUDMetricCard alloc] initWithTitle:@"模型专属额度" value:@"当前未返回" subtitle:@"高级显示"];
+    _planCard = [[HUDMetricCard alloc] initWithTitle:HUDL(@"订阅") value:HUDL(@"等待接口") subtitle:HUDL(@"不显示邮箱")];
+    _usageCard = [[HUDMetricCard alloc] initWithTitle:HUDL(@"账户Token统计") value:HUDL(@"今日 --") subtitle:HUDL(@"7天 -- · 不等于额度")];
+    _modelQuotaCard = [[HUDMetricCard alloc] initWithTitle:HUDL(@"模型专属额度") value:HUDL(@"当前未返回") subtitle:HUDL(@"高级显示")];
     _codexInsightsRow = [NSStackView stackViewWithViews:@[_planCard, _usageCard, _modelQuotaCard]];
     _codexInsightsRow.orientation = NSUserInterfaceLayoutOrientationHorizontal; _codexInsightsRow.distribution = NSStackViewDistributionFillEqually; _codexInsightsRow.spacing = 7;
-    _localCostCard = [[HUDMetricCard alloc] initWithTitle:@"Token用量与费用" value:@"正在读取" subtitle:@"今日 -- · 7天 -- · 本月预计 --"];
-    _fiveHourTokensCard = [[HUDMetricCard alloc] initWithTitle:@"5小时 Token" value:@"--" subtitle:@"本地统计 · 等待数据"];
-    _rollingDayTokensCard = [[HUDMetricCard alloc] initWithTitle:@"24小时 Token" value:@"--" subtitle:@"本地统计 · 等待数据"];
-    _weeklyTokensCard = [[HUDMetricCard alloc] initWithTitle:@"本周Token" value:@"--" subtitle:@"本地统计 · 基准100%"];
+    _localCostCard = [[HUDMetricCard alloc] initWithTitle:HUDL(@"Token用量与费用") value:HUDL(@"正在读取") subtitle:HUDL(@"今日 -- · 7天 -- · 本月预计 --")];
+    _fiveHourTokensCard = [[HUDMetricCard alloc] initWithTitle:HUDL(@"5小时 Token") value:@"--" subtitle:HUDL(@"本地统计 · 等待数据")];
+    _rollingDayTokensCard = [[HUDMetricCard alloc] initWithTitle:HUDL(@"24小时 Token") value:@"--" subtitle:HUDL(@"本地统计 · 等待数据")];
+    _weeklyTokensCard = [[HUDMetricCard alloc] initWithTitle:HUDL(@"本周Token") value:@"--" subtitle:HUDL(@"本地统计 · 基准100%")];
     _tokenWindowRow = [NSStackView stackViewWithViews:@[_fiveHourTokensCard, _rollingDayTokensCard, _weeklyTokensCard]];
     _tokenWindowRow.orientation = NSUserInterfaceLayoutOrientationHorizontal; _tokenWindowRow.distribution = NSStackViewDistributionFillEqually; _tokenWindowRow.spacing = 7;
     for (HUDMetricCard *card in @[_fiveHourTokensCard, _rollingDayTokensCard, _weeklyTokensCard]) {
         card.subtitleLabel.maximumNumberOfLines = 2; card.subtitleLabel.lineBreakMode = NSLineBreakByWordWrapping;
         card.subtitleLabel.font = [NSFont systemFontOfSize:9];
     }
-    _quotaForecastCard = [[HUDMetricCard alloc] initWithTitle:@"额度趋势预测" value:@"正在积累历史" subtitle:@"至少需要15分钟数据"];
-    _serviceStatusCard = [[HUDMetricCard alloc] initWithTitle:@"OpenAI服务状态" value:@"正在检查" subtitle:@"官方状态页 · 低频刷新"];
+    _quotaForecastCard = [[HUDMetricCard alloc] initWithTitle:HUDL(@"额度趋势预测") value:HUDL(@"正在积累历史") subtitle:HUDL(@"至少需要15分钟数据")];
+    _serviceStatusCard = [[HUDMetricCard alloc] initWithTitle:HUDL(@"OpenAI服务状态") value:HUDL(@"正在检查") subtitle:HUDL(@"官方状态页 · 低频刷新")];
     _quotaDetailsCard = [HUDQuotaDetailsCard new];
-    _longestTurnCard = [[HUDMetricCard alloc] initWithTitle:@"最长单次任务" value:@"当前未返回" subtitle:@"账户历史记录"];
-    _longestStreakCard = [[HUDMetricCard alloc] initWithTitle:@"最长连续使用" value:@"当前未返回" subtitle:@"账户历史记录"];
-    _peakDailyTokensCard = [[HUDMetricCard alloc] initWithTitle:@"历史单日峰值Token" value:@"当前未返回" subtitle:@"账户历史记录"];
+    _longestTurnCard = [[HUDMetricCard alloc] initWithTitle:HUDL(@"最长单次任务") value:HUDL(@"当前未返回") subtitle:HUDL(@"账户历史记录")];
+    _longestStreakCard = [[HUDMetricCard alloc] initWithTitle:HUDL(@"最长连续使用") value:HUDL(@"当前未返回") subtitle:HUDL(@"账户历史记录")];
+    _peakDailyTokensCard = [[HUDMetricCard alloc] initWithTitle:HUDL(@"历史单日峰值Token") value:HUDL(@"当前未返回") subtitle:HUDL(@"账户历史记录")];
     _usageHistoryRow = [NSStackView stackViewWithViews:@[_longestTurnCard, _longestStreakCard, _peakDailyTokensCard]];
     _usageHistoryRow.orientation = NSUserInterfaceLayoutOrientationHorizontal; _usageHistoryRow.distribution = NSStackViewDistributionFillEqually; _usageHistoryRow.spacing = 7;
-    _codexFreshnessLabel = [self label:@"来源  Codex本机接口" size:10.5 color:NSColor.tertiaryLabelColor];
+    _codexFreshnessLabel = [self label:HUDL(@"来源  Codex本机接口") size:10.5 color:NSColor.tertiaryLabelColor];
     _codexStack = [NSStackView stackViewWithViews:@[_codexStatusLabel, _taskActivityCard, _recentTasksCard, _quotaRow, _codexInsightsRow, _tokenWindowRow, _localCostCard, _quotaForecastCard, _serviceStatusCard, _quotaDetailsCard, _usageHistoryRow, _codexFreshnessLabel]];
     _codexStack.orientation = NSUserInterfaceLayoutOrientationVertical;
     _codexStack.alignment = NSLayoutAttributeLeading;
     _codexStack.spacing = 7;
 
-    _homeCodexStatusLabel = [self label:@"● 正在连接本机Codex" size:13 color:self.accentColor];
+    _homeCodexStatusLabel = [self label:HUDL(@"● 正在连接本机Codex") size:13 color:self.accentColor];
     _homeCodexStatusLabel.font = [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold];
-    _homeTaskActivityCard = [[HUDMetricCard alloc] initWithTitle:@"任务活动（本机推测）" value:@"正在读取" subtitle:@"活跃5秒 · 空闲20秒"];
+    _homeTaskActivityCard = [[HUDMetricCard alloc] initWithTitle:HUDL(@"任务活动（本机推测）") value:HUDL(@"正在读取") subtitle:HUDL(@"活跃5秒 · 空闲20秒")];
     _homeRecentTasksCard = [HUDRecentTasksCard new];
-    _homeFiveHourCard = [[HUDQuotaCard alloc] initWithTitle:@"5小时额度"];
-    _homeWeeklyCard = [[HUDQuotaCard alloc] initWithTitle:@"每周额度"];
+    _homeFiveHourCard = [[HUDQuotaCard alloc] initWithTitle:HUDL(@"5小时额度")];
+    _homeWeeklyCard = [[HUDQuotaCard alloc] initWithTitle:HUDL(@"每周额度")];
     _homeQuotaRow = [NSStackView stackViewWithViews:@[_homeFiveHourCard, _homeWeeklyCard]];
     _homeQuotaRow.orientation = NSUserInterfaceLayoutOrientationHorizontal; _homeQuotaRow.distribution = NSStackViewDistributionFillEqually; _homeQuotaRow.spacing = 8;
-    _homePlanCard = [[HUDMetricCard alloc] initWithTitle:@"订阅" value:@"等待接口" subtitle:@"不显示邮箱"];
-    _homeUsageCard = [[HUDMetricCard alloc] initWithTitle:@"账户Token统计" value:@"今日 --" subtitle:@"7天 -- · 不等于额度"];
-    _homeModelQuotaCard = [[HUDMetricCard alloc] initWithTitle:@"模型专属额度" value:@"当前未返回" subtitle:@"高级显示"];
+    _homePlanCard = [[HUDMetricCard alloc] initWithTitle:HUDL(@"订阅") value:HUDL(@"等待接口") subtitle:HUDL(@"不显示邮箱")];
+    _homeUsageCard = [[HUDMetricCard alloc] initWithTitle:HUDL(@"账户Token统计") value:HUDL(@"今日 --") subtitle:HUDL(@"7天 -- · 不等于额度")];
+    _homeModelQuotaCard = [[HUDMetricCard alloc] initWithTitle:HUDL(@"模型专属额度") value:HUDL(@"当前未返回") subtitle:HUDL(@"高级显示")];
     _homeInsightsRow = [NSStackView stackViewWithViews:@[_homePlanCard, _homeUsageCard, _homeModelQuotaCard]];
     _homeInsightsRow.orientation = NSUserInterfaceLayoutOrientationHorizontal; _homeInsightsRow.distribution = NSStackViewDistributionFillEqually; _homeInsightsRow.spacing = 7;
-    _homeLocalCostCard = [[HUDMetricCard alloc] initWithTitle:@"Token用量与费用" value:@"正在读取" subtitle:@"今日 -- · 7天 -- · 本月预计 --"];
-    _homeFiveHourTokensCard = [[HUDMetricCard alloc] initWithTitle:@"5小时 Token" value:@"--" subtitle:@"本地统计 · 等待数据"];
-    _homeRollingDayTokensCard = [[HUDMetricCard alloc] initWithTitle:@"24小时 Token" value:@"--" subtitle:@"本地统计 · 等待数据"];
-    _homeWeeklyTokensCard = [[HUDMetricCard alloc] initWithTitle:@"本周Token" value:@"--" subtitle:@"本地统计 · 基准100%"];
+    _homeLocalCostCard = [[HUDMetricCard alloc] initWithTitle:HUDL(@"Token用量与费用") value:HUDL(@"正在读取") subtitle:HUDL(@"今日 -- · 7天 -- · 本月预计 --")];
+    _homeFiveHourTokensCard = [[HUDMetricCard alloc] initWithTitle:HUDL(@"5小时 Token") value:@"--" subtitle:HUDL(@"本地统计 · 等待数据")];
+    _homeRollingDayTokensCard = [[HUDMetricCard alloc] initWithTitle:HUDL(@"24小时 Token") value:@"--" subtitle:HUDL(@"本地统计 · 等待数据")];
+    _homeWeeklyTokensCard = [[HUDMetricCard alloc] initWithTitle:HUDL(@"本周Token") value:@"--" subtitle:HUDL(@"本地统计 · 基准100%")];
     _homeTokenWindowRow = [NSStackView stackViewWithViews:@[_homeFiveHourTokensCard, _homeRollingDayTokensCard, _homeWeeklyTokensCard]];
     _homeTokenWindowRow.orientation = NSUserInterfaceLayoutOrientationHorizontal; _homeTokenWindowRow.distribution = NSStackViewDistributionFillEqually; _homeTokenWindowRow.spacing = 7;
     for (HUDMetricCard *card in @[_homeFiveHourTokensCard, _homeRollingDayTokensCard, _homeWeeklyTokensCard]) {
         card.subtitleLabel.maximumNumberOfLines = 2; card.subtitleLabel.lineBreakMode = NSLineBreakByWordWrapping;
         card.subtitleLabel.font = [NSFont systemFontOfSize:9];
     }
-    _homeQuotaForecastCard = [[HUDMetricCard alloc] initWithTitle:@"额度趋势预测" value:@"正在积累历史" subtitle:@"至少需要15分钟数据"];
-    _homeServiceStatusCard = [[HUDMetricCard alloc] initWithTitle:@"OpenAI服务状态" value:@"正在检查" subtitle:@"官方状态页 · 低频刷新"];
+    _homeQuotaForecastCard = [[HUDMetricCard alloc] initWithTitle:HUDL(@"额度趋势预测") value:HUDL(@"正在积累历史") subtitle:HUDL(@"至少需要15分钟数据")];
+    _homeServiceStatusCard = [[HUDMetricCard alloc] initWithTitle:HUDL(@"OpenAI服务状态") value:HUDL(@"正在检查") subtitle:HUDL(@"官方状态页 · 低频刷新")];
     _homeQuotaDetailsCard = [HUDQuotaDetailsCard new];
-    _homeLongestTurnCard = [[HUDMetricCard alloc] initWithTitle:@"最长单次任务" value:@"当前未返回" subtitle:@"账户历史记录"];
-    _homeLongestStreakCard = [[HUDMetricCard alloc] initWithTitle:@"最长连续使用" value:@"当前未返回" subtitle:@"账户历史记录"];
-    _homePeakDailyTokensCard = [[HUDMetricCard alloc] initWithTitle:@"历史单日峰值Token" value:@"当前未返回" subtitle:@"账户历史记录"];
+    _homeLongestTurnCard = [[HUDMetricCard alloc] initWithTitle:HUDL(@"最长单次任务") value:HUDL(@"当前未返回") subtitle:HUDL(@"账户历史记录")];
+    _homeLongestStreakCard = [[HUDMetricCard alloc] initWithTitle:HUDL(@"最长连续使用") value:HUDL(@"当前未返回") subtitle:HUDL(@"账户历史记录")];
+    _homePeakDailyTokensCard = [[HUDMetricCard alloc] initWithTitle:HUDL(@"历史单日峰值Token") value:HUDL(@"当前未返回") subtitle:HUDL(@"账户历史记录")];
     _homeUsageHistoryRow = [NSStackView stackViewWithViews:@[_homeLongestTurnCard, _homeLongestStreakCard, _homePeakDailyTokensCard]];
     _homeUsageHistoryRow.orientation = NSUserInterfaceLayoutOrientationHorizontal; _homeUsageHistoryRow.distribution = NSStackViewDistributionFillEqually; _homeUsageHistoryRow.spacing = 7;
-    _homeComputerStatusLabel = [self label:@"● 正在读取电脑状态" size:13 color:NSColor.systemGreenColor];
+    _homeComputerStatusLabel = [self label:HUDL(@"● 正在读取电脑状态") size:13 color:NSColor.systemGreenColor];
     _homeComputerStatusLabel.font = [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold];
-    _homeBottleneckCard = [[HUDMetricCard alloc] initWithTitle:@"当前瓶颈" value:@"无" subtitle:@"Codex影响 --"];
-    _homeSystemCard = [[HUDMetricCard alloc] initWithTitle:@"电脑状态" value:@"CPU -- · 内存 --" subtitle:@"已用 -- / --G · 压力 --"];
+    _homeBottleneckCard = [[HUDMetricCard alloc] initWithTitle:HUDL(@"当前瓶颈") value:HUDL(@"无") subtitle:HUDL(@"Codex影响 --")];
+    _homeSystemCard = [[HUDMetricCard alloc] initWithTitle:HUDL(@"电脑状态") value:HUDL(@"CPU -- · 内存 --") subtitle:HUDL(@"已用 -- / --G · 压力 --")];
     _homeComputerCardsRow = [NSStackView stackViewWithViews:@[_homeBottleneckCard, _homeSystemCard]];
     _homeComputerCardsRow.orientation = NSUserInterfaceLayoutOrientationHorizontal; _homeComputerCardsRow.distribution = NSStackViewDistributionFillEqually; _homeComputerCardsRow.spacing = 7;
-    _homeAttributionLabel = [self label:@"Codex：CPU --（整机） · 内存 --G（占总内存 --%）" size:12 color:NSColor.labelColor];
+    _homeAttributionLabel = [self label:HUDL(@"Codex：CPU --（整机） · 内存 --G（占总内存 --%）") size:12 color:NSColor.labelColor];
     _homeMemoryAppsCard = [HUDMemoryListCard new];
     _homeSparkline = [HUDSparklineView new];
-    _homeTrendTitleLabel = [self label:@"CPU趋势" size:10.5 color:NSColor.secondaryLabelColor];
-    _homeTrendLabel = [self label:@"平均 -- · 峰值 --" size:10.5 color:NSColor.labelColor];
+    _homeTrendTitleLabel = [self label:HUDL(@"CPU趋势") size:10.5 color:NSColor.secondaryLabelColor];
+    _homeTrendLabel = [self label:HUDL(@"平均 -- · 峰值 --") size:10.5 color:NSColor.labelColor];
     _homeTrendRow = [NSStackView stackViewWithViews:@[_homeTrendTitleLabel, _homeSparkline, _homeTrendLabel]];
     _homeTrendRow.orientation = NSUserInterfaceLayoutOrientationHorizontal; _homeTrendRow.alignment = NSLayoutAttributeCenterY; _homeTrendRow.spacing = 8;
-    _homeFreshnessLabel = [self label:@"电脑5秒起 · Codex智能刷新" size:10.5 color:NSColor.tertiaryLabelColor];
+    _homeFreshnessLabel = [self label:HUDL(@"电脑5秒起 · Codex智能刷新") size:10.5 color:NSColor.tertiaryLabelColor];
     _homeStack = [NSStackView stackViewWithViews:@[_homeCodexStatusLabel, _homeTaskActivityCard, _homeRecentTasksCard, _homeQuotaRow, _homeInsightsRow, _homeTokenWindowRow, _homeLocalCostCard, _homeQuotaForecastCard, _homeServiceStatusCard, _homeQuotaDetailsCard, _homeUsageHistoryRow, _homeComputerStatusLabel, _homeComputerCardsRow, _homeAttributionLabel, _homeMemoryAppsCard, _homeTrendRow, _homeFreshnessLabel]];
     _homeStack.orientation = NSUserInterfaceLayoutOrientationVertical; _homeStack.alignment = NSLayoutAttributeLeading; _homeStack.spacing = 7;
     _tokenWindowRow.hidden = YES; _homeTokenWindowRow.hidden = YES;
     _quotaDetailsCard.hidden = YES; _homeQuotaDetailsCard.hidden = YES;
     _peakDailyTokensCard.hidden = YES; _homePeakDailyTokensCard.hidden = YES;
 
-    _computerStatusLabel = [self label:@"● 正在读取电脑状态" size:13 color:NSColor.systemGreenColor];
+    _computerStatusLabel = [self label:HUDL(@"● 正在读取电脑状态") size:13 color:NSColor.systemGreenColor];
     _computerStatusLabel.font = [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold];
-    _bottleneckCard = [[HUDMetricCard alloc] initWithTitle:@"当前瓶颈" value:@"无" subtitle:@""];
-    _impactCard = [[HUDMetricCard alloc] initWithTitle:@"Codex影响" value:@"低" subtitle:@""];
+    _bottleneckCard = [[HUDMetricCard alloc] initWithTitle:HUDL(@"当前瓶颈") value:HUDL(@"无") subtitle:@""];
+    _impactCard = [[HUDMetricCard alloc] initWithTitle:HUDL(@"Codex影响") value:HUDL(@"低") subtitle:@""];
     _diagnosisRow = [NSStackView stackViewWithViews:@[_bottleneckCard, _impactCard]];
     _diagnosisRow.orientation = NSUserInterfaceLayoutOrientationHorizontal; _diagnosisRow.distribution = NSStackViewDistributionFillEqually; _diagnosisRow.spacing = 7;
-    _cpuCard = [[HUDMetricCard alloc] initWithTitle:@"整机CPU" value:@"--" subtitle:@""];
-    _memoryPressureCard = [[HUDMetricCard alloc] initWithTitle:@"整机内存" value:@"-- / --G" subtitle:@"已用 --% · 压力 --"];
+    _cpuCard = [[HUDMetricCard alloc] initWithTitle:HUDL(@"整机CPU") value:@"--" subtitle:@""];
+    _memoryPressureCard = [[HUDMetricCard alloc] initWithTitle:HUDL(@"整机内存") value:@"-- / --G" subtitle:HUDL(@"已用 --% · 压力 --")];
     _cpuCard.valueLabel.font = [NSFont monospacedDigitSystemFontOfSize:18 weight:NSFontWeightBold];
     _memoryPressureCard.valueLabel.font = [NSFont systemFontOfSize:18 weight:NSFontWeightBold];
     _healthCardsRow = [NSStackView stackViewWithViews:@[_cpuCard, _memoryPressureCard]];
     _healthCardsRow.orientation = NSUserInterfaceLayoutOrientationHorizontal; _healthCardsRow.distribution = NSStackViewDistributionFillEqually; _healthCardsRow.spacing = 8;
-    _attributionLabel = [self label:@"Codex：CPU --（整机） · 内存 --G（占总内存 --%）" size:13 color:NSColor.labelColor];
-    _healthLabel = [self label:@"系统  Swap --  ·  热状态 --" size:12 color:NSColor.secondaryLabelColor];
+    _attributionLabel = [self label:HUDL(@"Codex：CPU --（整机） · 内存 --G（占总内存 --%）") size:13 color:NSColor.labelColor];
+    _healthLabel = [self label:HUDL(@"系统  Swap --  ·  热状态 --") size:12 color:NSColor.secondaryLabelColor];
     _memoryAppsCard = [HUDMemoryListCard new];
     _sparkline = [HUDSparklineView new];
-    _trendTitleLabel = [self label:@"CPU趋势" size:10.5 color:NSColor.secondaryLabelColor];
-    _trendLabel = [self label:@"平均 -- · 峰值 --" size:10.5 color:NSColor.labelColor];
+    _trendTitleLabel = [self label:HUDL(@"CPU趋势") size:10.5 color:NSColor.secondaryLabelColor];
+    _trendLabel = [self label:HUDL(@"平均 -- · 峰值 --") size:10.5 color:NSColor.labelColor];
     _trendRow = [NSStackView stackViewWithViews:@[_trendTitleLabel, _sparkline, _trendLabel]];
     _trendRow.orientation = NSUserInterfaceLayoutOrientationHorizontal; _trendRow.alignment = NSLayoutAttributeCenterY; _trendRow.spacing = 8;
-    _computerFreshnessLabel = [self label:@"来源  macOS系统接口" size:10.5 color:NSColor.tertiaryLabelColor];
+    _computerFreshnessLabel = [self label:HUDL(@"来源  macOS系统接口") size:10.5 color:NSColor.tertiaryLabelColor];
     _computerStack = [NSStackView stackViewWithViews:@[_computerStatusLabel, _diagnosisRow, _healthCardsRow, _attributionLabel, _healthLabel, _memoryAppsCard, _trendRow, _computerFreshnessLabel]];
     _computerStack.orientation = NSUserInterfaceLayoutOrientationVertical;
     _computerStack.alignment = NSLayoutAttributeLeading;
@@ -549,18 +550,18 @@
 - (void)setAlwaysOnTop:(BOOL)enabled {
     _alwaysOnTop = enabled;
     NSString *symbol = enabled ? @"pin.fill" : @"pin";
-    NSString *description = enabled ? @"取消置顶" : @"开启置顶";
+    NSString *description = enabled ? HUDL(@"取消置顶") : HUDL(@"开启置顶");
     self.pinButton.image = [NSImage imageWithSystemSymbolName:symbol accessibilityDescription:description];
-    self.pinButton.toolTip = enabled ? @"当前置顶，点击取消置顶" : @"当前不置顶，点击置顶";
+    self.pinButton.toolTip = enabled ? HUDL(@"当前置顶，点击取消置顶") : HUDL(@"当前不置顶，点击置顶");
     self.pinButton.contentTintColor = enabled ? self.accentColor : [NSColor colorWithWhite:1 alpha:0.52];
 }
 
 - (void)setPositionLocked:(BOOL)enabled {
     _positionLocked = enabled;
     NSString *symbol = enabled ? @"lock.fill" : @"lock.open";
-    NSString *description = enabled ? @"解锁位置和大小" : @"锁定位置和大小";
+    NSString *description = enabled ? HUDL(@"解锁位置和大小") : HUDL(@"锁定位置和大小");
     self.lockButton.image = [NSImage imageWithSystemSymbolName:symbol accessibilityDescription:description];
-    self.lockButton.toolTip = enabled ? @"位置和大小已锁定，点击解锁" : @"锁定位置和大小，防止误拖动";
+    self.lockButton.toolTip = enabled ? HUDL(@"位置和大小已锁定，点击解锁") : HUDL(@"锁定位置和大小，防止误拖动");
     self.lockButton.contentTintColor = enabled ? self.accentColor : [NSColor colorWithWhite:1 alpha:0.52];
 }
 

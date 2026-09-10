@@ -823,6 +823,13 @@ CodexCostHistorySaveResult CodexCostHistoryStore::Save(
             std::string first;
             std::getline(previous, first);
             if (first == "version=2") {
+                std::error_code sizeError;
+                const auto size = std::filesystem::file_size(path_,sizeError);
+                if(sizeError || size > kCodexCostHistoryCacheMaximumBytes) {
+                    result.status = CodexCostHistorySaveStatus::kIoError;
+                    result.error = sizeError ? sizeError : std::make_error_code(std::errc::file_too_large);
+                    return result;
+                }
                 auto backup = path_;
                 backup += ".before-counting-repair";
                 std::error_code backupError;

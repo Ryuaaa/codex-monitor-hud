@@ -25,8 +25,8 @@ struct Pricing {
 constexpr double kUseInputRate = -1.0;
 constexpr double kNoLongContextRate = 0.0;
 
-// USD per one million tokens. This intentionally mirrors the frozen macOS 1.0
-// table in overlay/CodexCostHistory.m, including cache-write fallback pricing.
+// USD per one million tokens: macOS 1.3 Standard reference, not historical bills.
+// Includes cache-write fallback pricing for older models.
 constexpr std::array<Pricing, 18> kPrices{{
     {"gpt-6-astra", 10.0, 1.0, 50.0, 12.5,
      20.0, 2.0, 75.0, 25.0, 272000},

@@ -75,8 +75,8 @@ void TestNewInstallDefaultsUseRegistryPolicy() {
 
     const std::vector<ModuleId> codex =
         codex_monitor::VisibleModulesForNativePage(settings, Page::kCodex);
-    Expect(codex.size() == 8,
-           "the Codex page defaults to quotas, forecast, subscription, cost estimate, current activity, recent history, and service status");
+    Expect(codex.size() == 7,
+           "the Codex page defaults to quotas, forecast, subscription, cost estimate, current activity and recent history");
     Expect(Contains(codex, ModuleId::kCodexFiveHourQuota),
            "the five-hour quota must be visible on a new Codex page");
     Expect(Contains(codex, ModuleId::kCodexWeeklyQuota),
@@ -87,8 +87,8 @@ void TestNewInstallDefaultsUseRegistryPolicy() {
            "local current task activity must be visible on a new Codex page");
     Expect(Contains(codex, ModuleId::kCodexRecentTasks),
            "recent task history must be visible on a new Codex page");
-    Expect(Contains(codex, ModuleId::kOpenAIServiceStatus),
-           "OpenAI service status must be visible on a new Codex page");
+    Expect(!Contains(codex, ModuleId::kOpenAIServiceStatus),
+           "OpenAI service status defaults off without background requests");
     Expect(!Contains(codex, ModuleId::kCodexAccountTokenUsage),
            "account Token usage must default to off");
     Expect(Contains(codex, ModuleId::kCodexTokenCostEstimate),
@@ -399,7 +399,7 @@ void TestVersionOneMigrationPreservesOldHomeChoices() {
     Expect(Contains(nativeCodex, ModuleId::kCodexFiveHourQuota) &&
                Contains(nativeCodex, ModuleId::kCodexWeeklyQuota) &&
                Contains(nativeCodex, ModuleId::kCodexRecentTasks) &&
-               Contains(nativeCodex, ModuleId::kOpenAIServiceStatus) &&
+               !Contains(nativeCodex, ModuleId::kOpenAIServiceStatus) &&
                !Contains(nativeCodex, ModuleId::kCodexQuotaForecast) &&
                !Contains(nativeCodex, ModuleId::kCodexTaskActivity) &&
                !Contains(nativeCodex, ModuleId::kCodexAccountTokenUsage),
@@ -605,7 +605,7 @@ void TestMalformedSettingsFallBackSafely() {
            "damaged settings must not silently enable service-status homepage work");
     Expect(codex_monitor::VisibleModulesForNativePage(parsed, Page::kComputer).size() == 6,
            "damaged native visibility must keep the six pre-trend computer defaults");
-    Expect(codex_monitor::VisibleModulesForNativePage(parsed, Page::kCodex).size() == 5,
+    Expect(codex_monitor::VisibleModulesForNativePage(parsed, Page::kCodex).size() == 4,
            "damaged native visibility must keep safe Codex defaults");
     Expect(!parsed.windowPlacement, "an invalid window placement must be ignored");
 }

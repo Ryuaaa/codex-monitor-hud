@@ -1,4 +1,8 @@
 # source<TAB>English<TAB>Japanese<TAB>Korean
+截止/续费日（手动）：	Expiry/renewal (manual): 	期限・更新日（手動）: 	만료/갱신일 (수동):
+已逾期	Overdue	期限超過	기한 경과
+天	days	日	일
+上次额度已过期，等待刷新	Previous quota expired; waiting for refresh	前回の使用量は期限切れ・更新待ち	이전 한도 정보 만료; 갱신 대기 중
 费用为API估算，非账单；汇率日期：	API estimate, not a bill; FX date: 	API推定・請求額ではありません。為替: 	API 추정액이며 청구액 아님; 환율 날짜:
 System diagnosis & Codex / ChatGPT impact	系统诊断与Codex影响	System diagnosis & Codex / ChatGPT impact	システム診断・Codexの影響	시스템 진단 및 Codex 영향
 Codex / ChatGPT process tree	Codex / ChatGPT进程树	Codex / ChatGPT process tree	Codex / ChatGPTプロセスツリー	Codex / ChatGPT 프로세스 트리

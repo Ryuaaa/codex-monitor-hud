@@ -1,3 +1,4 @@
+#import "HUDLocalization.h"
 #import "NativeSampler.h"
 
 #import <dispatch/dispatch.h>
@@ -107,8 +108,8 @@ static double NativeRawCPUPercent(uint64_t deltaCPUTime, NSTimeInterval elapsed)
     _cachedTopCPUApps = @[];
     _cachedTopMemoryApps = @[];
     _swapHistory = [NSMutableArray array];
-    _cachedThermalText = @"正常";
-    _memoryPressureText = @"正常";
+    _cachedThermalText = HUDL(@"正常");
+    _memoryPressureText = HUDL(@"正常");
     _memoryPressureLevel = 0;
     _collectTopApps = YES;
     _collectSecondaryMetrics = YES;
@@ -126,13 +127,13 @@ static double NativeRawCPUPercent(uint64_t deltaCPUTime, NSTimeInterval elapsed)
             unsigned long data = dispatch_source_get_data(weakSelf.memoryPressureSource);
             if (data & DISPATCH_MEMORYPRESSURE_CRITICAL) {
                 weakSelf.memoryPressureLevel = 2;
-                weakSelf.memoryPressureText = @"严重";
+                weakSelf.memoryPressureText = HUDL(@"严重");
             } else if (data & DISPATCH_MEMORYPRESSURE_WARN) {
                 weakSelf.memoryPressureLevel = 1;
-                weakSelf.memoryPressureText = @"注意";
+                weakSelf.memoryPressureText = HUDL(@"注意");
             } else {
                 weakSelf.memoryPressureLevel = 0;
-                weakSelf.memoryPressureText = @"正常";
+                weakSelf.memoryPressureText = HUDL(@"正常");
             }
         });
         dispatch_resume(_memoryPressureSource);
@@ -165,7 +166,7 @@ static double NativeRawCPUPercent(uint64_t deltaCPUTime, NSTimeInterval elapsed)
     if (_collectThermalMetrics == collectThermalMetrics) return;
     _collectThermalMetrics = collectThermalMetrics;
     self.lastThermalTime = 0;
-    if (!collectThermalMetrics) { self.cachedThermalLevel = 0; self.cachedThermalText = @"未采集"; }
+    if (!collectThermalMetrics) { self.cachedThermalLevel = 0; self.cachedThermalText = HUDL(@"未采集"); }
 }
 
 - (void)dealloc {
@@ -389,19 +390,19 @@ static double NativeRawCPUPercent(uint64_t deltaCPUTime, NSTimeInterval elapsed)
     switch (NSProcessInfo.processInfo.thermalState) {
         case NSProcessInfoThermalStateFair:
             self.cachedThermalLevel = 1;
-            self.cachedThermalText = @"略高";
+            self.cachedThermalText = HUDL(@"略高");
             break;
         case NSProcessInfoThermalStateSerious:
             self.cachedThermalLevel = 2;
-            self.cachedThermalText = @"较高";
+            self.cachedThermalText = HUDL(@"较高");
             break;
         case NSProcessInfoThermalStateCritical:
             self.cachedThermalLevel = 3;
-            self.cachedThermalText = @"严重";
+            self.cachedThermalText = HUDL(@"严重");
             break;
         default:
             self.cachedThermalLevel = 0;
-            self.cachedThermalText = @"正常";
+            self.cachedThermalText = HUDL(@"正常");
             break;
     }
 }
@@ -518,9 +519,9 @@ static double NativeRawCPUPercent(uint64_t deltaCPUTime, NSTimeInterval elapsed)
     snapshot.swapUsedGiB = self.cachedSwapUsedGiB;
     snapshot.swapDelta10MinMiB = self.cachedSwapDelta10MinMiB;
     snapshot.memoryPressureLevel = self.memoryPressureLevel;
-    snapshot.memoryPressureText = self.memoryPressureText ?: @"正常";
+    snapshot.memoryPressureText = self.memoryPressureText ?: HUDL(@"正常");
     snapshot.thermalLevel = self.cachedThermalLevel;
-    snapshot.thermalText = self.cachedThermalText ?: @"正常";
+    snapshot.thermalText = self.cachedThermalText ?: HUDL(@"正常");
     snapshot.networkDownMBps = self.cachedNetworkDownMBps;
     snapshot.networkUpMBps = self.cachedNetworkUpMBps;
     snapshot.codexDiskReadMBps = codexReadMBps;

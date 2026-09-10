@@ -23,12 +23,14 @@ sign_identity="${CODE_SIGN_IDENTITY:--}"
   "$source_dir/overlay/CodexStatusProvider.m" \
   "$source_dir/overlay/CodexProtocolCompatibility.m" \
   "$source_dir/overlay/CodexCostHistory.m" \
+  "$source_dir/overlay/HUDLocalization.m" \
   "$source_dir/overlay/OpenAIServiceStatus.m" \
   "$source_dir/overlay/NativeSampler.m" \
   -o "$macos_dir/CodexMonitorHUD"
 /usr/bin/lipo "$macos_dir/CodexMonitorHUD" -verify_arch arm64 x86_64
 /bin/cp "$source_dir/overlay/Info.plist" "$contents_dir/Info.plist"
 /bin/cp "$source_dir/overlay/AppIcon.icns" "$resources_dir/AppIcon.icns"
+/bin/cp "$source_dir/overlay/HUDLocalizations.json" "$resources_dir/HUDLocalizations.json"
 /usr/bin/plutil -lint "$contents_dir/Info.plist"
 /usr/bin/xattr -cr "$app_dir"
 if [[ "$sign_identity" == "-" ]]; then

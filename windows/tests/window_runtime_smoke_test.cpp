@@ -140,14 +140,14 @@ int wmain(int argc, wchar_t** argv) {
         Fail(inventory.visibleCount >= 12,
              "the main page must expose its navigation and visible cards",
              failures);
-        for (const wchar_t* expected :
-             {L"Codex Monitor HUD", L"Home", L"Codex", L"Computer",
-              L"Settings", L"Minimize"}) {
-            Fail(ContainsText(inventory, expected),
+        Fail(ContainsText(inventory,L"Codex Monitor HUD"),"application identity visible",failures);
+        for (int id : {1010,1011,1012,1013,1002}) {
+            const HWND control = GetDlgItem(window,id);
+            Fail(control && IsWindowVisible(control) && GetWindowTextLengthW(control)>0,
                  "a required visible shell control is missing", failures);
         }
 
-        if (HWND computer = FindVisibleChildWithText(window, L"Computer")) {
+        if (HWND computer = GetDlgItem(window, 1012)) {
             SendMessageW(computer, BM_CLICK, 0, 0);
             std::this_thread::sleep_for(std::chrono::milliseconds(300));
             ChildInventory computerPage;
@@ -155,9 +155,10 @@ int wmain(int argc, wchar_t** argv) {
                              reinterpret_cast<LPARAM>(&computerPage));
             bool hasPerformanceCard = false;
             for (const std::wstring& text : computerPage.visibleTexts) {
-                if (text.find(L"SYSTEM + CODEX/CHATGPT") !=
+                if (text.find(L"CODEX/CHATGPT") !=
                         std::wstring::npos ||
-                    text.find(L"Starting sampler") != std::wstring::npos) {
+                    text.find(L"Starting sampler") != std::wstring::npos ||
+                    text.find(L"正在启动采样") != std::wstring::npos) {
                     hasPerformanceCard = true;
                     break;
                 }
@@ -170,7 +171,7 @@ int wmain(int argc, wchar_t** argv) {
                  failures);
         }
 
-        if (HWND settings = FindVisibleChildWithText(window, L"Settings")) {
+        if (HWND settings = GetDlgItem(window, 1013)) {
             SendMessageW(settings, BM_CLICK, 0, 0);
             HWND settingsWindow = WaitForWindow(
                 process.dwProcessId, L"CodexMonitorHUDWindowsSettingsWindow",
@@ -178,12 +179,22 @@ int wmain(int argc, wchar_t** argv) {
             Fail(settingsWindow != nullptr,
                  "the Settings button must open the settings window",
                  failures);
-            if (settingsWindow) PostMessageW(settingsWindow, WM_CLOSE, 0, 0);
+            if (settingsWindow) {
+                for(int id : {3600,3601}) {
+                    const HWND combo=GetDlgItem(settingsWindow,id);
+                    Fail(combo && IsWindowVisible(combo) && SendMessageW(combo,CB_GETCOUNT,0,0)==5,
+                         "five language/currency choices must exist",failures);
+                    Fail(SendMessageW(combo,CB_GETCURSEL,0,0)!=CB_ERR,"display choice must be selected",failures);
+                }
+                Fail(GetDlgItem(settingsWindow,3602) && GetDlgItem(settingsWindow,3603),
+                     "manual date and official billing actions must exist",failures);
+                PostMessageW(settingsWindow, WM_CLOSE, 0, 0);
+            }
         } else {
             Fail(false, "the Settings control must be clickable", failures);
         }
 
-        if (HWND minimize = FindVisibleChildWithText(window, L"Minimize")) {
+        if (HWND minimize = GetDlgItem(window, 1002)) {
             SendMessageW(minimize, BM_CLICK, 0, 0);
             std::this_thread::sleep_for(std::chrono::milliseconds(300));
             Fail(IsIconic(window) != FALSE,

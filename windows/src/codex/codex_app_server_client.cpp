@@ -395,8 +395,10 @@ AppServerRefreshReport CodexAppServerClient::Refresh(
                     ApplyGenericFailure(data_.rateLimits, L"$jsonrpc.result",
                                         L"Rate-limit request failed");
                 } else {
-                    ApplyMethodResult(data_.rateLimits,
-                                      ParseRateLimitsResultJson(envelope.resultJson));
+                    auto parsed = ParseRateLimitsResultJson(envelope.resultJson);
+                    if(parsed.ok()) parsed.value->receivedAtUnixSeconds =
+                        std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+                    ApplyMethodResult(data_.rateLimits, std::move(parsed));
                 }
                 break;
             case kAccountRequestId:

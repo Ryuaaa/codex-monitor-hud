@@ -417,7 +417,7 @@ def main() -> None:
         "kSettingsButtonId": "the shell exposes settings",
         "ModuleRegistry()": "module controls are created from the registry",
         "VisibleHomeModules": "homepage cards follow saved visibility and order",
-        "SYSTEM + CODEX/CHATGPT":
+        "CODEX/CHATGPT":
             "the first performance card names the full process-tree scope",
         "WM_EXITSIZEMOVE": "window placement is persisted after interactive movement",
         "WM_DISPLAYCHANGE": "saved placement is repaired after monitor changes",
@@ -1328,8 +1328,8 @@ def main() -> None:
             "the visible Minimize control is exercised",
         "CodexMonitorHUDWindowsSettingsWindow":
             "the settings window is opened during the smoke run",
-        "SYSTEM + CODEX/CHATGPT":
-            "the real Computer page renders a performance card",
+        "CODEX/CHATGPT":
+            "the real Computer page renders a localized performance card",
         "WM_CLOSE":
             "the runtime test exercises graceful shutdown",
     }
@@ -1695,7 +1695,7 @@ def main() -> None:
             "the inactive default threshold matches the macOS policy",
         "WeeklyQuotaAlertMode::kRolling24Hours":
             "rolling twenty-four hours is the default mode",
-        "policy.thresholdPercent >= 5.0":
+        "policy.thresholdPercent >= 1.0":
             "the minimum user threshold is enforced",
         "policy.thresholdPercent <= 100.0":
             "the maximum user threshold is enforced",

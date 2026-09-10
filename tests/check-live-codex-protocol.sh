@@ -9,6 +9,7 @@ xcrun clang -O2 -fobjc-arc -Wall -Wextra -Werror -mmacosx-version-min=15.0 \
   -framework Foundation -I "$source_dir/overlay" \
   "$source_dir/tests/live-codex-protocol-check.m" \
   "$source_dir/overlay/CodexProtocolCompatibility.m" \
+  "$source_dir/overlay/HUDLocalization.m" \
   "$source_dir/overlay/CodexStatusProvider.m" "$source_dir/overlay/CodexCostHistory.m" \
   -o "$fixture_dir/check"
 "$fixture_dir/check"

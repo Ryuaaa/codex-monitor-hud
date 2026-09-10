@@ -59,8 +59,8 @@ struct CodexCostLineParseResult {
 // Cumulative total_token_usage values are counted only above the per-stream
 // component-wise high-water mark. If no usable total is present, the parser
 // falls back to last_token_usage, matching the frozen macOS 1.0 accounting
-// rules. Negative token values are clipped to zero; out-of-range or
-// non-integral token fields invalidate that usage object.
+// rules except inherited child totals, which establish an uncharged baseline.
+// Negative, out-of-range or non-integral fields invalidate that usage object.
 [[nodiscard]] CodexCostLineParseResult ParseCodexCostJsonlLine(
     std::string_view line,
     CodexCostEventParserState& state);

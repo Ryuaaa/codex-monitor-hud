@@ -588,7 +588,8 @@ void InspectDirectDirectory(const std::filesystem::path& root,
                             std::unordered_set<std::string>& seenFileIds,
                             CodexCostFileScanResult& result,
                             const std::function<bool()>& shouldCancel,
-                            bool& cancelled) {
+                            bool& cancelled,
+                            std::size_t* remainingEntries = nullptr) {
     std::error_code iterationError;
     std::filesystem::directory_iterator iterator(
         directory, std::filesystem::directory_options::none, iterationError);
@@ -601,6 +602,10 @@ void InspectDirectDirectory(const std::filesystem::path& root,
     }
     const std::filesystem::directory_iterator end;
     while (iterator != end) {
+        if (remainingEntries) {
+            if (*remainingEntries == 0) { result.discoveryIncomplete=true; result.coverageIncomplete=true; return; }
+            --*remainingEntries;
+        }
         if (shouldCancel && shouldCancel()) {
             cancelled = true;
             return;
@@ -679,6 +684,46 @@ void DiscoverCandidates(const std::filesystem::path& root,
                 if (cancelled) return;
             }
         }
+    }
+
+    // A long-lived task may still append under its original (older) date.
+    // Inspect only the fixed year/month/day hierarchy, never follow links.
+    // Bound discovery work independently of the existing byte/line caps.
+    std::size_t oldDirectoryBudget = 20000;
+    std::vector<std::pair<std::filesystem::path, int>> pending{{sessions, 0}};
+    while (!pending.empty() && oldDirectoryBudget > 0) {
+        const auto current = pending.back(); pending.pop_back();
+        if (!IsSafeOptionalDirectory(current.first, directories, result)) continue;
+        std::error_code error;
+        std::filesystem::directory_iterator iterator(current.first, error), end;
+        if (error) { result.discoveryIncomplete = true; result.coverageIncomplete = true; continue; }
+        while (iterator != end && oldDirectoryBudget > 0) {
+            --oldDirectoryBudget;
+            if (shouldCancel && shouldCancel()) { cancelled = true; return; }
+            const auto path = iterator->path();
+            const auto name = path.filename().string();
+            const bool digits = !name.empty() && std::all_of(name.begin(),name.end(),[](char c){return c >= '0' && c <= '9';});
+            if (digits && name.size() == (current.second == 0 ? 4U : 2U) &&
+                (current.second != 0 || (name >= "2000" && name <= "2200")) &&
+                (current.second != 1 || (name >= "01" && name <= "12")) &&
+                (current.second != 2 || (name >= "01" && name <= "31")) &&
+                IsSafeOptionalDirectory(path,directories,result)) {
+                if (current.second < 2) pending.emplace_back(path,current.second+1);
+                else {
+                    const auto relative = path.lexically_relative(sessions);
+                    if (std::find(datePaths.begin(),datePaths.end(),relative) == datePaths.end()) {
+                        InspectDirectDirectory(root,path,true,archivedCutoffNanoseconds,candidates,
+                                               seenFileIds,result,shouldCancel,cancelled,&oldDirectoryBudget);
+                        if(cancelled) return;
+                    }
+                }
+            }
+            iterator.increment(error);
+            if(error) { result.discoveryIncomplete=true; result.coverageIncomplete=true; break; }
+        }
+    }
+    if (!pending.empty() || oldDirectoryBudget == 0) {
+        result.discoveryIncomplete=true; result.coverageIncomplete=true;
     }
 
     const std::filesystem::path archived = root / "archived_sessions";
