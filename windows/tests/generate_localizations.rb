@@ -51,7 +51,13 @@ abort "Missing translations:\n#{missing.uniq.join("\n")}" unless missing.empty?
 result << "};\n}\n"
 target = File.join(root,'windows/src/localization_catalog.h')
 if ARGV.include?('--check')
-  abort 'Generated localization catalog is stale' unless File.exist?(target) && File.read(target) == result
+  actual = File.exist?(target) ? File.binread(target).force_encoding('UTF-8').gsub("\r\n", "\n") : ''
+  unless actual == result
+    line = actual.lines.zip(result.lines).index { |a,b| a != b }
+    warn "Catalog first difference: line #{line && line+1}; bytes #{actual.bytesize}/#{result.bytesize}"
+    warn "actual: #{actual.lines[line].inspect}\nexpected: #{result.lines[line].inspect}" if line
+    abort 'Generated localization catalog is stale'
+  end
 else
   File.write(target, result)
 end
