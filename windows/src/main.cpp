@@ -374,6 +374,12 @@ void RecreateSettingsFonts(HWND window, AppState& state) {
     state.settingsSmallFont = CreateUiFont(window, 9, FW_NORMAL);
 
     ApplyFont(state.settingsHeading, state.settingsBodyFont);
+    ApplyFont(state.settingsLanguage, state.settingsSmallFont);
+    ApplyFont(state.settingsCurrency, state.settingsSmallFont);
+    ApplyFont(state.settingsDisplayHint, state.settingsSmallFont);
+    ApplyFont(state.settingsSubscriptionDate, state.settingsSmallFont);
+    ApplyFont(state.settingsSubscriptionSave, state.settingsSmallFont);
+    ApplyFont(state.settingsBilling, state.settingsSmallFont);
     ApplyFont(state.settingsTopmostCheck, state.settingsSmallFont);
     ApplyFont(state.settingsWindowLockCheck, state.settingsSmallFont);
     ApplyFont(state.settingsCornerLabel, state.settingsSmallFont);
