@@ -1,4 +1,67 @@
-# Codex 电脑轻量监测器
+# Codex Monitor HUD
+
+**随时查看 Codex 剩余额度，并判断电脑是否吃紧、Codex 占用了多少资源。**
+
+简体中文 · [繁體中文](README.zh-Hant.md) · [English](README.en.md) · [日本語](README.ja.md) · [한국어](README.ko.md)
+
+常驻屏幕角落的可自定义悬浮窗：额度、Token 与估算费用、任务活动和 CPU / 内存，在需要时一眼看清。macOS 与 Windows 均采用原生界面，不嵌入浏览器引擎。本项目是社区工具，非 OpenAI 官方产品。
+
+## 下载 1.3.0
+
+| 你的电脑 | 下载 | 安装前须知 |
+|---|---|---|
+| macOS 15+ · Apple 芯片 / Intel | **[下载 macOS ZIP](https://github.com/Ryuaaa/codex-monitor-hud/releases/download/v1.3.0/Codex-Monitor-HUD.app.zip)** | 已通过 Apple 签名、公证；解压后移入“应用程序” |
+| Windows 10/11 · x64 | **[下载 Windows MSI](https://github.com/Ryuaaa/codex-monitor-hud/releases/download/windows-preview-v1.3.0/CodexMonitorHUD-windows-x64-1.3.0.msi)** · [便携 ZIP](https://github.com/Ryuaaa/codex-monitor-hud/releases/download/windows-preview-v1.3.0/CodexMonitorHUD-windows-x64.zip) | 未签名预览版，可能被系统拦截；不要关闭安全功能 |
+
+[macOS 发布与校验文件](https://github.com/Ryuaaa/codex-monitor-hud/releases/tag/v1.3.0) · [Windows 发布与校验文件](https://github.com/Ryuaaa/codex-monitor-hud/releases/tag/windows-preview-v1.3.0)
+
+## 一眼看懂
+
+<img src="docs/images/home-zh-Hans.png" width="440" alt="macOS 原生主页：Codex 额度与电脑状态；所有数值均为示例">
+
+*这是 1.3.0 原生界面组件渲染的演示，所有数值与任务名均为虚构示例，不是用户账户、实测性能结果或账单。Windows 使用自己的原生界面，外观不同。*
+
+<details>
+<summary>看 9 秒三页演示：主页 → Codex → 电脑性能</summary>
+
+<img src="docs/images/tour-zh-Hans.gif" width="440" alt="使用示例数据的三页切换演示，不是实时屏幕录制">
+
+三帧原生页面轮播，不是实时屏幕录制。[Codex 静态图](docs/images/codex-zh-Hans.png) · [电脑性能静态图](docs/images/computer-zh-Hans.png)
+
+</details>
+
+## 它能帮你做什么
+
+- **少点几次界面：**看 5 小时 / 每周剩余额度与恢复时间，两项可独立隐藏。
+- **找到资源压力：**分开看整机和 Codex 的 CPU、内存用量及比例，辅助定位瓶颈。
+- **理解使用趋势：**对照 5 小时、滚动 24 小时和本周 Token；查看安装后的 API 等价费用估算。
+- **留意任务活动：**查看本机推测的活动和最近任务历史；需要完整管理时按需打开独立任务中心。
+- **按自己习惯显示：**自由组合主页模块、调整大小、颜色、透明度，切换置顶和最小化。
+- **使用熟悉的语言和币种：**简中 / 繁中 / 英 / 日 / 韩；人民币默认，可切换美元、欧元、日元、韩元。
+
+## 第一次使用
+
+1. 下载对应系统的安装包。电脑性能可独立监控；Codex 额度功能需要本机安装并登录受支持的 Codex / ChatGPT 客户端。
+2. 点击齿轮，选择想显示的模块、语言与币种。语言重启生效，币种立即生效。
+3. macOS 可通过“检查更新”升级；Windows 未签名预览需手动下载新版。软件无需打开“活动监视器”。
+
+**重要边界：**额度来自官方接口；任务活动是本机推测，不是完整实时任务状态。费用是 API 等价估算，不是 Pro 订阅账单。历史缺失时不猜数；订阅日期由用户手填。监控数据不上传，语言包不联网翻译；更新、汇率和可选服务状态会访问对应公开服务。[隐私说明](PRIVACY.md)
+
+## 反馈与参与
+
+遇到问题或有建议，欢迎[提交 Issue](https://github.com/Ryuaaa/codex-monitor-hud/issues)。请写明系统、版本和复现步骤；分享截图或日志前移除任务正文、账户资料与凭据。翻译建议也欢迎。
+
+如果它帮你省了时间，欢迎点击仓库右上角 **Star** 收藏支持。不需要 Star 也可以免费使用，MIT 开源。
+
+## 任务中心与技术资料
+
+[独立任务中心](task-center/README.md)按需打开、关闭后退出，不把完整看板放进常驻 HUD。[Windows 说明](windows/README.md) · [更新记录](CHANGELOG.md) · [macOS 验收](docs/hud-1.3.0-validation.md) · [Windows 验收](docs/hud-1.3.0-windows-validation.md)
+
+<a id="technical-details"></a>
+<details>
+<summary>展开完整技术说明、统计口径与源码构建方法（简体中文）</summary>
+
+## 完整说明
 
 > 同仓库的第二个独立应用“Codex Monitor 任务中心”位于 `task-center/`。HUD 顶栏和应用菜单可按需打开它；任务中心关闭后退出，不会链接到或改变 HUD 的常驻运行层。架构与验收记录见 `docs/task-center/`。
 
@@ -123,7 +186,7 @@ macOS 与 Windows 使用独立更新通道：macOS 读取 `v版本号`，Windows
 
 macOS与Windows保留各自更新标签和签名要求；未签名预览包不得冒充正式可信安装包或进入正式自动更新通道。外部签名或验证条件阻塞时，继续完成可独立推进的工作，明确报告剩余条件，不自行绕过验收。任务中心作为独立应用维护版本，不与HUD版本混用。
 
-Windows正式版的EXE和MSI将使用SignPath.io与SignPath Foundation公开可信签名；只有来自全绿公开GitHub Windows流水线并通过签名验收的安装包才会发布。一键更新会核验SHA-256、固定发布者、MSI身份、版本和安装后的EXE身份。完整Windows说明见[`windows/README.md`](windows/README.md)。
+Windows可信签名尚未取得，免费签名重新申请已暂停，不承诺获批时间。只有取得可信签名并通过验收的安装包才会进入正式自动更新通道；现有更新器会核验SHA-256、固定发布者、MSI身份、版本和安装后的EXE身份。完整Windows说明见[`windows/README.md`](windows/README.md)。
 
 ```zsh
 ./install-overlay.sh
@@ -153,7 +216,7 @@ sh tests/test-maintenance.sh
 
 ## Code signing policy
 
-Windows正式发行将使用SignPath.io提供的免费代码签名，证书由SignPath Foundation提供。签名只允许用于本仓库公开源码经GitHub Actions从精确标签自动构建的发行文件；团队角色、审批、隐私和构建来源约束见[`CODE_SIGNING_POLICY.md`](CODE_SIGNING_POLICY.md)。
+仓库保留SignPath签名工作流，但免费申请未获批准，重新申请已暂停；没有Windows可信签名产物。今后若取得签名资格，只允许签署本仓库公开源码经GitHub Actions从精确标签自动构建的发行文件；团队角色、审批、隐私和构建来源约束见[`CODE_SIGNING_POLICY.md`](CODE_SIGNING_POLICY.md)。
 
 ## 开源
 
@@ -176,3 +239,5 @@ Windows正式发行将使用SignPath.io提供的免费代码签名，证书由Si
 ```
 
 旧的每分钟脚本采集器已停用，但脚本仍保留作可选的独立采集方式。需要启用时先运行 `./install.sh`；它与原生悬浮窗历史目录不同。
+
+</details>

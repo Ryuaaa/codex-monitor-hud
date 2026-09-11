@@ -212,7 +212,7 @@ Windows CI 还包含以下原生集成测试：
 
 ## Code signing policy
 
-Windows正式发行将使用SignPath.io提供的免费代码签名，证书由SignPath Foundation提供。签名文件必须来自本仓库公开标签和GitHub托管运行器；团队角色、人工批准、隐私和发布验证要求见[`../CODE_SIGNING_POLICY.md`](../CODE_SIGNING_POLICY.md)。
+Windows可信签名尚未取得；SignPath Foundation免费申请未获批准，重新申请已暂停。签名工作流保留供今后获准后使用，不承诺获批时间。今后签名文件必须来自本仓库公开标签和GitHub托管运行器；团队角色、人工批准、隐私和发布验证要求见[`../CODE_SIGNING_POLICY.md`](../CODE_SIGNING_POLICY.md)。
 
 ## 1.0之后的改进
 
