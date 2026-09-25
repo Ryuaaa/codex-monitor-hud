@@ -6,6 +6,7 @@
 #import "OpenAIServiceStatus.h"
 #import "HUDView.h"
 #import "UpdateManager.h"
+#import "HUDMenuBar.h"
 #import <UserNotifications/UserNotifications.h>
 #import <errno.h>
 #import <fcntl.h>
@@ -18,6 +19,8 @@ static CGFloat const HUDScreenEdgeMargin = 24.0;
 static NSString *const HUDTaskCenterBundleIdentifier = @"com.xiaoliedao.codex-monitor-task-center";
 static NSString *const HUDTaskCenterReleasePage = @"https://github.com/Ryuaaa/codex-monitor-hud/releases";
 static NSString *const HUDSubscriptionDateDefaultsKey = @"subscriptionEndOrRenewalDate";
+static NSString *const HUDSubscriptionSyncDomain = @"com.codexmonitorhud.subscription-data";
+static NSTimeInterval const HUDSubscriptionSyncInterval = 24.0 * 60.0 * 60.0;
 static NSString *const HUDOfficialBillingURLString = @"https://chatgpt.com/?no_universal_links=1#settings/Billing";
 static int HUDSingletonLockFD = -1;
 
@@ -201,15 +204,36 @@ static NSDictionary<NSString *, id> *HUDSubscriptionDatePresentation(NSString *v
     };
 }
 
+static NSDictionary<NSString *, id> *HUDSubscriptionAutoSnapshot(NSUserDefaults *syncDefaults) {
+    NSDictionary *value = [syncDefaults dictionaryForKey:@"subscriptionLastVerified"];
+    NSString *date = [value[@"date"] isKindOfClass:NSString.class] ? value[@"date"] : nil;
+    NSString *renewal = [value[@"renewal"] isKindOfClass:NSString.class] ? value[@"renewal"] : nil;
+    NSTimeInterval checkedAt = [syncDefaults doubleForKey:@"subscriptionLastVerifiedAt"];
+    if (!HUDSubscriptionDateFromString(date) || ![@[@"renewing", @"cancelled", @"unknown"] containsObject:renewal] ||
+        checkedAt <= 0 || checkedAt > NSDate.date.timeIntervalSince1970 + 300) return nil;
+    return @{ @"date":date, @"renewal":renewal, @"checkedAt":@(checkedAt) };
+}
+
+static NSString *HUDSubscriptionKind(NSString *renewal) {
+    if ([renewal isEqual:@"cancelled"]) return HUDL(@"本期到期");
+    if ([renewal isEqual:@"renewing"]) return HUDL(@"下次续费");
+    return HUDL(@"本期日期");
+}
+
 static NSURL *HUDOfficialBillingURL(void) {
     NSURL *url = [NSURL URLWithString:HUDOfficialBillingURLString];
     return [url.scheme isEqualToString:@"https"] && [url.host isEqualToString:@"chatgpt.com"] ? url : nil;
 }
 
-static NSString *HUDSubscriptionDetailText(NSString *plan, NSString *dateString, NSDate *now) {
-    NSDictionary<NSString *, id> *presentation = HUDSubscriptionDatePresentation(dateString, now);
+static NSString *HUDSubscriptionDetailText(NSString *plan, NSDictionary<NSString *, id> *info, NSDate *now) {
+    NSDictionary<NSString *, id> *presentation = HUDSubscriptionDatePresentation(info[@"date"], now);
     NSString *planText = plan.length > 0 ? plan : HUDL(@"当前未返回");
     if (!presentation) return planText;
+    if ([info[@"source"] isEqual:@"auto"]) {
+        BOOL stale = now.timeIntervalSince1970 - [info[@"checkedAt"] doubleValue] > 48*60*60 || [info[@"error"] length] > 0;
+        NSString *text = [NSString stringWithFormat:HUDL(@"%@ · %@ %@ · %@ · 官方账单页"), planText, HUDSubscriptionKind(info[@"renewal"]), presentation[@"fullDate"], presentation[@"relative"]];
+        return stale ? [text stringByAppendingString:[@" · " stringByAppendingString:HUDL(@"上次核对")]] : text;
+    }
     return [NSString stringWithFormat:HUDL(@"%@ · 截止/续费 %@ · %@ · 手动"), planText, presentation[@"fullDate"], presentation[@"relative"]];
 }
 
@@ -339,7 +363,15 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
 }
 @end
 
-@interface AppDelegate : NSObject <NSApplicationDelegate, NSWindowDelegate>
+@interface AppDelegate : NSObject <NSApplicationDelegate, NSWindowDelegate, NSPopoverDelegate>
+@property(nonatomic, copy) NSString *displayMode;
+@property(nonatomic, copy) NSArray<NSString *> *menuBarMetrics;
+@property(nonatomic, strong) NSStatusItem *statusItem;
+@property(nonatomic, strong) NSPopover *statusPopover;
+@property(nonatomic, strong) NSStackView *statusDetails;
+@property(nonatomic, copy) NSArray<NSString *> *statusDetailLines;
+@property(nonatomic, strong) NSButton *menuBarVisibilityCheckbox;
+@property(nonatomic, strong) NSButton *floatingVisibilityCheckbox;
 @property(nonatomic, strong) NSPanel *panel;
 @property(nonatomic, strong) NSPanel *settingsWindow;
 @property(nonatomic, strong) HUDView *hudView;
@@ -424,6 +456,10 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
 @property(nonatomic, copy) NSString *subscriptionDateString;
 @property(nonatomic, strong) NSTextField *subscriptionDateStatusLabel;
 @property(nonatomic, strong) NSButton *subscriptionDateClearButton;
+@property(nonatomic, strong) NSButton *subscriptionAutomaticCheckbox;
+@property(nonatomic, strong) NSTask *subscriptionSyncTask;
+@property(nonatomic) BOOL subscriptionAutomaticEnabled;
+@property(nonatomic) NSTimeInterval appLaunchedAt;
 @property(nonatomic) BOOL updateCheckInProgress;
 @property(nonatomic) BOOL updateInstalling;
 - (void)showSettingsWindow:(id)sender;
@@ -450,6 +486,20 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
 - (void)clearSubscriptionDate:(id)sender;
 - (void)openOfficialBillingPage:(id)sender;
 - (void)updateSubscriptionDateSettingsLabel;
+- (void)startSubscriptionSyncInteractive:(id)sender;
+- (void)clearSubscriptionSyncLogin:(id)sender;
+- (void)toggleAutomaticSubscriptionSync:(NSButton *)sender;
+- (void)maybeSyncSubscriptionInBackground;
+- (NSDictionary<NSString *, id> *)subscriptionDisplayInfo;
+- (void)applyDisplayMode;
+- (void)updateMenuBar;
+- (BOOL)menuBarNeedsQuota;
+- (BOOL)menuBarNeedsSystem;
+- (void)refreshStatusDetails;
+- (NSArray<NSString *> *)menuBarDetailLines;
+- (NSBox *)menuBarSettingsGroup;
+- (void)updateDisplayModeCheckboxes;
+- (void)setMenuBarVisible:(BOOL)menuBarVisible floatingVisible:(BOOL)floatingVisible persist:(BOOL)persist;
 @end
 
 @implementation AppDelegate
@@ -492,6 +542,8 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
     [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
     [self configureApplicationMenu];
     NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
+    self.displayMode = HUDMenuMode([d stringForKey:@"displayMode"]);
+    self.menuBarMetrics = HUDMenuMetrics([d objectForKey:@"menuBarMetrics"]);
     self.compact = [d objectForKey:@"compact"] ? [d boolForKey:@"compact"] : YES;
     BOOL legacyQuotaVisible = [d objectForKey:@"showQuota"] ? [d boolForKey:@"showQuota"] : YES;
     self.showFiveHourQuota = [d objectForKey:@"showFiveHourQuota"] ? [d boolForKey:@"showFiveHourQuota"] : legacyQuotaVisible;
@@ -513,6 +565,7 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
     NSString *savedSubscriptionDate = [d stringForKey:HUDSubscriptionDateDefaultsKey];
     self.subscriptionDateString = HUDSubscriptionDateFromString(savedSubscriptionDate) ? savedSubscriptionDate : nil;
     if (savedSubscriptionDate.length > 0 && !self.subscriptionDateString) [d removeObjectForKey:HUDSubscriptionDateDefaultsKey];
+    self.subscriptionAutomaticEnabled = [d boolForKey:@"subscriptionAutomaticSyncEnabled"];
     self.showServiceStatus = [d objectForKey:@"showServiceStatus"] ? [d boolForKey:@"showServiceStatus"] : NO;
     self.showTaskActivity = [d objectForKey:@"showTaskActivity"] ? [d boolForKey:@"showTaskActivity"] : YES;
     self.showRecentTasks = [d objectForKey:@"showRecentTasks"] ? [d boolForKey:@"showRecentTasks"] : YES;
@@ -575,12 +628,15 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
     self.historyDirectory = [NSURL fileURLWithPath:historyPath isDirectory:YES];
     [[NSFileManager defaultManager] createDirectoryAtURL:self.historyDirectory withIntermediateDirectories:YES attributes:nil error:nil];
     self.instanceID = NSUUID.UUID.UUIDString;
+    self.appLaunchedAt = NSDate.date.timeIntervalSince1970;
     [self appendLifecycleEvent:[self launchLifecycleEvent]];
     [self createPanel];
+    [self applyDisplayMode];
     [self configureSamplingAndTimers];
     [self startCodexProviderIfNeeded];
     [self startServiceStatusIfNeeded];
     [self performSelector:@selector(checkForUpdatesAutomatically) withObject:nil afterDelay:4.0];
+    [self performSelector:@selector(maybeSyncSubscriptionInBackground) withObject:nil afterDelay:60.0];
     self.updateTimer = [NSTimer scheduledTimerWithTimeInterval:HUDAutomaticUpdateCheckInterval target:self selector:@selector(checkForUpdatesAutomatically) userInfo:nil repeats:YES];
     self.updateTimer.tolerance = 2.0 * 60.0 * 60.0;
     [[NSRunLoop mainRunLoop] addTimer:self.updateTimer forMode:NSRunLoopCommonModes];
@@ -588,6 +644,8 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
 }
 
 - (void)applicationWillTerminate:(NSNotification *)notification {
+    [self.statusPopover close];
+    if (self.statusItem) [NSStatusBar.systemStatusBar removeStatusItem:self.statusItem];
     [self appendLifecycleEvent:@"terminate"];
     [self savePosition];
     [self.systemTimer invalidate];
@@ -600,14 +658,233 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
 }
 
 - (BOOL)applicationShouldHandleReopen:(NSApplication *)sender hasVisibleWindows:(BOOL)hasVisibleWindows {
-    [self showHUD:nil];
+    if ([self.displayMode isEqual:@"menuBar"]) [self toggleStatusPopover:nil];
+    else [self showHUD:nil];
     return YES;
 }
 
 - (void)showHUD:(id)sender {
+    [self.statusPopover close];
+    if ([self.displayMode isEqual:@"menuBar"]) {
+        self.displayMode = @"both";
+        [NSUserDefaults.standardUserDefaults setObject:self.displayMode forKey:@"displayMode"];
+        [self applyDisplayMode];
+        [self configureSamplingAndTimers];
+    }
     if (self.panel.isMiniaturized) [self.panel deminiaturize:nil];
     [NSApp activateIgnoringOtherApps:YES];
     [self.panel orderFrontRegardless];
+}
+
+- (BOOL)menuBarNeedsQuota {
+    return ![HUDMenuMode(self.displayMode) isEqual:@"floating"] &&
+        ([self.menuBarMetrics containsObject:@"weekly"] || [self.menuBarMetrics containsObject:@"fiveHour"]);
+}
+- (BOOL)menuBarNeedsSystem {
+    return ![HUDMenuMode(self.displayMode) isEqual:@"floating"] &&
+        ([self.menuBarMetrics containsObject:@"cpu"] || [self.menuBarMetrics containsObject:@"memory"] || self.statusPopover.shown);
+}
+- (void)applyDisplayMode {
+    self.displayMode = HUDMenuMode(self.displayMode);
+    if ([self.displayMode isEqual:@"floating"]) {
+        [self.statusPopover close];
+        if (self.statusItem) [NSStatusBar.systemStatusBar removeStatusItem:self.statusItem];
+        self.statusItem = nil;
+    } else if (!self.statusItem) {
+        self.statusItem = [NSStatusBar.systemStatusBar statusItemWithLength:NSVariableStatusItemLength];
+        NSImage *icon = [NSImage imageWithSystemSymbolName:@"chart.bar" accessibilityDescription:@"Codex Monitor HUD"];
+        icon.template = YES;
+        self.statusItem.button.image = icon;
+        self.statusItem.button.imagePosition = NSImageLeft;
+        self.statusItem.button.font = [NSFont monospacedDigitSystemFontOfSize:12 weight:NSFontWeightMedium];
+        self.statusItem.button.target = self;
+        self.statusItem.button.action = @selector(toggleStatusPopover:);
+    }
+    if ([self.displayMode isEqual:@"menuBar"]) [self.panel orderOut:nil];
+    else if (self.panel && !self.panel.isMiniaturized) [self.panel orderFront:nil];
+    [self updateMenuBar];
+}
+- (void)updateDisplayModeCheckboxes {
+    BOOL menuBarVisible = ![self.displayMode isEqual:@"floating"];
+    BOOL floatingVisible = ![self.displayMode isEqual:@"menuBar"];
+    self.menuBarVisibilityCheckbox.state = menuBarVisible ? NSControlStateValueOn : NSControlStateValueOff;
+    self.floatingVisibilityCheckbox.state = floatingVisible ? NSControlStateValueOn : NSControlStateValueOff;
+    // Never allow both entry points to disappear. The remaining checked item is disabled
+    // until the other one is enabled again.
+    self.menuBarVisibilityCheckbox.enabled = !menuBarVisible || floatingVisible;
+    self.floatingVisibilityCheckbox.enabled = !floatingVisible || menuBarVisible;
+}
+- (void)setMenuBarVisible:(BOOL)menuBarVisible floatingVisible:(BOOL)floatingVisible persist:(BOOL)persist {
+    NSString *mode = HUDMenuModeForVisibility(menuBarVisible, floatingVisible);
+    if (!mode) return;
+    self.displayMode = mode;
+    if (persist) [NSUserDefaults.standardUserDefaults setObject:self.displayMode forKey:@"displayMode"];
+    [self applyDisplayMode];
+    [self configureSamplingAndTimers];
+    [self startCodexProviderIfNeeded];
+    [self updateDisplayModeCheckboxes];
+}
+- (void)toggleMenuBarVisibility:(NSButton *)sender {
+    BOOL menuBarVisible = sender.state == NSControlStateValueOn;
+    BOOL floatingVisible = ![self.displayMode isEqual:@"menuBar"];
+    if (!menuBarVisible && !floatingVisible) { sender.state = NSControlStateValueOn; NSBeep(); return; }
+    [self setMenuBarVisible:menuBarVisible floatingVisible:floatingVisible persist:YES];
+}
+- (void)toggleFloatingVisibility:(NSButton *)sender {
+    BOOL floatingVisible = sender.state == NSControlStateValueOn;
+    BOOL menuBarVisible = ![self.displayMode isEqual:@"floating"];
+    if (!floatingVisible && !menuBarVisible) { sender.state = NSControlStateValueOn; NSBeep(); return; }
+    [self setMenuBarVisible:menuBarVisible floatingVisible:floatingVisible persist:YES];
+}
+- (void)changeMenuMetric:(NSPopUpButton *)sender {
+    NSMutableArray *slots = [NSMutableArray arrayWithArray:self.menuBarMetrics ?: @[]];
+    while (slots.count < 2) [slots addObject:@"none"];
+    slots[sender.tag] = sender.selectedItem.representedObject ?: @"none";
+    self.menuBarMetrics = HUDMenuMetrics(slots);
+    [NSUserDefaults.standardUserDefaults setObject:self.menuBarMetrics forKey:@"menuBarMetrics"];
+    [self configureSamplingAndTimers];
+    [self startCodexProviderIfNeeded];
+    [self updateMenuBar];
+    // Rebuild selectors to reflect deduplication and ordering immediately.
+    if (self.settingsWindow) self.settingsWindow.contentView = [self settingsContentView];
+}
+- (NSBox *)menuBarSettingsGroup {
+    NSMutableArray<NSView *> *controls = [NSMutableArray array];
+    self.menuBarVisibilityCheckbox = [self settingsCheckbox:HUDL(@"显示顶部菜单栏") action:@selector(toggleMenuBarVisibility:) state:![self.displayMode isEqual:@"floating"]];
+    self.floatingVisibilityCheckbox = [self settingsCheckbox:HUDL(@"显示屏幕悬浮窗") action:@selector(toggleFloatingVisibility:) state:![self.displayMode isEqual:@"menuBar"]];
+    [controls addObjectsFromArray:@[self.menuBarVisibilityCheckbox, self.floatingVisibilityCheckbox]];
+    [self updateDisplayModeCheckboxes];
+    NSArray *metrics = @[@"none", @"weekly", @"fiveHour", @"cpu", @"memory"];
+    for (NSInteger slot = 0; slot < 2; slot++) {
+        [controls addObject:[NSTextField labelWithString:slot == 0 ? HUDL(@"顶部第一项") : HUDL(@"顶部第二项")]];
+        NSPopUpButton *choice = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
+        [choice addItemsWithTitles:@[HUDL(@"不显示数值"), HUDL(@"每周剩余额度"), HUDL(@"5小时剩余额度"), @"CPU", HUDL(@"内存")]];
+        for (NSUInteger i = 0; i < metrics.count; i++) [choice itemAtIndex:i].representedObject = metrics[i];
+        NSString *selected = slot < (NSInteger)self.menuBarMetrics.count ? self.menuBarMetrics[slot] : @"none";
+        [choice selectItemAtIndex:[metrics indexOfObject:selected]];
+        choice.target = self; choice.action = @selector(changeMenuMetric:); choice.tag = slot;
+        [controls addObject:choice];
+    }
+    [controls addObject:[NSTextField wrappingLabelWithString:HUDL(@"两边可以同时显示，至少保留一种显示方式。顶部最多两项；全部关闭数值时仅显示图标。* 表示上次有效数据，— 表示当前不可用。")]];
+    return [self settingsGroup:HUDL(@"菜单栏与显示方式") controls:controls];
+}
+- (void)updateMenuBar {
+    if (!self.statusItem) return;
+    NSTimeInterval now = NSDate.date.timeIntervalSince1970;
+    NSMutableArray *parts = [NSMutableArray array];
+    for (NSString *metric in self.menuBarMetrics) {
+        NSString *part;
+        if ([metric isEqual:@"weekly"]) part = [NSString stringWithFormat:HUDL(@"周 %@"), HUDMenuQuotaValue(self.codexProvider.snapshot, YES, now)];
+        else if ([metric isEqual:@"fiveHour"]) part = [NSString stringWithFormat:@"5h %@", HUDMenuQuotaValue(self.codexProvider.snapshot, NO, now)];
+        else if ([metric isEqual:@"cpu"]) part = [NSString stringWithFormat:@"CPU %@", HUDMenuSystemValue(self.lastSnapshot, NO, now)];
+        else part = [NSString stringWithFormat:HUDL(@"内存 %@"), HUDMenuSystemValue(self.lastSnapshot, YES, now)];
+        [parts addObject:part];
+    }
+    NSString *title = [parts componentsJoinedByString:@" · "];
+    if (![self.statusItem.button.title isEqual:title]) self.statusItem.button.title = title;
+    self.statusItem.button.toolTip = [NSString stringWithFormat:@"Codex Monitor HUD\n%@\n%@\n%@", title, HUDL(@"额度为剩余比例，CPU/内存为占用比例。"), HUDL(@"* 上次有效数据；— 当前不可用。点击查看详情。")];
+    self.statusItem.button.accessibilityLabel = self.statusItem.button.toolTip;
+    if (self.statusPopover.shown) [self refreshStatusDetails];
+}
+- (NSArray<NSString *> *)menuBarDetailLines {
+    NSMutableArray *lines = [NSMutableArray array];
+    CodexStatusSnapshot *s = self.codexProvider.snapshot;
+    NSTimeInterval now = NSDate.date.timeIntervalSince1970;
+    if (self.showWeeklyQuota || [self.menuBarMetrics containsObject:@"weekly"]) [lines addObject:[NSString stringWithFormat:@"%@  %@\n%@", HUDL(@"每周剩余额度"), HUDMenuQuotaValue(s, YES, now), FormatReset(s.weeklyResetAt)]];
+    if (self.showFiveHourQuota || [self.menuBarMetrics containsObject:@"fiveHour"]) [lines addObject:[NSString stringWithFormat:@"%@  %@\n%@", HUDL(@"5小时剩余额度"), HUDMenuQuotaValue(s, NO, now), FormatReset(s.fiveHourResetAt)]];
+    [lines addObject:HUDL(@"* 上次有效数据；— 当前不可用。更多内容请向下滚动。")];
+    if (s.quotaErrorText.length) [lines addObject:HUDL(@"额度暂未更新，旧数据已标记")];
+    if (s.ordinaryUsageAllowed && !s.ordinaryUsageAllowed.boolValue && !HUDTimestampIsStale(s.ordinaryUsageUpdatedAt, 900)) [lines addObject:HUDL(@"官方：普通包含用量暂不可用")];
+    NSMutableArray<HUDMetricCard *> *cards = [NSMutableArray array];
+    if (self.showPlan) [cards addObject:self.hudView.planCard];
+    if (self.showTokenWindows) [cards addObjectsFromArray:@[self.hudView.fiveHourTokensCard, self.hudView.rollingDayTokensCard, self.hudView.weeklyTokensCard]];
+    if (self.showLocalCost) [cards addObject:self.hudView.localCostCard];
+    if (self.showTaskActivity) [cards addObject:self.hudView.taskActivityCard];
+    for (HUDMetricCard *card in cards) [lines addObject:[NSString stringWithFormat:@"%@  %@\n%@", card.titleLabel.stringValue, card.valueLabel.stringValue, card.subtitleLabel.stringValue]];
+    if (cards.count && self.hudView.codexFreshnessLabel.stringValue.length) [lines addObject:self.hudView.codexFreshnessLabel.stringValue];
+    NativeSnapshot *n = self.lastSnapshot;
+    [lines addObject:[NSString stringWithFormat:@"CPU %@ · %@ %@", HUDMenuSystemValue(n, NO, now), HUDL(@"内存"), HUDMenuSystemValue(n, YES, now)]];
+    if (n && now - n.timestamp <= 60) {
+        [lines addObject:[NSString stringWithFormat:HUDL(@"已用 %.1f / %.0fG · 压力 %@"), n.systemMemoryUsedGiB, n.totalMemoryGiB, n.memoryPressureText ?: HUDL(@"未知")]];
+        [lines addObject:[NSString stringWithFormat:HUDL(@"Codex：CPU %.1f%%（整机） · 内存 %.1fG（占总内存 %.0f%%）"), n.codexCPUPercent, n.codexMemoryGiB, n.codexMemoryPercent]];
+    }
+    if (self.showRecentTasks) {
+        [lines addObject:HUDL(@"最近任务（历史记录）")];
+        [lines addObject:HUDL(@"官方任务列表 · 不代表正在运行")];
+        NSUInteger count = 0;
+        for (NSDictionary *task in s.recentTasks) {
+            NSString *name = [task[@"name"] isKindOfClass:NSString.class] ? task[@"name"] : @"";
+            if (name.length) [lines addObject:[@"• " stringByAppendingString:[name substringToIndex:MIN(name.length, 160)]]];
+            if (++count == 5) break;
+        }
+        if (count == 0) [lines addObject:HUDL(@"暂无任务记录")];
+        if (s.recentTasksErrorText.length) [lines addObject:HUDL(@"部分未更新 · 显示上次数据")];
+    }
+    return lines;
+}
+- (void)refreshStatusDetails {
+    if (!self.statusDetails) return;
+    NSArray *lines = [self menuBarDetailLines];
+    if ([lines isEqual:self.statusDetailLines]) return;
+    self.statusDetailLines = lines;
+    for (NSView *view in self.statusDetails.arrangedSubviews.copy) { [self.statusDetails removeArrangedSubview:view]; [view removeFromSuperview]; }
+    for (NSString *line in lines) {
+        NSTextField *label = [NSTextField wrappingLabelWithString:line];
+        label.font = [NSFont systemFontOfSize:MAX(13, MIN(18, 13 * self.windowScale))];
+        label.selectable = YES;
+        [self.statusDetails addArrangedSubview:label];
+        [label.widthAnchor constraintEqualToConstant:342].active = YES;
+    }
+}
+- (void)prepareStatusPopover {
+    if (self.statusPopover) return;
+    NSViewController *controller = [NSViewController new];
+    NSView *root = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 390, 510)];
+    controller.view = root;
+    NSTextField *heading = [NSTextField labelWithString:@"Codex Monitor HUD"];
+    heading.font = [NSFont systemFontOfSize:16 weight:NSFontWeightSemibold];
+    NSScrollView *scroll = [NSScrollView new];
+    scroll.hasVerticalScroller = YES; scroll.drawsBackground = NO;
+    self.statusDetails = [NSStackView new];
+    self.statusDetails.orientation = NSUserInterfaceLayoutOrientationVertical;
+    self.statusDetails.alignment = NSLayoutAttributeLeading; self.statusDetails.spacing = 14;
+    self.statusDetails.edgeInsets = NSEdgeInsetsMake(8, 8, 8, 8);
+    self.statusDetails.translatesAutoresizingMaskIntoConstraints = NO;
+    scroll.documentView = self.statusDetails;
+    [NSLayoutConstraint activateConstraints:@[
+        [self.statusDetails.leadingAnchor constraintEqualToAnchor:scroll.contentView.leadingAnchor],
+        [self.statusDetails.topAnchor constraintEqualToAnchor:scroll.contentView.topAnchor],
+        [self.statusDetails.widthAnchor constraintEqualToAnchor:scroll.contentView.widthAnchor]]];
+    NSButton *settings = [NSButton buttonWithTitle:HUDL(@"显示设置…") target:self action:@selector(showSettingsWindow:)];
+    NSButton *floating = [NSButton buttonWithTitle:HUDL(@"显示悬浮窗") target:self action:@selector(showHUD:)];
+    NSButton *tasks = [NSButton buttonWithTitle:HUDL(@"打开任务中心") target:self action:@selector(openTaskCenter:)];
+    NSButton *quit = [NSButton buttonWithTitle:HUDL(@"退出 Codex Monitor HUD") target:self action:@selector(quitHUD:)];
+    NSStackView *actions = [NSStackView stackViewWithViews:@[settings, floating, tasks, quit]];
+    actions.orientation = NSUserInterfaceLayoutOrientationVertical; actions.alignment = NSLayoutAttributeLeading; actions.spacing = 4;
+    for (NSView *view in @[heading, scroll, actions]) { view.translatesAutoresizingMaskIntoConstraints = NO; [root addSubview:view]; }
+    [NSLayoutConstraint activateConstraints:@[
+        [heading.topAnchor constraintEqualToAnchor:root.topAnchor constant:14], [heading.leadingAnchor constraintEqualToAnchor:root.leadingAnchor constant:16],
+        [scroll.topAnchor constraintEqualToAnchor:heading.bottomAnchor constant:10], [scroll.leadingAnchor constraintEqualToAnchor:root.leadingAnchor constant:12], [scroll.trailingAnchor constraintEqualToAnchor:root.trailingAnchor constant:-12],
+        [scroll.bottomAnchor constraintEqualToAnchor:actions.topAnchor constant:-10], [actions.leadingAnchor constraintEqualToAnchor:root.leadingAnchor constant:16], [actions.trailingAnchor constraintLessThanOrEqualToAnchor:root.trailingAnchor constant:-12], [actions.bottomAnchor constraintEqualToAnchor:root.bottomAnchor constant:-12]]];
+    self.statusPopover = [NSPopover new]; self.statusPopover.contentViewController = controller;
+    self.statusPopover.behavior = NSPopoverBehaviorTransient;
+    self.statusPopover.animates = NO; self.statusPopover.delegate = self;
+    self.statusPopover.contentSize = root.frame.size;
+}
+- (void)toggleStatusPopover:(id)sender {
+    if (self.statusPopover.shown) { [self.statusPopover close]; return; }
+    if (!self.statusItem.button) return;
+    [self prepareStatusPopover];
+    [self refreshStatusDetails];
+    NSStatusBarButton *button = self.statusItem.button;
+    [self.statusPopover showRelativeToRect:button.bounds ofView:button preferredEdge:NSRectEdgeMinY];
+    [self configureSamplingAndTimers];
+    [self updateMenuBar];
+}
+- (void)popoverDidClose:(NSNotification *)notification {
+    // Release the entire detail UI; the resident status button needs no renderer.
+    self.statusPopover = nil; self.statusDetails = nil; self.statusDetailLines = nil;
+    [self configureSamplingAndTimers];
 }
 
 - (NSURL *)installedTaskCenterURL {
@@ -646,6 +923,7 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
 }
 
 - (void)openTaskCenter:(id)sender {
+    [self.statusPopover close];
     NSURL *applicationURL = [self installedTaskCenterURL];
     if (!applicationURL) {
         [self presentTaskCenterLaunchFailure:nil];
@@ -846,7 +1124,7 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
         weakSelf.alwaysOnTop = enabled;
         [NSUserDefaults.standardUserDefaults setBool:enabled forKey:@"alwaysOnTop"];
         weakSelf.panel.level = enabled ? NSFloatingWindowLevel : NSNormalWindowLevel;
-        if (enabled) [weakSelf.panel orderFrontRegardless];
+        if (enabled && ![weakSelf.displayMode isEqual:@"menuBar"]) [weakSelf.panel orderFrontRegardless];
     };
     self.hudView.positionLockChanged = ^(BOOL enabled) {
         weakSelf.positionLocked = enabled;
@@ -860,18 +1138,19 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
     [self updateHUDGeometryForContentSize:self.hudView.frame.size baseSize:baseSize];
     if (![self restorePosition]) [self moveToCorner:@"bottomLeft"];
     [self applyPositionLock];
-    [self.panel orderFrontRegardless];
+    if (![self.displayMode isEqual:@"menuBar"]) [self.panel orderFrontRegardless];
 }
 
 - (BOOL)systemDataNeeded {
     BOOL homeNeedsComputer = self.homeShowDiagnosis || self.homeShowSystem || self.homeShowAttribution || self.homeShowTrend || self.homeShowMemoryApps;
-    return self.historyEnabled || self.currentPage == 2 || (self.currentPage == 0 && homeNeedsComputer);
+    BOOL floating = ![self.displayMode isEqual:@"menuBar"];
+    return [self menuBarNeedsSystem] || self.historyEnabled || (floating && (self.currentPage == 2 || (self.currentPage == 0 && homeNeedsComputer)));
 }
 
 - (void)configureSamplingAndTimers {
     BOOL wasRunning = self.systemTimer.valid;
-    BOOL computerPage = self.currentPage == 2;
-    BOOL homePage = self.currentPage == 0;
+    BOOL computerPage = self.currentPage == 2 && ![self.displayMode isEqual:@"menuBar"];
+    BOOL homePage = self.currentPage == 0 && ![self.displayMode isEqual:@"menuBar"];
     self.sampler.collectTopApps = (computerPage && (self.showMemoryApps || (!self.compact && self.showSystem))) || (homePage && self.homeShowMemoryApps);
     self.sampler.collectSecondaryMetrics = self.historyEnabled || (computerPage && (self.showSystem || !self.compact)) || (homePage && self.homeShowSystem);
     self.sampler.collectThermalMetrics = self.historyEnabled || computerPage || (homePage && (self.homeShowDiagnosis || self.homeShowSystem));
@@ -903,7 +1182,7 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
     BOOL needsActivity = self.showTaskActivity || self.homeShowTaskActivity;
     BOOL needsCostHistory = self.showLocalCost || self.homeShowLocalCost || self.showTokenWindows || self.homeShowTokenWindows;
     BOOL needsForecast = self.showQuotaForecast || self.homeShowQuotaForecast || self.weeklyConsumptionAlertEnabled;
-    BOOL needsAccountData = needsForecast || self.showTokenWindows || self.homeShowTokenWindows || self.showQuotaDetails || self.homeShowQuotaDetails || self.showFiveHourQuota || self.showWeeklyQuota || self.showPlan || self.showUsage || self.showModelQuota || self.showRecentTasks || self.showLongestTurn || self.showLongestStreak || self.showPeakDailyTokens || self.homeShowFiveHour || self.homeShowWeekly || self.homeShowPlan || self.homeShowUsage || self.homeShowModelQuota || self.homeShowRecentTasks || self.homeShowLongestTurn || self.homeShowLongestStreak || self.homeShowPeakDailyTokens;
+    BOOL needsAccountData = [self menuBarNeedsQuota] || needsForecast || self.showTokenWindows || self.homeShowTokenWindows || self.showQuotaDetails || self.homeShowQuotaDetails || self.showFiveHourQuota || self.showWeeklyQuota || self.showPlan || self.showUsage || self.showModelQuota || self.showRecentTasks || self.showLongestTurn || self.showLongestStreak || self.showPeakDailyTokens || self.homeShowFiveHour || self.homeShowWeekly || self.homeShowPlan || self.homeShowUsage || self.homeShowModelQuota || self.homeShowRecentTasks || self.homeShowLongestTurn || self.homeShowLongestStreak || self.homeShowPeakDailyTokens;
     BOOL needsCodexData = needsActivity || needsAccountData || needsCostHistory;
     if (!needsCodexData) { [self.codexProvider stop]; self.codexProvider = nil; [self.codexTimer invalidate]; self.codexTimer = nil; return; }
     if (!self.codexProvider) {
@@ -918,7 +1197,7 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
     self.codexProvider.quotaForecastEnabled = needsForecast;
     self.codexProvider.taskActivityEnabled = needsActivity;
     NSMutableSet *requests = [NSMutableSet set];
-    if (needsForecast || self.showTokenWindows || self.homeShowTokenWindows || self.showQuotaDetails || self.homeShowQuotaDetails || self.showFiveHourQuota || self.showWeeklyQuota || self.homeShowFiveHour || self.homeShowWeekly || self.showModelQuota || self.homeShowModelQuota) [requests addObject:@2];
+    if ([self menuBarNeedsQuota] || needsForecast || self.showTokenWindows || self.homeShowTokenWindows || self.showQuotaDetails || self.homeShowQuotaDetails || self.showFiveHourQuota || self.showWeeklyQuota || self.homeShowFiveHour || self.homeShowWeekly || self.showModelQuota || self.homeShowModelQuota) [requests addObject:@2];
     if (self.showPlan || self.homeShowPlan) [requests addObject:@3];
     if (self.showUsage || self.homeShowUsage || self.showLongestTurn || self.homeShowLongestTurn || self.showLongestStreak || self.homeShowLongestStreak || self.showPeakDailyTokens || self.homeShowPeakDailyTokens) [requests addObject:@4];
     if (needsActivity || self.showRecentTasks || self.homeShowRecentTasks) [requests addObject:@5];
@@ -954,7 +1233,14 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
         next = MIN(next, MAX(now + 1.0, self.lastActivityRefreshRequestAt + activityInterval));
     }
     if (needsCostHistory) next = MIN(next, MAX(now + 1.0, self.lastCostHistoryFetchAt + 300.0));
-    if (needsAccountData || needsActivity) next = MIN(next, MAX(now + 1.0, self.lastCodexAccountFetchAt + [self codexAccountRefreshInterval]));
+    if (needsAccountData || needsActivity || [self menuBarNeedsQuota]) next = MIN(next, MAX(now + 1.0, self.lastCodexAccountFetchAt + [self codexAccountRefreshInterval]));
+    // Reuse the existing timer for local expiry only; no early account request.
+    if ([self menuBarNeedsQuota]) {
+        CodexStatusSnapshot *s = self.codexProvider.snapshot;
+        for (NSNumber *deadline in @[@(s.weeklyResetAt), @(s.fiveHourResetAt), @(s.quotaUpdatedAt + 901)]) {
+            if (deadline.doubleValue > now) next = MIN(next, deadline.doubleValue);
+        }
+    }
     if (next == DBL_MAX) return;
     NSTimeInterval delay = MAX(1.0, next - now);
     self.codexTimer = [NSTimer scheduledTimerWithTimeInterval:delay target:self selector:@selector(refreshCodexData) userInfo:nil repeats:NO];
@@ -975,9 +1261,10 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
     if (needsCostHistory && now - self.lastCostHistoryFetchAt >= 299.5) {
         [self.codexProvider refreshCostHistory]; self.lastCostHistoryFetchAt = now;
     }
-    if ((needsAccountData || needsActivity) && now - self.lastCodexAccountFetchAt >= [self codexAccountRefreshInterval] - 0.5) {
+    if ((needsAccountData || needsActivity || [self menuBarNeedsQuota]) && now - self.lastCodexAccountFetchAt >= [self codexAccountRefreshInterval] - 0.5) {
         [self.codexProvider refreshQuotaInBackground]; self.lastCodexAccountFetchAt = now;
     }
+    [self updateMenuBar];
     [self scheduleCodexRefreshTimer];
 }
 
@@ -1102,6 +1389,7 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
     self.lastServiceStatusFetchAt = 0;
     [self startCodexProviderIfNeeded];
     [self startServiceStatusIfNeeded];
+    [self maybeSyncSubscriptionInBackground];
 }
 
 - (void)appendLifecycleEvent:(NSString *)event {
@@ -1238,6 +1526,7 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
     [self updateCodexDisplay];
     [self updateDetailLabels];
     [self recordSnapshot:snapshot statusCode:status[@"code"]];
+    [self updateMenuBar];
 }
 
 - (NSString *)visibleCodexStatus:(CodexStatusSnapshot *)s fiveHour:(BOOL)fiveHour weekly:(BOOL)weekly plan:(BOOL)plan usage:(BOOL)usage model:(BOOL)model activity:(BOOL)activity recent:(BOOL)recent {
@@ -1309,14 +1598,18 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
     HUDApplyQuotaDataState(self.hudView.homeWeeklyCard, weeklyState, s.weeklyAvailable, s.weeklyRemainingPercent, s.weeklyResetAt, s.rateLimitReachedType);
     [self updateTokenWindowDisplay:s];
     [self updateQuotaDetailsDisplay:s];
-    NSDictionary<NSString *, id> *subscriptionDate = HUDSubscriptionDatePresentation(self.subscriptionDateString, NSDate.date);
+    NSDictionary<NSString *, id> *subscriptionInfo = [self subscriptionDisplayInfo];
+    NSDictionary<NSString *, id> *subscriptionDate = HUDSubscriptionDatePresentation(subscriptionInfo[@"date"], NSDate.date);
+    BOOL autoDate = [subscriptionInfo[@"source"] isEqual:@"auto"];
+    BOOL autoDateStale = autoDate && (NSDate.date.timeIntervalSince1970 - [subscriptionInfo[@"checkedAt"] doubleValue] > 48*60*60 || [subscriptionInfo[@"error"] length] > 0);
     NSString *planValue = plan ?: HUDL(@"当前未返回");
     if (subscriptionDate) planValue = plan ? [NSString stringWithFormat:@"%@ · %@", plan, subscriptionDate[@"shortDate"]] : subscriptionDate[@"shortDate"];
-    self.hudView.planCard.titleLabel.stringValue = subscriptionDate ? HUDL(@"订阅 · 截止/续费") : HUDL(@"订阅");
+    self.hudView.planCard.titleLabel.stringValue = subscriptionDate ? (autoDate ? HUDSubscriptionKind(subscriptionInfo[@"renewal"]) : HUDL(@"订阅 · 截止/续费")) : HUDL(@"订阅");
     self.hudView.planCard.valueLabel.stringValue = planValue;
     self.hudView.planCard.valueLabel.textColor = [subscriptionDate[@"days"] integerValue] < 0 ? NSColor.systemOrangeColor : NSColor.labelColor;
     self.hudView.planCard.subtitleLabel.stringValue = subscriptionDate ?
-        [NSString stringWithFormat:HUDL(@"%@ · 手动设置"), subscriptionDate[@"relative"]] :
+        (autoDate ? [NSString stringWithFormat:HUDL(@"%@ · %@"), subscriptionDate[@"relative"], autoDateStale ? HUDL(@"上次官网核对") : ([subscriptionInfo[@"renewal"] isEqual:@"cancelled"] ? HUDL(@"已取消自动续订 · 官网账单页") : HUDL(@"官网账单页"))]
+                  : [NSString stringWithFormat:HUDL(@"%@ · 手动设置"), subscriptionDate[@"relative"]]) :
         (s.accountErrorText.length > 0 ? s.accountErrorText : [NSString stringWithFormat:HUDL(@"不显示邮箱 · %@"), FormatAge(s.accountUpdatedAt)]);
     self.hudView.homePlanCard.titleLabel.stringValue = self.hudView.planCard.titleLabel.stringValue;
     self.hudView.homePlanCard.valueLabel.stringValue = self.hudView.planCard.valueLabel.stringValue;
@@ -1467,6 +1760,7 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
     self.hudView.homeFreshnessLabel.stringValue = [homeCodexFreshness isEqualToString:HUDL(@"未启用Codex显示模块")] ? HUDL(@"电脑 刚刚") : [NSString stringWithFormat:HUDL(@"电脑 刚刚 · %@"), homeCodexFreshness];
     self.hudView.homeFreshnessLabel.textColor = self.hudView.codexFreshnessLabel.textColor;
     [self updateDetailLabels];
+    [self updateMenuBar];
 }
 
 - (void)updateTokenWindowDisplay:(CodexStatusSnapshot *)s {
@@ -1620,7 +1914,7 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
         if (self.homeShowFiveHour) [quotaParts addObject:s.fiveHourAvailable ? [NSString stringWithFormat:HUDL(@"5小时 %.0f%%"), s.fiveHourRemainingPercent] : HUDL(@"5小时未返回")];
         if (self.homeShowWeekly) [quotaParts addObject:s.weeklyAvailable ? [NSString stringWithFormat:HUDL(@"每周 %.0f%%"), s.weeklyRemainingPercent] : HUDL(@"每周未返回")];
         if (quotaParts.count && row < 5) { self.hudView.detailLabels[row].stringValue = [NSString stringWithFormat:HUDL(@"额度摘要   %@"), [quotaParts componentsJoinedByString:@" · "]]; self.hudView.detailLabels[row++].hidden = NO; }
-        if (self.homeShowPlan && row < 5) { self.hudView.detailLabels[row].stringValue = [NSString stringWithFormat:HUDL(@"订阅类型   %@"), HUDSubscriptionDetailText(s.accountAvailable ? FormatPlan(s.planType) : nil, self.subscriptionDateString, NSDate.date)]; self.hudView.detailLabels[row++].hidden = NO; }
+        if (self.homeShowPlan && row < 5) { self.hudView.detailLabels[row].stringValue = [NSString stringWithFormat:HUDL(@"订阅类型   %@"), HUDSubscriptionDetailText(s.accountAvailable ? FormatPlan(s.planType) : nil, [self subscriptionDisplayInfo], NSDate.date)]; self.hudView.detailLabels[row++].hidden = NO; }
         if (self.homeShowUsage && row < 5) {
             NSString *today = s.todayUsageAvailable ? [NSString stringWithFormat:HUDL(@"今日 %@"), FormatTokens(s.todayTokens)] : (s.latestUsageDate.length > 0 ? [NSString stringWithFormat:HUDL(@"最新%@ %@"), FormatUsageDate(s.latestUsageDate), FormatTokens(s.latestUsageTokens)] : HUDL(@"今日未返回"));
             self.hudView.detailLabels[row].stringValue = s.usageAvailable ? [NSString stringWithFormat:HUDL(@"用量摘要   %@ · 7天 %@"), today, FormatTokens(s.sevenDayTokens)] : HUDL(@"用量摘要   当前接口未返回");
@@ -1639,7 +1933,7 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
         if (self.showServiceStatus && row < 5) { HUDOpenAIServiceStatusSnapshot *service = self.serviceStatusProvider.snapshot; self.hudView.detailLabels[row].stringValue = service.available ? [NSString stringWithFormat:HUDL(@"官方状态   %@ · %@"), service.headline, FormatAge(service.updatedAt)] : HUDL(@"官方状态   正在读取"); self.hudView.detailLabels[row++].hidden = NO; }
         if (self.showFiveHourQuota && row < 5) { self.hudView.detailLabels[row].stringValue = s.fiveHourAvailable ? [NSString stringWithFormat:HUDL(@"5小时额度  剩余 %.0f%% · %@"), s.fiveHourRemainingPercent, FormatReset(s.fiveHourResetAt)] : HUDL(@"5小时额度  当前接口未返回"); self.hudView.detailLabels[row++].hidden = NO; }
         if (self.showWeeklyQuota && row < 5) { self.hudView.detailLabels[row].stringValue = s.weeklyAvailable ? [NSString stringWithFormat:HUDL(@"每周额度   剩余 %.0f%% · %@"), s.weeklyRemainingPercent, FormatReset(s.weeklyResetAt)] : HUDL(@"每周额度   当前接口未返回"); self.hudView.detailLabels[row++].hidden = NO; }
-        if (self.showPlan && row < 5) { self.hudView.detailLabels[row].stringValue = [NSString stringWithFormat:HUDL(@"订阅类型   %@"), HUDSubscriptionDetailText(s.accountAvailable ? FormatPlan(s.planType) : nil, self.subscriptionDateString, NSDate.date)]; self.hudView.detailLabels[row++].hidden = NO; }
+        if (self.showPlan && row < 5) { self.hudView.detailLabels[row].stringValue = [NSString stringWithFormat:HUDL(@"订阅类型   %@"), HUDSubscriptionDetailText(s.accountAvailable ? FormatPlan(s.planType) : nil, [self subscriptionDisplayInfo], NSDate.date)]; self.hudView.detailLabels[row++].hidden = NO; }
         if (self.showUsage && row < 5) {
             NSString *today = s.todayUsageAvailable ? [NSString stringWithFormat:HUDL(@"今日 %@"), FormatTokens(s.todayTokens)] : (s.latestUsageDate.length > 0 ? [NSString stringWithFormat:HUDL(@"最新%@ %@"), FormatUsageDate(s.latestUsageDate), FormatTokens(s.latestUsageTokens)] : HUDL(@"今日未返回"));
             self.hudView.detailLabels[row].stringValue = s.usageAvailable ? [NSString stringWithFormat:HUDL(@"用量趋势   %@ · 7天 %@ · 连续%ld天"), today, FormatTokens(s.sevenDayTokens), (long)s.currentStreakDays] : HUDL(@"用量趋势   当前接口未返回");
@@ -1713,11 +2007,114 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
 - (void)toggleWeeklyConsumptionSystemNotification:(NSButton *)sender { self.weeklyConsumptionSystemNotificationEnabled = sender.state == NSControlStateValueOn; [NSUserDefaults.standardUserDefaults setBool:self.weeklyConsumptionSystemNotificationEnabled forKey:@"weeklyConsumptionSystemNotificationEnabled"]; [self requestWeeklyNotificationPermissionIfNeeded]; [self updateCodexDisplay]; }
 - (void)changeWeeklyConsumptionAlertMode:(NSPopUpButton *)sender { NSString *mode = sender.selectedItem.representedObject; if (![@[@"rolling24h", @"naturalDay"] containsObject:mode]) return; self.weeklyConsumptionAlertMode = mode; [NSUserDefaults.standardUserDefaults setObject:mode forKey:@"weeklyConsumptionAlertMode"]; [self updateCodexDisplay]; }
 - (void)changeWeeklyConsumptionAlertThreshold:(NSSlider *)sender { self.weeklyConsumptionAlertThreshold = MAX(1.0, MIN(100.0, round(sender.doubleValue))); sender.doubleValue = self.weeklyConsumptionAlertThreshold; [NSUserDefaults.standardUserDefaults setDouble:self.weeklyConsumptionAlertThreshold forKey:@"weeklyConsumptionAlertThreshold"]; self.weeklyConsumptionThresholdLabel.stringValue = [NSString stringWithFormat:HUDL(@"提醒阈值：%.0f%%"), self.weeklyConsumptionAlertThreshold]; [self updateCodexDisplay]; }
+- (NSDictionary<NSString *, id> *)subscriptionDisplayInfo {
+    NSUserDefaults *main = NSUserDefaults.standardUserDefaults;
+    NSUserDefaults *sync = [[NSUserDefaults alloc] initWithSuiteName:HUDSubscriptionSyncDomain];
+    NSDictionary *automatic = HUDSubscriptionAutoSnapshot(sync);
+    NSString *source = [main stringForKey:@"subscriptionDateSource"];
+    if ([source isEqual:@"auto"] && automatic) return @{ @"date":automatic[@"date"], @"renewal":automatic[@"renewal"], @"checkedAt":automatic[@"checkedAt"], @"source":@"auto", @"error":[sync stringForKey:@"subscriptionLastError"] ?: @"" };
+    if (HUDSubscriptionDateFromString(self.subscriptionDateString)) return @{ @"date":self.subscriptionDateString, @"source":@"manual" };
+    if (automatic) return @{ @"date":automatic[@"date"], @"renewal":automatic[@"renewal"], @"checkedAt":automatic[@"checkedAt"], @"source":@"auto", @"error":[sync stringForKey:@"subscriptionLastError"] ?: @"" };
+    return nil;
+}
 - (void)updateSubscriptionDateSettingsLabel {
-    NSDictionary<NSString *, id> *presentation = HUDSubscriptionDatePresentation(self.subscriptionDateString, NSDate.date);
-    self.subscriptionDateStatusLabel.stringValue = presentation ?
-        [NSString stringWithFormat:HUDL(@"当前：%@ · %@（手动设置）"), presentation[@"fullDate"], presentation[@"relative"]] : HUDL(@"当前：尚未设置");
+    NSDictionary *info = [self subscriptionDisplayInfo];
+    NSDictionary *presentation = HUDSubscriptionDatePresentation(info[@"date"], NSDate.date);
+    NSUserDefaults *sync = [[NSUserDefaults alloc] initWithSuiteName:HUDSubscriptionSyncDomain];
+    NSString *lastError = [sync stringForKey:@"subscriptionLastError"];
+    if (!presentation) self.subscriptionDateStatusLabel.stringValue = HUDL(@"当前：尚未设置");
+    else if ([info[@"source"] isEqual:@"auto"]) {
+        BOOL stale = NSDate.date.timeIntervalSince1970 - [info[@"checkedAt"] doubleValue] > 48*60*60;
+        self.subscriptionDateStatusLabel.stringValue = [NSString stringWithFormat:HUDL(@"%@：%@ %@ · %@（官方账单页）"), stale ? HUDL(@"上次核对") : HUDL(@"当前"), HUDSubscriptionKind(info[@"renewal"]), presentation[@"fullDate"], presentation[@"relative"]];
+    } else self.subscriptionDateStatusLabel.stringValue = [NSString stringWithFormat:HUDL(@"当前：%@ · %@（手动设置）"), presentation[@"fullDate"], presentation[@"relative"]];
+    if ([info[@"source"] isEqual:@"auto"] && [lastError isEqual:@"login-required"])
+        self.subscriptionDateStatusLabel.stringValue = [self.subscriptionDateStatusLabel.stringValue stringByAppendingFormat:@" · %@", HUDL(@"需重新登录")];
+    else if ([info[@"source"] isEqual:@"auto"] && lastError.length)
+        self.subscriptionDateStatusLabel.stringValue = [self.subscriptionDateStatusLabel.stringValue stringByAppendingFormat:@" · %@", HUDL(@"本次未更新")];
     self.subscriptionDateClearButton.enabled = presentation != nil;
+}
+- (void)startSubscriptionSync:(BOOL)interactive {
+    if (self.subscriptionSyncTask.running) return;
+    NSString *path = [NSBundle.mainBundle.bundlePath stringByAppendingPathComponent:@"Contents/Helpers/SubscriptionSync.app/Contents/MacOS/SubscriptionSync"];
+    if (![NSFileManager.defaultManager isExecutableFileAtPath:path]) {
+        self.subscriptionDateStatusLabel.stringValue = HUDL(@"同步组件不可用；仍可手动填写日期。");
+        return;
+    }
+    NSTimeInterval launchedAt = NSDate.date.timeIntervalSince1970;
+    NSTask *task = [NSTask new];
+    task.executableURL = [NSURL fileURLWithPath:path];
+    task.arguments = interactive ? @[@"--interactive"] : @[@"--silent"];
+    task.standardOutput = [NSFileHandle fileHandleWithNullDevice];
+    task.standardError = [NSFileHandle fileHandleWithNullDevice];
+    __weak typeof(self) weakSelf = self;
+    task.terminationHandler = ^(NSTask *finishedTask) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            typeof(self) strongSelf = weakSelf;
+            if (!strongSelf || strongSelf.subscriptionSyncTask != finishedTask) return;
+            strongSelf.subscriptionSyncTask = nil;
+            NSUserDefaults *sync = [[NSUserDefaults alloc] initWithSuiteName:HUDSubscriptionSyncDomain];
+            [sync synchronize];
+            NSDictionary *result = HUDSubscriptionAutoSnapshot(sync);
+            if (result && [result[@"checkedAt"] doubleValue] >= launchedAt) {
+                [NSUserDefaults.standardUserDefaults setObject:@"auto" forKey:@"subscriptionDateSource"];
+                strongSelf.subscriptionAutomaticCheckbox.enabled = YES;
+                [strongSelf updateCodexDisplay];
+                [strongSelf updateDetailLabels];
+            }
+            [strongSelf updateSubscriptionDateSettingsLabel];
+        });
+    };
+    NSError *error;
+    if (![task launchAndReturnError:&error]) {
+        (void)error;
+        self.subscriptionDateStatusLabel.stringValue = HUDL(@"同步组件启动失败；旧日期保留。");
+        return;
+    }
+    self.subscriptionSyncTask = task;
+    if (interactive) self.subscriptionDateStatusLabel.stringValue = HUDL(@"已打开独立官方登录窗口；读取完成后自动关闭。");
+}
+- (void)startSubscriptionSyncInteractive:(id)sender { (void)sender; [self startSubscriptionSync:YES]; }
+- (void)clearSubscriptionSyncLogin:(id)sender {
+    (void)sender;
+    if (self.subscriptionSyncTask.running) {
+        NSTask *oldSync = self.subscriptionSyncTask;
+        self.subscriptionSyncTask = nil;
+        [oldSync terminate];
+    }
+    NSString *path = [NSBundle.mainBundle.bundlePath stringByAppendingPathComponent:@"Contents/Helpers/SubscriptionSync.app/Contents/MacOS/SubscriptionSync"];
+    if (![NSFileManager.defaultManager isExecutableFileAtPath:path]) return;
+    self.subscriptionAutomaticEnabled = NO;
+    self.subscriptionAutomaticCheckbox.state = NSControlStateValueOff;
+    [NSUserDefaults.standardUserDefaults setBool:NO forKey:@"subscriptionAutomaticSyncEnabled"];
+    NSTask *task = [NSTask new];
+    task.executableURL = [NSURL fileURLWithPath:path];
+    task.arguments = @[@"--clear-session"];
+    task.standardOutput = [NSFileHandle fileHandleWithNullDevice];
+    task.standardError = [NSFileHandle fileHandleWithNullDevice];
+    __weak typeof(self) weakSelf = self;
+    task.terminationHandler = ^(NSTask *finishedTask) {
+        (void)finishedTask;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [weakSelf updateSubscriptionDateSettingsLabel];
+            [weakSelf updateCodexDisplay];
+        });
+    };
+    if (![task launchAndReturnError:nil]) self.subscriptionDateStatusLabel.stringValue = HUDL(@"清除登录失败，请稍后重试。");
+    else self.subscriptionDateStatusLabel.stringValue = HUDL(@"正在清除独立账单登录，已暂停自动同步。");
+}
+- (void)toggleAutomaticSubscriptionSync:(NSButton *)sender {
+    self.subscriptionAutomaticEnabled = sender.state == NSControlStateValueOn;
+    [NSUserDefaults.standardUserDefaults setBool:self.subscriptionAutomaticEnabled forKey:@"subscriptionAutomaticSyncEnabled"];
+    if (self.subscriptionAutomaticEnabled) [self maybeSyncSubscriptionInBackground];
+}
+- (void)maybeSyncSubscriptionInBackground {
+    if (!self.subscriptionAutomaticEnabled || self.subscriptionSyncTask.running) return;
+    if (NSDate.date.timeIntervalSince1970 - self.appLaunchedAt < 60.0) return;
+    NSUserDefaults *sync = [[NSUserDefaults alloc] initWithSuiteName:HUDSubscriptionSyncDomain];
+    if (!HUDSubscriptionAutoSnapshot(sync) || [[sync stringForKey:@"subscriptionLastError"] isEqual:@"login-required"]) return;
+    NSTimeInterval age = NSDate.date.timeIntervalSince1970 - [sync doubleForKey:@"subscriptionLastAttemptAt"];
+    if (age < HUDSubscriptionSyncInterval) return;
+    [self startSubscriptionSync:NO];
 }
 - (void)chooseSubscriptionDate:(id)sender {
     NSDatePicker *picker = [[NSDatePicker alloc] initWithFrame:NSMakeRect(0, 0, 220, 28)];
@@ -1736,7 +2133,16 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
         NSString *value = HUDSubscriptionDateStringFromDate(picker.dateValue);
         if (!HUDSubscriptionDateFromString(value)) return;
         weakSelf.subscriptionDateString = value;
+        if (weakSelf.subscriptionSyncTask.running) {
+            NSTask *oldSync = weakSelf.subscriptionSyncTask;
+            weakSelf.subscriptionSyncTask = nil;
+            [oldSync terminate];
+        }
         [NSUserDefaults.standardUserDefaults setObject:value forKey:HUDSubscriptionDateDefaultsKey];
+        [NSUserDefaults.standardUserDefaults setObject:@"manual" forKey:@"subscriptionDateSource"];
+        weakSelf.subscriptionAutomaticEnabled = NO;
+        weakSelf.subscriptionAutomaticCheckbox.state = NSControlStateValueOff;
+        [NSUserDefaults.standardUserDefaults setBool:NO forKey:@"subscriptionAutomaticSyncEnabled"];
         [weakSelf updateSubscriptionDateSettingsLabel];
         [weakSelf updateCodexDisplay];
         [weakSelf updateDetailLabels];
@@ -1745,8 +2151,23 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
     else completion([alert runModal]);
 }
 - (void)clearSubscriptionDate:(id)sender {
+    if (self.subscriptionSyncTask.running) {
+        NSTask *oldSync = self.subscriptionSyncTask;
+        self.subscriptionSyncTask = nil;
+        [oldSync terminate];
+    }
     self.subscriptionDateString = nil;
     [NSUserDefaults.standardUserDefaults removeObjectForKey:HUDSubscriptionDateDefaultsKey];
+    [NSUserDefaults.standardUserDefaults removeObjectForKey:@"subscriptionDateSource"];
+    self.subscriptionAutomaticEnabled = NO;
+    self.subscriptionAutomaticCheckbox.state = NSControlStateValueOff;
+    self.subscriptionAutomaticCheckbox.enabled = NO;
+    [NSUserDefaults.standardUserDefaults setBool:NO forKey:@"subscriptionAutomaticSyncEnabled"];
+    NSUserDefaults *sync = [[NSUserDefaults alloc] initWithSuiteName:HUDSubscriptionSyncDomain];
+    [sync removeObjectForKey:@"subscriptionLastVerified"];
+    [sync removeObjectForKey:@"subscriptionLastVerifiedAt"];
+    [sync removeObjectForKey:@"subscriptionLastError"];
+    [sync synchronize];
     [self updateSubscriptionDateSettingsLabel];
     [self updateCodexDisplay];
     [self updateDetailLabels];
@@ -1786,9 +2207,9 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
 - (void)toggleHomeTrend:(id)sender { self.homeShowTrend = !self.homeShowTrend; [NSUserDefaults.standardUserDefaults setBool:self.homeShowTrend forKey:@"homeShowTrend"]; [self.hudView setHomeTrendVisible:self.homeShowTrend]; [self resizePanel]; [self configureSamplingAndTimers]; }
 - (void)toggleHomeMemoryApps:(id)sender { self.homeShowMemoryApps = !self.homeShowMemoryApps; [NSUserDefaults.standardUserDefaults setBool:self.homeShowMemoryApps forKey:@"homeShowMemoryApps"]; [self.hudView setHomeMemoryAppsVisible:self.homeShowMemoryApps]; [self resizePanel]; [self configureSamplingAndTimers]; }
 - (void)toggleHistory:(id)sender { self.historyEnabled = !self.historyEnabled; [NSUserDefaults.standardUserDefaults setBool:self.historyEnabled forKey:@"historyEnabled"]; [self configureSamplingAndTimers]; }
-- (void)toggleAlwaysOnTop:(id)sender { self.alwaysOnTop = !self.alwaysOnTop; [NSUserDefaults.standardUserDefaults setBool:self.alwaysOnTop forKey:@"alwaysOnTop"]; self.panel.level = self.alwaysOnTop ? NSFloatingWindowLevel : NSNormalWindowLevel; [self.hudView setAlwaysOnTop:self.alwaysOnTop]; if (self.alwaysOnTop) [self.panel orderFrontRegardless]; }
+- (void)toggleAlwaysOnTop:(id)sender { self.alwaysOnTop = !self.alwaysOnTop; [NSUserDefaults.standardUserDefaults setBool:self.alwaysOnTop forKey:@"alwaysOnTop"]; self.panel.level = self.alwaysOnTop ? NSFloatingWindowLevel : NSNormalWindowLevel; [self.hudView setAlwaysOnTop:self.alwaysOnTop]; if (self.alwaysOnTop && ![self.displayMode isEqual:@"menuBar"]) [self.panel orderFrontRegardless]; }
 - (void)togglePositionLock:(id)sender { self.positionLocked = !self.positionLocked; [NSUserDefaults.standardUserDefaults setBool:self.positionLocked forKey:@"positionLocked"]; [self applyPositionLock]; }
-- (void)minimizeToDock:(id)sender { [self.panel miniaturize:nil]; }
+- (void)minimizeToDock:(id)sender { if ([self.displayMode isEqual:@"menuBar"]) [self.statusPopover close]; else [self.panel miniaturize:nil]; }
 - (void)toggleCollapsed:(id)sender { self.collapsed = !self.collapsed; [self.hudView setCollapsed:self.collapsed]; [self resizePanel]; }
 - (void)selectPage:(NSMenuItem *)sender { self.currentPage = sender.tag; [NSUserDefaults.standardUserDefaults setInteger:self.currentPage forKey:@"currentPage"]; [self.hudView setPage:self.currentPage]; [self updateDetailLabels]; [self resizePanel]; [self configureSamplingAndTimers]; }
 - (void)setOpacity:(NSMenuItem *)sender { self.backgroundOpacity = sender.tag / 100.0; [NSUserDefaults.standardUserDefaults setDouble:self.backgroundOpacity forKey:@"opacity"]; [self.hudView setBackgroundOpacity:self.backgroundOpacity]; }
@@ -1836,6 +2257,7 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
 }
 
 - (void)checkForUpdatesAutomatically {
+    [self maybeSyncSubscriptionInBackground];
     NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
     NSTimeInterval now = NSDate.date.timeIntervalSince1970;
     NSTimeInterval lastCheck = [defaults doubleForKey:@"lastAutomaticUpdateCheckAt"];
@@ -2068,10 +2490,20 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
     subscriptionDateButtons.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     subscriptionDateButtons.alignment = NSLayoutAttributeCenterY;
     subscriptionDateButtons.spacing = 8;
-    NSTextField *subscriptionDateHint = [NSTextField wrappingLabelWithString:HUDL(@"官方接口暂未提供个人订阅日期。这里的日期只保存在本机，不读取浏览器、Cookie或账号凭据，也不自动判断是否续费。")];
+    NSButton *syncBilling = [NSButton buttonWithTitle:HUDL(@"登录并同步官方账单…") target:self action:@selector(startSubscriptionSyncInteractive:)];
+    syncBilling.bezelStyle = NSBezelStyleRounded;
+    NSButton *clearSyncLogin = [NSButton buttonWithTitle:HUDL(@"清除账单登录") target:self action:@selector(clearSubscriptionSyncLogin:)];
+    clearSyncLogin.bezelStyle = NSBezelStyleRounded;
+    self.subscriptionAutomaticCheckbox = [self settingsCheckbox:HUDL(@"每天自动尝试同步（默认关闭）") action:@selector(toggleAutomaticSubscriptionSync:) state:self.subscriptionAutomaticEnabled];
+    self.subscriptionAutomaticCheckbox.enabled = HUDSubscriptionAutoSnapshot([[NSUserDefaults alloc] initWithSuiteName:HUDSubscriptionSyncDomain]) != nil;
+    NSTextField *subscriptionDateHint = [NSTextField wrappingLabelWithString:HUDL(@"同步会打开独立官方登录窗口；请确认登录的是要查看的账号。只保存日期、续订状态和核对时间；读不到时保留旧值，也可手动填写。")];
     subscriptionDateHint.font = [NSFont systemFontOfSize:11]; subscriptionDateHint.textColor = NSColor.secondaryLabelColor;
     [self updateSubscriptionDateSettingsLabel];
-    NSBox *subscriptionDateBox = [self settingsGroup:HUDL(@"本期订阅日期") controls:@[self.subscriptionDateStatusLabel, subscriptionDateButtons, subscriptionDateHint]];
+    NSStackView *syncActions = [NSStackView stackViewWithViews:@[syncBilling, clearSyncLogin]];
+    syncActions.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    syncActions.alignment = NSLayoutAttributeCenterY;
+    syncActions.spacing = 8;
+    NSBox *subscriptionDateBox = [self settingsGroup:HUDL(@"本期订阅日期") controls:@[self.subscriptionDateStatusLabel, subscriptionDateButtons, syncActions, self.subscriptionAutomaticCheckbox, subscriptionDateHint]];
 
     NSTextField *sizeLabel = [NSTextField wrappingLabelWithString:HUDL(@"拖动悬浮窗任意边角连续缩放；最小75%，最大尺寸按当前屏幕自动决定")];
     sizeLabel.font = [NSFont systemFontOfSize:12.5 weight:NSFontWeightRegular];
@@ -2133,7 +2565,8 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
         [moneyNote.widthAnchor constraintEqualToAnchor:languageBox.contentView.widthAnchor constant:-24],
         [ratesNote.widthAnchor constraintEqualToAnchor:languageBox.contentView.widthAnchor constant:-24]
     ]];
-    NSStackView *root = [NSStackView stackViewWithViews:@[hint, languageBox, moduleColumns, orderColumns, weeklyAlertBox, subscriptionDateBox, dataBox, bottom]];
+    NSBox *menuBarBox = [self menuBarSettingsGroup];
+    NSStackView *root = [NSStackView stackViewWithViews:@[hint, menuBarBox, languageBox, moduleColumns, orderColumns, weeklyAlertBox, subscriptionDateBox, dataBox, bottom]];
     root.orientation = NSUserInterfaceLayoutOrientationVertical; root.alignment = NSLayoutAttributeLeading; root.spacing = 14;
     root.translatesAutoresizingMaskIntoConstraints = NO;
     NSView *content = [[HUDFlippedView alloc] initWithFrame:NSMakeRect(0, 0, 804, 820)]; [content addSubview:root];
@@ -2141,6 +2574,7 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
         [root.leadingAnchor constraintEqualToAnchor:content.leadingAnchor constant:18], [root.trailingAnchor constraintEqualToAnchor:content.trailingAnchor constant:-18],
         [root.topAnchor constraintEqualToAnchor:content.topAnchor constant:16], [root.bottomAnchor constraintLessThanOrEqualToAnchor:content.bottomAnchor constant:-18],
         [languageBox.widthAnchor constraintEqualToAnchor:root.widthAnchor],
+        [menuBarBox.widthAnchor constraintEqualToAnchor:root.widthAnchor],
         [moduleColumns.widthAnchor constraintEqualToAnchor:root.widthAnchor], [orderColumns.widthAnchor constraintEqualToAnchor:root.widthAnchor], [weeklyAlertBox.widthAnchor constraintEqualToAnchor:root.widthAnchor], [subscriptionDateBox.widthAnchor constraintEqualToAnchor:root.widthAnchor], [dataBox.widthAnchor constraintEqualToAnchor:root.widthAnchor], [bottom.widthAnchor constraintEqualToAnchor:root.widthAnchor]
     ]];
     [content layoutSubtreeIfNeeded];
@@ -2166,6 +2600,7 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
 }
 
 - (void)showSettingsWindow:(id)sender {
+    [self.statusPopover close];
     if (self.settingsWindow.visible) { [NSApp activateIgnoringOtherApps:YES]; [self.settingsWindow makeKeyAndOrderFront:nil]; return; }
     self.settingsWindow = [[NSPanel alloc] initWithContentRect:NSMakeRect(0, 0, 840, 720) styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskResizable) backing:NSBackingStoreBuffered defer:NO];
     self.settingsWindow.title = HUDL(@"Codex Monitor HUD 设置");
@@ -2267,7 +2702,7 @@ static void CountSettingsControls(NSView *view, NSInteger *checkboxCount, NSInte
     if ([view isKindOfClass:NSButton.class] && ![view isKindOfClass:NSPopUpButton.class]) {
         NSButton *button = (NSButton *)view;
         if ([button.title isEqualToString:HUDL(@"恢复标准大小")]) (*resetButtonCount)++;
-        else if (![@[HUDL(@"检查更新"), HUDL(@"填写日期…"), HUDL(@"打开官方账单页"), HUDL(@"清除日期")] containsObject:button.title]) {
+        else if (![@[HUDL(@"检查更新"), HUDL(@"填写日期…"), HUDL(@"打开官方账单页"), HUDL(@"清除日期"), HUDL(@"登录并同步官方账单…"), HUDL(@"清除账单登录")] containsObject:button.title]) {
             (*checkboxCount)++;
             if ([button.title isEqualToString:HUDL(@"5小时额度")] && button.state == NSControlStateValueOff) (*hiddenFiveHourCount)++;
             if ([button.title isEqualToString:HUDL(@"订阅类型")] && button.state == NSControlStateValueOff) (*hiddenPlanCount)++;
@@ -2304,11 +2739,22 @@ static int RunUIDiagnostic(void) {
     CountSettingsControls(settings, &checkboxCount, &hiddenFiveHourCount, &hiddenPlanCount, &optionalHistoryOffCount, &resetButtonCount);
     NSButton *setSubscriptionDate = FindButtonWithTitle(settings, HUDL(@"填写日期…"));
     NSButton *openOfficialBilling = FindButtonWithTitle(settings, HUDL(@"打开官方账单页"));
+    NSButton *syncOfficialBilling = FindButtonWithTitle(settings, HUDL(@"登录并同步官方账单…"));
+    NSButton *clearBillingLogin = FindButtonWithTitle(settings, HUDL(@"清除账单登录"));
+    NSButton *menuBarVisibility = FindButtonWithTitle(settings, HUDL(@"显示顶部菜单栏"));
+    NSButton *floatingVisibility = FindButtonWithTitle(settings, HUDL(@"显示屏幕悬浮窗"));
     BOOL subscriptionSettingsPass = setSubscriptionDate.target == delegate && setSubscriptionDate.action == @selector(chooseSubscriptionDate:) &&
                                        openOfficialBilling.target == delegate && openOfficialBilling.action == @selector(openOfficialBillingPage:) &&
+                                       syncOfficialBilling.target == delegate && syncOfficialBilling.action == @selector(startSubscriptionSyncInteractive:) &&
+                                       clearBillingLogin.target == delegate && clearBillingLogin.action == @selector(clearSubscriptionSyncLogin:) &&
+                                       delegate.subscriptionAutomaticCheckbox.state == NSControlStateValueOff &&
                                        delegate.subscriptionDateClearButton.enabled && [delegate.subscriptionDateStatusLabel.stringValue containsString:@"2099/09/24"] && HUDOfficialBillingURL() != nil;
+    BOOL displaySettingsPass = menuBarVisibility.state == NSControlStateValueOn && floatingVisibility.state == NSControlStateValueOn &&
+                               menuBarVisibility.enabled && floatingVisibility.enabled &&
+                               menuBarVisibility.target == delegate && menuBarVisibility.action == @selector(toggleMenuBarVisibility:) &&
+                               floatingVisibility.target == delegate && floatingVisibility.action == @selector(toggleFloatingVisibility:);
     // Count checkboxes only; the existing period selector and new language/currency selectors are popups.
-    BOOL settingsPass = checkboxCount == 46 && hiddenFiveHourCount == 2 && hiddenPlanCount == 2 && optionalHistoryOffCount == 6 && resetButtonCount == 1 && delegate.settingsOrderControllers.count == 2 && delegate.settingsOrderControllers[0].items.count == 10 && delegate.settingsOrderControllers[1].items.count == 4 && subscriptionSettingsPass;
+    BOOL settingsPass = checkboxCount == 49 && hiddenFiveHourCount == 2 && hiddenPlanCount == 2 && optionalHistoryOffCount == 6 && resetButtonCount == 1 && delegate.settingsOrderControllers.count == 2 && delegate.settingsOrderControllers[0].items.count == 10 && delegate.settingsOrderControllers[1].items.count == 4 && subscriptionSettingsPass && displaySettingsPass;
     BOOL scalePass = fabs([delegate panelSize].width - 485.9) < 0.01 && ([delegate panelStyleMask] & NSWindowStyleMaskResizable) != 0;
     delegate.windowScale = 0.75; scalePass = scalePass && fabs([delegate panelSize].width - 322.5) < 0.01;
     delegate.windowScale = 1.0; scalePass = scalePass && fabs([delegate panelSize].width - 430.0) < 0.1;
@@ -2665,6 +3111,16 @@ static int RunLogicDiagnostic(void) {
                                 [todaySubscription[@"days"] integerValue] == 0 && [todaySubscription[@"relative"] isEqualToString:@"今天到期/续费"] &&
                                 [pastSubscription[@"days"] integerValue] == -1 && [pastSubscription[@"relative"] containsString:@"已过1天"] &&
                                 HUDSubscriptionDateFromString(@"2030-02-29") == nil && HUDSubscriptionDatePresentation(@"not-a-date", subscriptionNow) == nil;
+    NSString *testSyncDomain = [@"com.codexmonitorhud.subscription-test." stringByAppendingString:NSUUID.UUID.UUIDString];
+    NSUserDefaults *testSync = [[NSUserDefaults alloc] initWithSuiteName:testSyncDomain];
+    [testSync setObject:@{ @"date":@"2030-01-29", @"renewal":@"cancelled" } forKey:@"subscriptionLastVerified"];
+    [testSync setDouble:NSDate.date.timeIntervalSince1970 forKey:@"subscriptionLastVerifiedAt"];
+    NSDictionary *verifiedSync = HUDSubscriptionAutoSnapshot(testSync);
+    [testSync setObject:@{ @"date":@"2030-02-29", @"renewal":@"cancelled" } forKey:@"subscriptionLastVerified"];
+    BOOL subscriptionAutoPass = [verifiedSync[@"date"] isEqual:@"2030-01-29"] &&
+                                [verifiedSync[@"renewal"] isEqual:@"cancelled"] &&
+                                HUDSubscriptionAutoSnapshot(testSync) == nil;
+    [testSync removePersistentDomainForName:testSyncDomain];
     NSDate *activityNow = [NSDate dateWithTimeIntervalSince1970:1767225720];
     NSString *startLine = @"{\"timestamp\":\"2026-01-01T00:01:00.000Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\"}}";
     NSString *finishLine = @"{\"timestamp\":\"2026-01-01T00:01:30.000Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"phase\":\"final_answer\"}}";
@@ -2798,9 +3254,10 @@ static int RunLogicDiagnostic(void) {
                               migratedWindowTokens == 110000;
     [NSFileManager.defaultManager removeItemAtURL:scanRoot error:nil];
     BOOL calendarPass = currentPass && delayedPass && emptyPass;
-    BOOL pass = calendarPass && subscriptionDatePass && cpuTimebasePass && memoryFormulaPass && activityPass && persistedCwdPass && migrationFallbackPass && costParserPass && costPricingPass && costDedupPass && costWatermarkPass && quotaForecastPass && weeklyConsumptionPass && tokenWindowPass && weeklyAlertPass && serviceStatusPass && incrementalScanPass && cacheCompactionPass && cacheMigrationPass;
+    BOOL pass = calendarPass && subscriptionDatePass && subscriptionAutoPass && cpuTimebasePass && memoryFormulaPass && activityPass && persistedCwdPass && migrationFallbackPass && costParserPass && costPricingPass && costDedupPass && costWatermarkPass && quotaForecastPass && weeklyConsumptionPass && tokenWindowPass && weeklyAlertPass && serviceStatusPass && incrementalScanPass && cacheCompactionPass && cacheMigrationPass;
     printf("calendar_usage_test=%s\n", calendarPass ? "pass" : "fail");
     printf("subscription_date_logic_test=%s\n", subscriptionDatePass ? "pass" : "fail");
+    printf("subscription_auto_cache_test=%s\n", subscriptionAutoPass ? "pass" : "fail");
     printf("cpu_timebase_test=%s\n", cpuTimebasePass ? "pass" : "fail");
     printf("memory_used_formula_test=%s\n", memoryFormulaPass ? "pass" : "fail");
     printf("codex_activity_inference_test=%s\n", activityPass ? "pass" : "fail");

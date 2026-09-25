@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.21)
 
-project(CodexMonitorHUDWindows VERSION 1.3.0 LANGUAGES CXX)
+project(CodexMonitorHUDWindows VERSION 1.4.0 LANGUAGES CXX)
 
 include(CTest)
 

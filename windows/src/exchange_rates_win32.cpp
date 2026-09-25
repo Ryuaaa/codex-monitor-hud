@@ -83,7 +83,7 @@ void RefreshDisplayExchangeRates(const std::filesystem::path& directory) noexcep
             if(error) return;
             Save(path); // Failures also get daily backoff across restarts.
         }
-        InternetHandle session{WinHttpOpen(L"CodexMonitorHUD/1.3.0",WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
+        InternetHandle session{WinHttpOpen(L"CodexMonitorHUD/1.4.0",WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
             WINHTTP_NO_PROXY_NAME,WINHTTP_NO_PROXY_BYPASS,0)};
         if(!session.value) return;
         WinHttpSetTimeouts(session.value,4000,4000,4000,4000);
