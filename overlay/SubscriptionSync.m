@@ -3,6 +3,7 @@
 
 static NSString *const SyncDefaultsDomain = @"com.codexmonitorhud.subscription-data";
 static NSURL *BillingURL(void) { return [NSURL URLWithString:@"https://chatgpt.com/?no_universal_links=1#settings/Billing"]; }
+static NSString *const GuestDetectionScript = @"Array.from(document.querySelectorAll('button,[role=button]')).some(el => /^(?:登录|登入|Log in|Login|サインイン|ログイン|로그인)$/i.test((el.innerText || el.getAttribute('aria-label') || '').trim()))";
 
 static BOOL IsBillingPage(NSURL *url) {
     if (![url.host isEqual:@"chatgpt.com"]) return NO;
@@ -124,7 +125,8 @@ static NSDictionary<NSString *, NSString *> *NormalizeResult(id result) {
             @"invoice": @"<table><tr><td>Billing date April 15, 2030</td></tr></table>",
             @"ambiguous": @"Your plans renew on April 15, 2030 and May 15, 2030.",
             @"invalid": @"Your plan renews automatically on February 30, 2026.",
-            @"appstore": @"Your subscription is managed by Apple. Check your subscription in the App Store."
+            @"appstore": @"Your subscription is managed by Apple. Check your subscription in the App Store.",
+            @"guest": @"<button>Log in</button> Please log in to see your subscription."
         };
         NSString *text = texts[name] ?: @"no fixture";
         NSString *html = [NSString stringWithFormat:@"<!doctype html><meta charset='utf-8'><style>body{font:16px sans-serif}</style><p>%@</p>",text];
@@ -165,9 +167,15 @@ static NSDictionary<NSString *, NSString *> *NormalizeResult(id result) {
         if (self.finished || generation != self.generation) return;
         NSDictionary *good = error ? nil : NormalizeResult(result);
         if (!good) {
-            if (self.fixture) [self finishWithError:@"parse-failed"];
-            else if (self.readAttempts < 8) dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2*NSEC_PER_SEC), dispatch_get_main_queue(), ^{ [self attemptRead:generation]; });
-            else [self finishWithError:@"parse-failed"];
+            [self.web evaluateJavaScript:GuestDetectionScript completionHandler:^(id guest, NSError *guestError) {
+                if (self.finished || generation != self.generation) return;
+                if (!guestError && [guest respondsToSelector:@selector(boolValue)] && [guest boolValue])
+                    [self finishWithError:@"login-required"];
+                else if (self.fixture) [self finishWithError:@"parse-failed"];
+                else if (self.readAttempts < 8)
+                    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2*NSEC_PER_SEC), dispatch_get_main_queue(), ^{ [self attemptRead:generation]; });
+                else [self finishWithError:@"parse-failed"];
+            }];
             return;
         }
         [self.defaults setObject:good forKey:@"subscriptionLastVerified"];
