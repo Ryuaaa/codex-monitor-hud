@@ -12,7 +12,7 @@ files.each do |name|
     errors << "#{name}: missing #{path}" unless root.join(path).exist?
   end
   (files - [name]).each { |other| errors << "#{name}: missing language #{other}" unless text.include?("(#{other})") }
-  %w[Codex-Monitor-HUD.app.zip CodexMonitorHUD-windows-x64-1.3.0.msi CodexMonitorHUD-windows-x64.zip].each do |asset|
+  %w[Codex-Monitor-HUD.app.zip CodexMonitorHUD-windows-x64-1.4.0.msi CodexMonitorHUD-windows-x64.zip].each do |asset|
     errors << "#{name}: missing direct download #{asset}" unless text.include?("/#{asset})")
   end
   %w[CNY USD EUR JPY KRW].each { |currency| errors << "#{name}: missing currency #{currency}" unless text.include?(currency) }

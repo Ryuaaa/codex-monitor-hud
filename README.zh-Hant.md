@@ -4,16 +4,18 @@
 
 [简体中文](README.md) · 繁體中文 · [English](README.en.md) · [日本語](README.ja.md) · [한국어](README.ko.md)
 
-常駐螢幕角落的可自訂浮動視窗：額度、Token 與估算費用、任務活動和 CPU／記憶體，需要時一眼看清。macOS 與 Windows 均採用原生介面，不內嵌瀏覽器引擎。本專案是社群工具，非 OpenAI 官方產品。
+常駐螢幕角落的可自訂浮動視窗：額度、Token 與估算費用、任務活動和 CPU／記憶體，需要時一眼看清。兩端監控介面均為原生實作；macOS 可按需啟動獨立、短時的官方帳單網頁視窗，不在常駐監控核心執行網頁。本專案是社群工具，非 OpenAI 官方產品。
 
-## 下載 1.3.0
+## 下載 1.4.0
 
 | 你的電腦 | 下載 | 安裝前須知 |
 |---|---|---|
-| macOS 15+ · Apple 晶片／Intel | **[macOS ZIP](https://github.com/Ryuaaa/codex-monitor-hud/releases/download/v1.3.0/Codex-Monitor-HUD.app.zip)** | 已通過 Apple 簽章與公證；解壓縮後移入「應用程式」 |
-| Windows 10/11 · x64 | **[Windows MSI](https://github.com/Ryuaaa/codex-monitor-hud/releases/download/windows-preview-v1.3.0/CodexMonitorHUD-windows-x64-1.3.0.msi)** · [可攜式 ZIP](https://github.com/Ryuaaa/codex-monitor-hud/releases/download/windows-preview-v1.3.0/CodexMonitorHUD-windows-x64.zip) | 未簽章預覽版，可能遭系統攔截；請勿關閉安全防護 |
+| macOS 15+ · Apple 晶片／Intel | **[macOS ZIP](https://github.com/Ryuaaa/codex-monitor-hud/releases/download/v1.4.0/Codex-Monitor-HUD.app.zip)** | 已通過 Apple 簽章與公證；解壓縮後移入「應用程式」 |
+| Windows 10/11 · x64 | **[Windows MSI](https://github.com/Ryuaaa/codex-monitor-hud/releases/download/windows-preview-v1.4.0/CodexMonitorHUD-windows-x64-1.4.0.msi)** · [可攜式 ZIP](https://github.com/Ryuaaa/codex-monitor-hud/releases/download/windows-preview-v1.4.0/CodexMonitorHUD-windows-x64.zip) | 未簽章預覽版，可能遭系統攔截；請勿關閉安全防護 |
 
-[macOS 發行與校驗檔](https://github.com/Ryuaaa/codex-monitor-hud/releases/tag/v1.3.0) · [Windows 發行與校驗檔](https://github.com/Ryuaaa/codex-monitor-hud/releases/tag/windows-preview-v1.3.0)
+[macOS 發行與校驗檔](https://github.com/Ryuaaa/codex-monitor-hud/releases/tag/v1.4.0) · [Windows 發行與校驗檔](https://github.com/Ryuaaa/codex-monitor-hud/releases/tag/windows-preview-v1.4.0)
+
+平台差異：macOS 可按需嘗試從官方帳單網頁同步訂閱日期；Windows 本版仍須手動填寫。兩端監控核心維持原生、低負擔。
 
 ## 一眼看懂
 

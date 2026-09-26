@@ -4,16 +4,18 @@
 
 [简体中文](README.md) · [繁體中文](README.zh-Hant.md) · English · [日本語](README.ja.md) · [한국어](README.ko.md)
 
-A customizable floating window for quota, token and estimated cost trends, local task activity, and system performance. Native macOS and Windows interfaces, with no embedded browser engine. A community project, not an official OpenAI product.
+A customizable floating window for quota, token and estimated cost trends, local task activity, and system performance. Both always-on interfaces are native; macOS can open a separate, short-lived official billing page on demand. A community project, not an official OpenAI product.
 
-## Download 1.3.0
+## Download 1.4.0
 
 | Platform | Download | Before installing |
 |---|---|---|
-| macOS 15+ · Apple silicon / Intel | **[macOS ZIP](https://github.com/Ryuaaa/codex-monitor-hud/releases/download/v1.3.0/Codex-Monitor-HUD.app.zip)** | Developer ID signed and Apple notarized. Unzip and move to Applications. |
-| Windows 10/11 · x64 | **[Windows MSI](https://github.com/Ryuaaa/codex-monitor-hud/releases/download/windows-preview-v1.3.0/CodexMonitorHUD-windows-x64-1.3.0.msi)** · [Portable ZIP](https://github.com/Ryuaaa/codex-monitor-hud/releases/download/windows-preview-v1.3.0/CodexMonitorHUD-windows-x64.zip) | Unsigned preview; Windows may block it. Do not disable security protections. |
+| macOS 15+ · Apple silicon / Intel | **[macOS ZIP](https://github.com/Ryuaaa/codex-monitor-hud/releases/download/v1.4.0/Codex-Monitor-HUD.app.zip)** | Developer ID signed and Apple notarized. Unzip and move to Applications. |
+| Windows 10/11 · x64 | **[Windows MSI](https://github.com/Ryuaaa/codex-monitor-hud/releases/download/windows-preview-v1.4.0/CodexMonitorHUD-windows-x64-1.4.0.msi)** · [Portable ZIP](https://github.com/Ryuaaa/codex-monitor-hud/releases/download/windows-preview-v1.4.0/CodexMonitorHUD-windows-x64.zip) | Unsigned preview; Windows may block it. Do not disable security protections. |
 
-[macOS release & checksums](https://github.com/Ryuaaa/codex-monitor-hud/releases/tag/v1.3.0) · [Windows release & checksums](https://github.com/Ryuaaa/codex-monitor-hud/releases/tag/windows-preview-v1.3.0)
+[macOS release & checksums](https://github.com/Ryuaaa/codex-monitor-hud/releases/tag/v1.4.0) · [Windows release & checksums](https://github.com/Ryuaaa/codex-monitor-hud/releases/tag/windows-preview-v1.4.0)
+
+Platform difference: optional billing-date sync from the official website is available on macOS only; Windows keeps manual date entry. The always-on monitor remains native on both platforms.
 
 ## See it in action
 

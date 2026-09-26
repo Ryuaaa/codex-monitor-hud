@@ -4,16 +4,18 @@
 
 简体中文 · [繁體中文](README.zh-Hant.md) · [English](README.en.md) · [日本語](README.ja.md) · [한국어](README.ko.md)
 
-常驻屏幕角落的可自定义悬浮窗：额度、Token 与估算费用、任务活动和 CPU / 内存，在需要时一眼看清。macOS 与 Windows 均采用原生界面，不嵌入浏览器引擎。本项目是社区工具，非 OpenAI 官方产品。
+常驻屏幕角落的可自定义悬浮窗：额度、Token 与估算费用、任务活动和 CPU / 内存，在需要时一眼看清。两端监控界面均为原生实现；macOS 可按需启动独立、短时的官方账单网页窗口，不在常驻监控核心中运行网页。本项目是社区工具，非 OpenAI 官方产品。
 
-## 下载 1.3.0
+## 下载 1.4.0
 
 | 你的电脑 | 下载 | 安装前须知 |
 |---|---|---|
-| macOS 15+ · Apple 芯片 / Intel | **[下载 macOS ZIP](https://github.com/Ryuaaa/codex-monitor-hud/releases/download/v1.3.0/Codex-Monitor-HUD.app.zip)** | 已通过 Apple 签名、公证；解压后移入“应用程序” |
-| Windows 10/11 · x64 | **[下载 Windows MSI](https://github.com/Ryuaaa/codex-monitor-hud/releases/download/windows-preview-v1.3.0/CodexMonitorHUD-windows-x64-1.3.0.msi)** · [便携 ZIP](https://github.com/Ryuaaa/codex-monitor-hud/releases/download/windows-preview-v1.3.0/CodexMonitorHUD-windows-x64.zip) | 未签名预览版，可能被系统拦截；不要关闭安全功能 |
+| macOS 15+ · Apple 芯片 / Intel | **[下载 macOS ZIP](https://github.com/Ryuaaa/codex-monitor-hud/releases/download/v1.4.0/Codex-Monitor-HUD.app.zip)** | 已通过 Apple 签名、公证；解压后移入“应用程序” |
+| Windows 10/11 · x64 | **[下载 Windows MSI](https://github.com/Ryuaaa/codex-monitor-hud/releases/download/windows-preview-v1.4.0/CodexMonitorHUD-windows-x64-1.4.0.msi)** · [便携 ZIP](https://github.com/Ryuaaa/codex-monitor-hud/releases/download/windows-preview-v1.4.0/CodexMonitorHUD-windows-x64.zip) | 未签名预览版，可能被系统拦截；不要关闭安全功能 |
 
-[macOS 发布与校验文件](https://github.com/Ryuaaa/codex-monitor-hud/releases/tag/v1.3.0) · [Windows 发布与校验文件](https://github.com/Ryuaaa/codex-monitor-hud/releases/tag/windows-preview-v1.3.0)
+[macOS 发布与校验文件](https://github.com/Ryuaaa/codex-monitor-hud/releases/tag/v1.4.0) · [Windows 发布与校验文件](https://github.com/Ryuaaa/codex-monitor-hud/releases/tag/windows-preview-v1.4.0)
+
+版本差异：macOS 可按需尝试从官方账单网页同步订阅日期；Windows 本版仍需手动填写。两端监控核心保持原生、低负担。
 
 ## 一眼看懂
 
@@ -65,7 +67,7 @@
 
 > 同仓库的第二个独立应用“Codex Monitor 任务中心”位于 `task-center/`。HUD 顶栏和应用菜单可按需打开它；任务中心关闭后退出，不会链接到或改变 HUD 的常驻运行层。架构与验收记录见 `docs/task-center/`。
 
-> 当前HUD版本：macOS 1.3.0正式版，使用Developer ID签名并通过Apple公证；Windows 1.3.0未签名预览版，同步计数修复、显示语言、币种及订阅日期。任务中心独立发布。
+> 当前HUD版本：macOS 1.4.0正式版，使用Developer ID签名并通过Apple公证；Windows 1.4.0未签名预览版。macOS可选短时网页同步订阅日期，Windows保留手动核对。任务中心独立发布。
 
 > 1.3.0双平台验收已通过：macOS完成本机替换与签名公证验证；Windows完成58项测试、原生窗口运行、MSI安装/卸载与旧版升级验证。Windows可信签名及个人实体电脑长期验证尚未完成，预览包不进入正式自动安装通道。[macOS验收记录](docs/hud-1.3.0-validation.md) · [Windows验收记录](docs/hud-1.3.0-windows-validation.md)。
 
@@ -78,9 +80,9 @@
 - 默认人民币CNY，支持USD/EUR/JPY/KRW，立即切换。公开参考汇率最多每天异步读取一次，失败保留原汇率并显示日期。Token统计不随语言或币种改变。
 - 费用主卡保留金额与Token数，完整趋势/覆盖率和口径可悬停查看；价格来源：[OpenAI官方定价](https://developers.openai.com/api/docs/pricing)。汇率来源：[Frankfurter](https://api.frankfurter.dev/v1/latest?base=USD&symbols=CNY,EUR,JPY,KRW)。
 
-这是一个常驻在电脑屏幕角落的原生三页面悬浮窗：主页可自由组合Codex和电脑模块，Codex页显示账户额度、订阅与Token用量，电脑性能页用来快速判断电脑是否吃紧、是否主要由 Codex 引起、瓶颈在 CPU 还是内存。macOS版使用AppKit，Windows版使用Win32 + C++17；两者都不嵌入网页浏览器引擎。
+这是一个常驻在电脑屏幕角落的原生三页面悬浮窗：主页可自由组合Codex和电脑模块，Codex页显示账户额度、订阅与Token用量，电脑性能页用来快速判断电脑是否吃紧、是否主要由 Codex 引起、瓶颈在 CPU 还是内存。macOS版使用AppKit，Windows版使用Win32 + C++17；常驻监控核心不嵌入网页浏览器引擎。
 
-界面使用原生 AppKit 深色半透明材质、静态高光和卡片层级实现，不嵌入网页浏览器引擎；视觉接近HTML原型，同时避免额外的浏览器进程和持续动画负担。
+界面使用原生 AppKit 深色半透明材质、静态高光和卡片层级实现；视觉接近HTML原型，常驻监控时没有网页进程和持续动画负担。可选账单同步另启短时网页窗口。
 
 应用图标使用“小烈刀的AI宇宙”原创人物IP：低饱和灰蓝线稿、透明橙色发夹，以及对应性能监控的仪表环和柱形图；在小尺寸下优先保留人物、发夹和工具属性的辨识度。
 
@@ -162,25 +164,25 @@ Token增量缓存和额度预测样本位于：
 ## 系统要求
 
 - macOS正式版：macOS 15或更高版本，支持Apple芯片和Intel处理器；从源码构建需要Xcode Command Line Tools。
-- Windows 1.3.0预览版：Windows 10/11 x64；暂不支持ARM64。
+- Windows 1.4.0预览版：Windows 10/11 x64；暂不支持ARM64。
 - 电脑性能监控可独立工作；Codex额度、订阅和用量需要本机安装并登录ChatGPT桌面版、Codex桌面版或Codex命令行工具。
 
 ## 安装或更新
 
 不想自行构建时，可从GitHub发布页下载：
 
-- [macOS 1.3.0](https://github.com/Ryuaaa/codex-monitor-hud/releases/tag/v1.3.0)：`Codex-Monitor-HUD.app.zip`。解压后把应用移到“应用程序”文件夹并打开；文件已经Developer ID签名并通过Apple公证。
+- [macOS 1.4.0](https://github.com/Ryuaaa/codex-monitor-hud/releases/tag/v1.4.0)：`Codex-Monitor-HUD.app.zip`。解压后把应用移到“应用程序”文件夹并打开；文件已经Developer ID签名并通过Apple公证。
 - [macOS 任务中心 1.3.0](https://github.com/Ryuaaa/codex-monitor-hud/releases/tag/task-center-v1.3.0)：下载通用版 `.app.zip`，可查看、继续并在 Codex 中准确打开官方任务；应用按需运行，关闭后退出。
-- [Windows 1.3.0未签名预览版](https://github.com/Ryuaaa/codex-monitor-hud/releases/tag/windows-preview-v1.3.0)：可下载便携ZIP和MSI安装包；Windows可能显示“未知发布者”或拦截。该预发布不进入正式自动安装通道，需手动下载；不要关闭系统安全功能。
+- [Windows 1.4.0未签名预览版](https://github.com/Ryuaaa/codex-monitor-hud/releases/tag/windows-preview-v1.4.0)：可下载便携ZIP和MSI安装包；Windows可能显示“未知发布者”或拦截。该预发布不进入正式自动安装通道，需手动下载；订阅日期暂需手填。不要关闭系统安全功能。
 
 macOS 与 Windows 使用独立更新通道：macOS 读取 `v版本号`，Windows 读取 `windows-v版本号`。两个平台不会把对方的发布当成自己的新版。
 
 ### 双平台发布顺序
 
-每次HUD更新固定按以下顺序完成，包括当前1.3.0批次：
+本次1.4.0按以下顺序验收和发布；不把本次平台差异写成以后版本的固定规则：
 
 1. 完成macOS功能更新与相应验证。
-2. 同步Windows的适用功能、修复、数据口径及产品版本号；不得只修改版本号就称为同步完成。
+2. 同步Windows适用的监控功能、修复、数据口径及产品版本号；macOS专属网页同步与Windows手填的差异明确标注。
 3. 核对两端构建、必要测试、安装包版本、校验文件及各自更新通道。平台专属差异、签名状态和未完成的真实桌面验证须明确记录，不得冒充已验证。
 4. 两端均达到本轮约定验收后，再向GitHub发布同一版本的两端产物，并回读核对下载文件。可提前准备草稿和构建产物，不提前公开单端新版。
 

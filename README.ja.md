@@ -4,16 +4,18 @@
 
 [简体中文](README.md) · [繁體中文](README.zh-Hant.md) · [English](README.en.md) · 日本語 · [한국어](README.ko.md)
 
-画面の隅に置ける、カスタマイズ可能なフローティングウィンドウです。利用枠、トークンと推定コストの傾向、ローカルのタスク活動、システム負荷を確認できます。macOS・Windows ともにネイティブ実装で、ブラウザエンジンは内蔵しません。OpenAI 公式製品ではなく、コミュニティによるツールです。
+画面の隅に置ける、カスタマイズ可能なフローティングウィンドウです。利用枠、トークンと推定コストの傾向、ローカルのタスク活動、システム負荷を確認できます。常駐画面は両 OS ともネイティブ実装です。macOS では必要なときだけ、独立した短時間の公式請求ページを開けます。OpenAI 公式製品ではなく、コミュニティによるツールです。
 
-## 1.3.0 をダウンロード
+## 1.4.0 をダウンロード
 
 | 対応環境 | ダウンロード | インストール前の注意 |
 |---|---|---|
-| macOS 15 以降 · Apple シリコン／Intel | **[macOS ZIP](https://github.com/Ryuaaa/codex-monitor-hud/releases/download/v1.3.0/Codex-Monitor-HUD.app.zip)** | Developer ID 署名・Apple 公証済み。解凍して「アプリケーション」に移動してください。 |
-| Windows 10/11 · x64 | **[Windows MSI](https://github.com/Ryuaaa/codex-monitor-hud/releases/download/windows-preview-v1.3.0/CodexMonitorHUD-windows-x64-1.3.0.msi)** · [ポータブル ZIP](https://github.com/Ryuaaa/codex-monitor-hud/releases/download/windows-preview-v1.3.0/CodexMonitorHUD-windows-x64.zip) | 未署名のプレビュー版です。Windows にブロックされる場合があります。セキュリティ機能を無効にしないでください。 |
+| macOS 15 以降 · Apple シリコン／Intel | **[macOS ZIP](https://github.com/Ryuaaa/codex-monitor-hud/releases/download/v1.4.0/Codex-Monitor-HUD.app.zip)** | Developer ID 署名・Apple 公証済み。解凍して「アプリケーション」に移動してください。 |
+| Windows 10/11 · x64 | **[Windows MSI](https://github.com/Ryuaaa/codex-monitor-hud/releases/download/windows-preview-v1.4.0/CodexMonitorHUD-windows-x64-1.4.0.msi)** · [ポータブル ZIP](https://github.com/Ryuaaa/codex-monitor-hud/releases/download/windows-preview-v1.4.0/CodexMonitorHUD-windows-x64.zip) | 未署名のプレビュー版です。Windows にブロックされる場合があります。セキュリティ機能を無効にしないでください。 |
 
-[macOS リリース・チェックサム](https://github.com/Ryuaaa/codex-monitor-hud/releases/tag/v1.3.0) · [Windows リリース・チェックサム](https://github.com/Ryuaaa/codex-monitor-hud/releases/tag/windows-preview-v1.3.0)
+[macOS リリース・チェックサム](https://github.com/Ryuaaa/codex-monitor-hud/releases/tag/v1.4.0) · [Windows リリース・チェックサム](https://github.com/Ryuaaa/codex-monitor-hud/releases/tag/windows-preview-v1.4.0)
+
+機能差：公式サイトからの請求日同期は macOS の任意機能です。Windows では日付を手入力します。常駐監視画面は両 OS ともネイティブです。
 
 ## 画面を見る
 

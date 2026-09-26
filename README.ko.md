@@ -4,16 +4,18 @@
 
 [简体中文](README.md) · [繁體中文](README.zh-Hant.md) · [English](README.en.md) · [日本語](README.ja.md) · 한국어
 
-화면 구석에 띄워 두는 맞춤형 창입니다. 사용 한도, 토큰·추정 비용 추이, 로컬 작업 활동, 시스템 성능을 확인할 수 있습니다. macOS와 Windows 모두 네이티브 UI를 사용하며 브라우저 엔진을 내장하지 않습니다. OpenAI 공식 제품이 아닌 커뮤니티 도구입니다.
+화면 구석에 띄워 두는 맞춤형 창입니다. 사용 한도, 토큰·추정 비용 추이, 로컬 작업 활동, 시스템 성능을 확인할 수 있습니다. 두 운영체제의 상주 화면은 네이티브 UI입니다. macOS에서는 필요할 때만 별도의 짧은 공식 청구 페이지 창을 열 수 있습니다. OpenAI 공식 제품이 아닌 커뮤니티 도구입니다.
 
-## 1.3.0 다운로드
+## 1.4.0 다운로드
 
 | 운영체제 | 다운로드 | 설치 전 안내 |
 |---|---|---|
-| macOS 15 이상 · Apple Silicon / Intel | **[macOS ZIP](https://github.com/Ryuaaa/codex-monitor-hud/releases/download/v1.3.0/Codex-Monitor-HUD.app.zip)** | Developer ID 서명 및 Apple 공증 완료. 압축을 풀어 응용 프로그램 폴더로 옮기세요. |
-| Windows 10/11 · x64 | **[Windows MSI](https://github.com/Ryuaaa/codex-monitor-hud/releases/download/windows-preview-v1.3.0/CodexMonitorHUD-windows-x64-1.3.0.msi)** · [포터블 ZIP](https://github.com/Ryuaaa/codex-monitor-hud/releases/download/windows-preview-v1.3.0/CodexMonitorHUD-windows-x64.zip) | 서명되지 않은 미리보기 버전으로, Windows에서 차단할 수 있습니다. 보안 기능을 끄지 마세요. |
+| macOS 15 이상 · Apple Silicon / Intel | **[macOS ZIP](https://github.com/Ryuaaa/codex-monitor-hud/releases/download/v1.4.0/Codex-Monitor-HUD.app.zip)** | Developer ID 서명 및 Apple 공증 완료. 압축을 풀어 응용 프로그램 폴더로 옮기세요. |
+| Windows 10/11 · x64 | **[Windows MSI](https://github.com/Ryuaaa/codex-monitor-hud/releases/download/windows-preview-v1.4.0/CodexMonitorHUD-windows-x64-1.4.0.msi)** · [포터블 ZIP](https://github.com/Ryuaaa/codex-monitor-hud/releases/download/windows-preview-v1.4.0/CodexMonitorHUD-windows-x64.zip) | 서명되지 않은 미리보기 버전으로, Windows에서 차단할 수 있습니다. 보안 기능을 끄지 마세요. |
 
-[macOS 릴리스·체크섬](https://github.com/Ryuaaa/codex-monitor-hud/releases/tag/v1.3.0) · [Windows 릴리스·체크섬](https://github.com/Ryuaaa/codex-monitor-hud/releases/tag/windows-preview-v1.3.0)
+[macOS 릴리스·체크섬](https://github.com/Ryuaaa/codex-monitor-hud/releases/tag/v1.4.0) · [Windows 릴리스·체크섬](https://github.com/Ryuaaa/codex-monitor-hud/releases/tag/windows-preview-v1.4.0)
+
+플랫폼 차이: 공식 웹사이트에서 청구 날짜를 동기화하는 선택 기능은 macOS에서만 제공됩니다. Windows는 날짜를 수동으로 입력합니다. 상주 모니터는 두 플랫폼 모두 네이티브입니다.
 
 ## 화면 미리 보기
 
