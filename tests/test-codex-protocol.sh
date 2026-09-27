@@ -12,5 +12,5 @@ xcrun clang -O2 -fobjc-arc -Wall -Wextra -Werror -mmacosx-version-min=15.0 \
   -o "$fixture_dir/codex-protocol-tests"
 cp "$source_dir/tests/fixtures/codex-app-server.py" "$fixture_dir/server.py"
 chmod 700 "$fixture_dir/server.py"
-for mode in legacy modern eof timeout; do ln -s "$fixture_dir/server.py" "$fixture_dir/$mode"; done
+for mode in legacy modern eof timeout startup-exit; do ln -s "$fixture_dir/server.py" "$fixture_dir/$mode"; done
 "$fixture_dir/codex-protocol-tests" "$fixture_dir"

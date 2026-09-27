@@ -289,6 +289,8 @@ NSDictionary<NSString *, id> *CodexCalendarUsage(NSArray *buckets, NSDate *now) 
 @property(nonatomic) BOOL legacyQuotaParameters;
 @property(nonatomic) NSInteger quotaRequestID;
 @property(nonatomic, copy) NSString *executableIdentity;
+@property(nonatomic, copy) NSArray<NSString *> *fetchExecutables;
+@property(nonatomic) NSUInteger nextExecutableIndex;
 @property(nonatomic) NSUInteger consecutiveFetchFailures;
 @property(nonatomic, readwrite) NSTimeInterval recommendedRetryInterval;
 @property(nonatomic) BOOL activityRefreshInProgress;
@@ -303,6 +305,7 @@ NSDictionary<NSString *, id> *CodexCalendarUsage(NSArray *buckets, NSDate *now) 
 - (void)maybeFinishFetch;
 - (void)consumeThreads:(NSDictionary *)result;
 - (void)startFetchInBackground:(BOOL)background;
+- (void)launchNextExecutable;
 - (void)recordFailure:(NSString *)kind requestID:(NSInteger)requestID;
 - (void)failPendingRequests:(NSString *)kind;
 - (void)updateQuotaForecastWithSample:(NSDictionary<NSString *, id> *)sample;
@@ -341,8 +344,12 @@ NSDictionary<NSString *, id> *CodexCalendarUsage(NSArray *buckets, NSDate *now) 
     return [directory URLByAppendingPathComponent:filename isDirectory:NO];
 }
 
-- (NSString *)codexExecutable {
-    NSArray<NSString *> *paths = @[
+- (NSArray<NSString *> *)codexExecutableSearchPaths {
+    return @[
+        @"/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex",
+        [NSHomeDirectory() stringByAppendingPathComponent:@"Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex"],
+        @"/Applications/Codex.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex",
+        [NSHomeDirectory() stringByAppendingPathComponent:@"Applications/Codex.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex"],
         @"/Applications/ChatGPT.app/Contents/Resources/codex",
         [NSHomeDirectory() stringByAppendingPathComponent:@"Applications/ChatGPT.app/Contents/Resources/codex"],
         @"/Applications/Codex.app/Contents/Resources/codex",
@@ -351,8 +358,16 @@ NSDictionary<NSString *, id> *CodexCalendarUsage(NSArray *buckets, NSDate *now) 
         @"/usr/local/bin/codex",
         [NSHomeDirectory() stringByAppendingPathComponent:@".local/bin/codex"]
     ];
-    for (NSString *path in paths) if ([[NSFileManager defaultManager] isExecutableFileAtPath:path]) return path;
-    return nil;
+}
+
+- (NSArray<NSString *> *)codexExecutableCandidates {
+    NSMutableOrderedSet<NSString *> *candidates = [NSMutableOrderedSet orderedSet];
+    for (NSString *path in [self codexExecutableSearchPaths]) {
+        BOOL directory = NO;
+        if ([NSFileManager.defaultManager fileExistsAtPath:path isDirectory:&directory] && !directory &&
+            [NSFileManager.defaultManager isExecutableFileAtPath:path]) [candidates addObject:path];
+    }
+    return candidates.array;
 }
 
 - (void)start {
@@ -372,19 +387,34 @@ NSDictionary<NSString *, id> *CodexCalendarUsage(NSArray *buckets, NSDate *now) 
     self.backgroundFetch = background;
     self.retriedLegacyQuota = NO;
     self.quotaRequestID = 2;
-    NSString *executable = [self codexExecutable];
-    if (!executable) {
+    self.fetchExecutables = [NSOrderedSet orderedSetWithArray:[self codexExecutableCandidates]].array;
+    self.nextExecutableIndex = 0;
+    if (self.fetchExecutables.count == 0) {
         [self failPendingRequests:@"missing_executable"];
         self.snapshot.activityErrorText = HUDL(@"未找到本机会话数据");
         [self finishFetch];
         [self notifyUpdate];
         return;
     }
+    [self launchNextExecutable];
+}
+
+- (void)launchNextExecutable {
+    // Only retry local launch/handshake failures, never replay authenticated requests.
+    // Each candidate is attempted once per fetch; stale process callbacks are ignored.
+    [self stop];
+    if (self.nextExecutableIndex >= self.fetchExecutables.count) {
+        [self failPendingRequests:@"launch_failed"];
+        [self finishFetch];
+        [self notifyUpdate];
+        return;
+    }
+    NSString *executable = self.fetchExecutables[self.nextExecutableIndex++];
     NSDictionary *attributes = [NSFileManager.defaultManager attributesOfItemAtPath:executable error:nil];
     NSString *identity = [NSString stringWithFormat:@"%@:%@:%@", executable, attributes[NSFileSize], attributes[NSFileModificationDate]];
     if (![identity isEqualToString:self.executableIdentity]) self.legacyQuotaParameters = NO;
     self.executableIdentity = identity;
-    self.lightweightQuotaRequest = background && !self.legacyQuotaParameters;
+    self.lightweightQuotaRequest = self.backgroundFetch && !self.legacyQuotaParameters;
 
     self.initialized = NO;
     self.intentionalStop = NO;
@@ -407,8 +437,11 @@ NSDictionary<NSString *, id> *CodexCalendarUsage(NSArray *buckets, NSDate *now) 
     self.task.terminationHandler = ^(NSTask *task) {
         dispatch_async(dispatch_get_main_queue(), ^{
             if (weakSelf.task != task) return;
-            weakSelf.initialized = NO;
             if (!weakSelf.intentionalStop) {
+                if (!weakSelf.initialized) {
+                    [weakSelf launchNextExecutable];
+                    return;
+                }
                 [weakSelf failPendingRequests:@"network"];
                 [weakSelf finishFetch];
                 [weakSelf notifyUpdate];
@@ -417,9 +450,7 @@ NSDictionary<NSString *, id> *CodexCalendarUsage(NSArray *buckets, NSDate *now) 
     };
     NSError *error = nil;
     if (![self.task launchAndReturnError:&error]) {
-        [self failPendingRequests:@"launch_failed"];
-        [self finishFetch];
-        [self notifyUpdate];
+        [self launchNextExecutable];
         return;
     }
     NSString *clientVersion = [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleShortVersionString"] ?: @"unknown";
@@ -430,6 +461,10 @@ NSDictionary<NSString *, id> *CodexCalendarUsage(NSArray *buckets, NSDate *now) 
     }];
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(8 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         if (weakSelf.task == fetchTask && fetchTask.running) {
+            if (!weakSelf.initialized && weakSelf.nextExecutableIndex < weakSelf.fetchExecutables.count) {
+                [weakSelf launchNextExecutable];
+                return;
+            }
             [weakSelf failPendingRequests:@"timeout"];
             [weakSelf notifyUpdate];
             [weakSelf finishFetch];

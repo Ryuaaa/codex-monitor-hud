@@ -6,14 +6,14 @@
 
 A customizable floating window for quota, token and estimated cost trends, local task activity, and system performance. Both always-on interfaces are native; macOS can open a separate, short-lived official billing page on demand. A community project, not an official OpenAI product.
 
-## Download 1.4.0
+## Download 1.4.1
 
 | Platform | Download | Before installing |
 |---|---|---|
-| macOS 15+ · Apple silicon / Intel | **[macOS ZIP](https://github.com/Ryuaaa/codex-monitor-hud/releases/download/v1.4.0/Codex-Monitor-HUD.app.zip)** | Developer ID signed and Apple notarized. Unzip and move to Applications. |
-| Windows 10/11 · x64 | **[Windows MSI](https://github.com/Ryuaaa/codex-monitor-hud/releases/download/windows-preview-v1.4.0/CodexMonitorHUD-windows-x64-1.4.0.msi)** · [Portable ZIP](https://github.com/Ryuaaa/codex-monitor-hud/releases/download/windows-preview-v1.4.0/CodexMonitorHUD-windows-x64.zip) | Unsigned preview; Windows may block it. Do not disable security protections. |
+| macOS 15+ · Apple silicon / Intel | **[macOS ZIP](https://github.com/Ryuaaa/codex-monitor-hud/releases/download/v1.4.1/Codex-Monitor-HUD.app.zip)** | Developer ID signed and Apple notarized. Unzip and move to Applications. |
+| Windows 10/11 · x64 | **[Windows MSI](https://github.com/Ryuaaa/codex-monitor-hud/releases/download/windows-preview-v1.4.1/CodexMonitorHUD-windows-x64-1.4.1.msi)** · [Portable ZIP](https://github.com/Ryuaaa/codex-monitor-hud/releases/download/windows-preview-v1.4.1/CodexMonitorHUD-windows-x64.zip) | Unsigned preview; Windows may block it. Do not disable security protections. |
 
-[macOS release & checksums](https://github.com/Ryuaaa/codex-monitor-hud/releases/tag/v1.4.0) · [Windows release & checksums](https://github.com/Ryuaaa/codex-monitor-hud/releases/tag/windows-preview-v1.4.0)
+[macOS release & checksums](https://github.com/Ryuaaa/codex-monitor-hud/releases/tag/v1.4.1) · [Windows release & checksums](https://github.com/Ryuaaa/codex-monitor-hud/releases/tag/windows-preview-v1.4.1)
 
 Platform difference: optional billing-date sync from the official website is available on macOS only; Windows keeps manual date entry. The always-on monitor remains native on both platforms.
 

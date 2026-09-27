@@ -10,7 +10,7 @@ for line in sys.stdin:
     request = json.loads(line)
     request_id = request.get("id")
     method = request.get("method")
-    if mode == "eof":
+    if mode == "startup-exit" or (mode == "eof" and method != "initialize"):
         break
     if mode == "timeout":
         time.sleep(20)

@@ -13,12 +13,14 @@
 - (void)recordFailure:(NSString *)kind requestID:(NSInteger)requestID;
 - (void)finishFetch;
 - (void)sendObject:(NSDictionary *)object;
+- (NSArray<NSString *> *)codexExecutableSearchPaths;
 @end
 
 @interface FixtureProvider : CodexStatusProvider
 @property(nonatomic) NSMutableArray *sent;
 @property(nonatomic) NSMutableArray *samples;
 @property(nonatomic, copy) NSString *fixtureExecutable;
+@property(nonatomic, copy) NSArray<NSString *> *fixtureCandidates;
 @property(nonatomic) BOOL realIO;
 @end
 @implementation FixtureProvider
@@ -30,7 +32,7 @@
 - (void)refreshActivity {}
 - (void)refreshCostHistory {}
 - (void)updateQuotaForecastWithSample:(NSDictionary *)sample { [self.samples addObject:sample]; }
-- (NSString *)codexExecutable { return self.fixtureExecutable; }
+- (NSArray<NSString *> *)codexExecutableCandidates { return self.fixtureCandidates ?: (self.fixtureExecutable ? @[self.fixtureExecutable] : @[]); }
 @end
 
 static NSUInteger checks = 0, failures = 0;
@@ -69,6 +71,9 @@ static void WaitForFetch(FixtureProvider *p) {
 
 int main(int argc, const char **argv) {
     @autoreleasepool {
+        NSArray *paths = [[CodexStatusProvider new] codexExecutableSearchPaths];
+        Check([paths.firstObject isEqual:@"/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex"], "new bundled CLI preferred over legacy wrappers");
+        Check([paths containsObject:[NSHomeDirectory() stringByAppendingPathComponent:@"Applications/Codex.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex"]] && [paths containsObject:@"/Applications/Codex.app/Contents/Resources/codex"], "user installation and legacy bundle retained");
         Check(CodexProtocolNumber(NSNull.null) == nil && CodexProtocolNumber(@YES) == nil && CodexProtocolNumber(@"25") == nil, "strict number types");
         Check(CodexProtocolNumber(@(NAN)) == nil && CodexProtocolNumber(@(INFINITY)) == nil, "finite numbers");
         Check(CodexProtocolBoolean(@NO) != nil && CodexProtocolBoolean(@0) == nil && CodexProtocolBoolean(@"false") == nil, "strict boolean types");
@@ -193,6 +198,25 @@ int main(int argc, const char **argv) {
             pipe.fixtureExecutable = [directory stringByAppendingPathComponent:@"modern"];
             [pipe start]; WaitForFetch(pipe);
             Check(pipe.snapshot.interfaceFailureKinds.count == 0 && pipe.recommendedRetryInterval == 0, "transport recovery after timeout");
+            NSString *broken = [directory stringByAppendingPathComponent:@"startup-exit"];
+            NSString *modern = [directory stringByAppendingPathComponent:@"modern"];
+            pipe.fixtureCandidates = @[broken, broken, modern];
+            [pipe.sent removeAllObjects]; [pipe refreshQuotaInBackground]; WaitForFetch(pipe);
+            Check(pipe.snapshot.interfaceFailureKinds.count == 0 && pipe.snapshot.weeklyRemainingPercent == 60 && pipe.sent.count == 7, "early exit falls back once, without duplicate candidates");
+            Check([[pipe valueForKey:@"nextExecutableIndex"] unsignedIntegerValue] == 2 && pipe.recommendedRetryInterval == 0, "fallback success does not count as fetch failure");
+            pipe.fixtureCandidates = @[[directory stringByAppendingPathComponent:@"missing-fixture"], modern];
+            [pipe start]; WaitForFetch(pipe);
+            Check(pipe.snapshot.interfaceFailureKinds.count == 0, "launch error falls back to next candidate");
+            pipe.fixtureCandidates = @[[directory stringByAppendingPathComponent:@"timeout"], modern];
+            [pipe start]; WaitForFetch(pipe);
+            Check(pipe.snapshot.interfaceFailureKinds.count == 0 && pipe.snapshot.weeklyRemainingPercent == 60, "stalled initialization falls back within bounded timeout");
+            pipe.fixtureCandidates = @[broken, broken];
+            [pipe start]; WaitForFetch(pipe);
+            Check([pipe.snapshot.interfaceFailureKinds[@"2"] isEqual:@"launch_failed"] && pipe.recommendedRetryInterval == 300 && pipe.snapshot.weeklyRemainingPercent == 60, "exhausted startup candidates preserve quota and report launch, not network");
+            Check([[pipe valueForKey:@"nextExecutableIndex"] unsignedIntegerValue] == 1 && [[pipe valueForKey:@"consecutiveFetchFailures"] unsignedIntegerValue] == 1, "exhausted candidate set counts one failure");
+            pipe.fixtureCandidates = @[[directory stringByAppendingPathComponent:@"eof"], modern];
+            [pipe start]; WaitForFetch(pipe);
+            Check([pipe.snapshot.interfaceFailureKinds[@"2"] isEqual:@"network"] && [[pipe valueForKey:@"nextExecutableIndex"] unsignedIntegerValue] == 1, "no fallback replay after successful initialize");
         }
         printf("codex_protocol_checks=%lu failures=%lu\n", (unsigned long)checks, (unsigned long)failures);
         return failures ? 1 : 0;
