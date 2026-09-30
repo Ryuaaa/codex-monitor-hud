@@ -253,6 +253,14 @@
 }
 @end
 
+// Keep the entire hit target inside the toolbar; the standard rounded button's
+// alignment insets otherwise place part of its frame outside a 32-point row.
+@interface HUDWindowActionButton : NSButton
+@end
+@implementation HUDWindowActionButton
+- (NSEdgeInsets)alignmentRectInsets { return NSEdgeInsetsMake(0, 0, 0, 0); }
+@end
+
 @interface HUDView ()
 @property(nonatomic, strong) HUDTintView *tintView;
 @property(nonatomic, strong) NSStackView *diagnosisRow;
@@ -302,9 +310,34 @@
     _tabs.controlSize = NSControlSizeSmall;
     _tabs.segmentStyle = NSSegmentStyleRounded;
     _tabs.font = [NSFont systemFontOfSize:11.5 weight:NSFontWeightSemibold];
-    _minimizeButton = [NSButton buttonWithImage:[NSImage imageWithSystemSymbolName:@"minus" accessibilityDescription:HUDL(@"最小化到程序栏")] target:self action:@selector(toggleMinimize:)];
-    _minimizeButton.bezelStyle = NSBezelStyleInline; _minimizeButton.bordered = NO;
-    _minimizeButton.contentTintColor = [NSColor colorWithWhite:1 alpha:0.68]; _minimizeButton.toolTip = HUDL(@"最小化到程序栏");
+    _minimizeButton = [HUDWindowActionButton buttonWithTitle:HUDL(@"最小化") image:[NSImage imageWithSystemSymbolName:@"minus" accessibilityDescription:nil] target:self action:@selector(toggleMinimize:)];
+    _minimizeButton.toolTip = HUDL(@"最小化到程序栏");
+    _minimizeButton.accessibilityLabel = HUDL(@"最小化到程序栏");
+    _closeButton = [HUDWindowActionButton buttonWithTitle:HUDL(@"关闭") image:[NSImage imageWithSystemSymbolName:@"xmark" accessibilityDescription:nil] target:self action:@selector(closeFloatingWindow:)];
+    _closeButton.toolTip = HUDL(@"关闭悬浮窗，后台继续监控；可从程序坞或菜单栏重新打开。");
+    _closeButton.accessibilityLabel = HUDL(@"关闭悬浮窗");
+    _closeButton.accessibilityHelp = _closeButton.toolTip;
+    for (NSButton *button in @[_minimizeButton, _closeButton]) {
+        button.bezelStyle = NSBezelStyleRounded;
+        button.bordered = YES;
+        button.imagePosition = NSImageLeading;
+        button.font = [NSFont systemFontOfSize:12 weight:NSFontWeightSemibold];
+        button.contentTintColor = NSColor.whiteColor;
+        [button setContentCompressionResistancePriority:NSLayoutPriorityRequired forOrientation:NSLayoutConstraintOrientationHorizontal];
+        [button setContentHuggingPriority:NSLayoutPriorityRequired forOrientation:NSLayoutConstraintOrientationHorizontal];
+        [NSLayoutConstraint activateConstraints:@[
+            [button.widthAnchor constraintGreaterThanOrEqualToConstant:80],
+            [button.heightAnchor constraintEqualToConstant:32]
+        ]];
+    }
+    NSTextField *windowTitle = [self label:@"Codex Monitor HUD" size:11 color:NSColor.secondaryLabelColor];
+    [windowTitle setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
+    [windowTitle setContentHuggingPriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
+    NSStackView *windowControls = [NSStackView stackViewWithViews:@[windowTitle, _minimizeButton, _closeButton]];
+    windowControls.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    windowControls.alignment = NSLayoutAttributeCenterY;
+    windowControls.distribution = NSStackViewDistributionFill;
+    windowControls.spacing = 8;
     _pinButton = [NSButton buttonWithImage:[NSImage imageWithSystemSymbolName:@"pin.fill" accessibilityDescription:HUDL(@"取消置顶")] target:self action:@selector(togglePin:)];
     _pinButton.bezelStyle = NSBezelStyleInline;
     _pinButton.bordered = NO;
@@ -321,7 +354,7 @@
     _settingsButton.bordered = NO;
     _settingsButton.contentTintColor = [NSColor colorWithWhite:1 alpha:0.76];
     _settingsButton.toolTip = HUDL(@"悬浮窗设置");
-    NSStackView *header = [NSStackView stackViewWithViews:@[_tabs, _minimizeButton, _pinButton, _lockButton, _taskCenterButton, _settingsButton]];
+    NSStackView *header = [NSStackView stackViewWithViews:@[_tabs, _pinButton, _lockButton, _taskCenterButton, _settingsButton]];
     header.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     header.alignment = NSLayoutAttributeCenterY;
     header.distribution = NSStackViewDistributionFill;
@@ -462,7 +495,7 @@
     _detailStack.spacing = 3;
     _detailStack.hidden = YES;
 
-    NSStackView *root = [NSStackView stackViewWithViews:@[header, headerSeparator, _homeStack, _codexStack, _computerStack, _detailStack]];
+    NSStackView *root = [NSStackView stackViewWithViews:@[windowControls, header, headerSeparator, _homeStack, _codexStack, _computerStack, _detailStack]];
     root.orientation = NSUserInterfaceLayoutOrientationVertical;
     root.alignment = NSLayoutAttributeLeading;
     root.spacing = 8;
@@ -474,6 +507,7 @@
         [root.trailingAnchor constraintEqualToAnchor:_layoutCanvas.trailingAnchor constant:-14],
         [root.topAnchor constraintEqualToAnchor:_layoutCanvas.topAnchor constant:10],
         [root.bottomAnchor constraintLessThanOrEqualToAnchor:_layoutCanvas.bottomAnchor constant:-10],
+        [windowControls.widthAnchor constraintEqualToAnchor:root.widthAnchor],
         [header.widthAnchor constraintEqualToAnchor:root.widthAnchor],
         [headerSeparator.widthAnchor constraintEqualToAnchor:root.widthAnchor],
         [headerSeparator.heightAnchor constraintEqualToConstant:1],
@@ -539,6 +573,10 @@
 
 - (void)toggleMinimize:(NSButton *)sender {
     if (self.minimizeRequested) self.minimizeRequested();
+}
+
+- (void)closeFloatingWindow:(NSButton *)sender {
+    if (self.closeRequested) self.closeRequested();
 }
 
 - (void)setCollapsed:(BOOL)collapsed {

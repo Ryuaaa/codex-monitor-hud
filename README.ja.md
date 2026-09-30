@@ -6,14 +6,14 @@
 
 画面の隅に置ける、カスタマイズ可能なフローティングウィンドウです。利用枠、トークンと推定コストの傾向、ローカルのタスク活動、システム負荷を確認できます。常駐画面は両 OS ともネイティブ実装です。macOS では必要なときだけ、独立した短時間の公式請求ページを開けます。OpenAI 公式製品ではなく、コミュニティによるツールです。
 
-## 1.4.1 をダウンロード
+## 1.4.2 をダウンロード
 
 | 対応環境 | ダウンロード | インストール前の注意 |
 |---|---|---|
-| macOS 15 以降 · Apple シリコン／Intel | **[macOS ZIP](https://github.com/Ryuaaa/codex-monitor-hud/releases/download/v1.4.1/Codex-Monitor-HUD.app.zip)** | Developer ID 署名・Apple 公証済み。解凍して「アプリケーション」に移動してください。 |
-| Windows 10/11 · x64 | **[Windows MSI](https://github.com/Ryuaaa/codex-monitor-hud/releases/download/windows-preview-v1.4.1/CodexMonitorHUD-windows-x64-1.4.1.msi)** · [ポータブル ZIP](https://github.com/Ryuaaa/codex-monitor-hud/releases/download/windows-preview-v1.4.1/CodexMonitorHUD-windows-x64.zip) | 未署名のプレビュー版です。Windows にブロックされる場合があります。セキュリティ機能を無効にしないでください。 |
+| macOS 15 以降 · Apple シリコン／Intel | **[macOS ZIP](https://github.com/Ryuaaa/codex-monitor-hud/releases/download/v1.4.2/Codex-Monitor-HUD.app.zip)** | Developer ID 署名・Apple 公証済み。解凍して「アプリケーション」に移動してください。 |
+| Windows 10/11 · x64 | **[Windows MSI](https://github.com/Ryuaaa/codex-monitor-hud/releases/download/windows-preview-v1.4.2/CodexMonitorHUD-windows-x64-1.4.2.msi)** · [ポータブル ZIP](https://github.com/Ryuaaa/codex-monitor-hud/releases/download/windows-preview-v1.4.2/CodexMonitorHUD-windows-x64.zip) | 未署名のプレビュー版です。Windows にブロックされる場合があります。セキュリティ機能を無効にしないでください。 |
 
-[macOS リリース・チェックサム](https://github.com/Ryuaaa/codex-monitor-hud/releases/tag/v1.4.1) · [Windows リリース・チェックサム](https://github.com/Ryuaaa/codex-monitor-hud/releases/tag/windows-preview-v1.4.1)
+[macOS リリース・チェックサム](https://github.com/Ryuaaa/codex-monitor-hud/releases/tag/v1.4.2) · [Windows リリース・チェックサム](https://github.com/Ryuaaa/codex-monitor-hud/releases/tag/windows-preview-v1.4.2)
 
 機能差：公式サイトからの請求日同期は macOS の任意機能です。Windows では日付を手入力します。常駐監視画面は両 OS ともネイティブです。
 

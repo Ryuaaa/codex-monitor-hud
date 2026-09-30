@@ -15,4 +15,5 @@ xcrun clang -O2 -fobjc-arc -Wall -Wextra -Werror -mmacosx-version-min=15.0 \
 for lang in zh-Hans zh-Hant en ja ko; do
   "$test_app/Contents/MacOS/MenuBarTests" "$test_dir/menu-$lang.png" "$lang"
 done
+"$test_app/Contents/MacOS/MenuBarTests" --hud-ui
 printf 'Synthetic captures: %s\n' "$test_dir"

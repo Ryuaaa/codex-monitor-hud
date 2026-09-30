@@ -36,6 +36,11 @@
 - (void)orderFront:(id)sender { self.presented = YES; }
 - (void)orderFrontRegardless { self.presented = YES; }
 @end
+@interface WindowControlTestDelegate : AppDelegate
+@end
+@implementation WindowControlTestDelegate
+- (void)savePosition {} // Do not write user preferences during synthetic close checks.
+@end
 static NSUInteger assertions = 0;
 static void Check(BOOL condition, NSString *name) {
     assertions++;
@@ -50,6 +55,7 @@ static void ResolveTestTextColors(NSView *view) {
 }
 int main(int argc, const char *argv[]) {
     @autoreleasepool {
+        if (argc > 1 && strcmp(argv[1], "--hud-ui") == 0) return RunUIDiagnostic();
         [NSApplication sharedApplication];
         [NSApp setActivationPolicy:NSApplicationActivationPolicyProhibited];
         if (argc > 2) [NSUserDefaults.standardUserDefaults setVolatileDomain:@{@"displayLanguage": [NSString stringWithUTF8String:argv[2]]} forName:NSArgumentDomain];
@@ -89,13 +95,32 @@ int main(int argc, const char *argv[]) {
         Check([HUDMenuSystemValue(n, NO, now) isEqual:@"—"], @"stale CPU not live");
         n.timestamp = now;
 
-        AppDelegate *d = [AppDelegate new];
+        AppDelegate *d = [WindowControlTestDelegate new];
         d.displayMode = @"menuBar"; d.menuBarMetrics = @[@"weekly"];
         d.refreshInterval = 5; d.windowScale = 1; d.accentName = @"blue";
         d.codexProvider = provider; d.sampler = sampler; d.lastSnapshot = n;
         MenuTestPanel *panel = [[MenuTestPanel alloc] initWithContentRect:NSMakeRect(40, 50, 430, 600) styleMask:NSWindowStyleMaskBorderless backing:NSBackingStoreBuffered defer:YES];
         d.panel = panel;
         d.hudView = [[HUDView alloc] initWithFrame:NSMakeRect(0, 0, 430, 600)];
+        __block NSInteger minimized = 0, closed = 0;
+        d.hudView.minimizeRequested = ^{ minimized++; };
+        d.hudView.closeRequested = ^{ closed++; };
+        [d.hudView.minimizeButton performClick:nil];
+        [d.hudView.closeButton performClick:nil];
+        Check(minimized == 1 && closed == 1, @"window controls dispatch distinct actions");
+        Check([d.hudView.minimizeButton.title isEqual:HUDL(@"最小化")] && [d.hudView.closeButton.title isEqual:HUDL(@"关闭")], @"both window controls have visible localized text");
+        for (NSNumber *collapsed in @[@NO, @YES]) {
+            [d.hudView setCollapsed:collapsed.boolValue];
+            [d.hudView layoutSubtreeIfNeeded];
+            for (NSButton *button in @[d.hudView.minimizeButton, d.hudView.closeButton]) {
+                Check(!button.hidden && button.frame.size.width >= 80 && button.frame.size.height >= 32, @"window controls retain large hit targets in normal and collapsed mode");
+                if (!NSContainsRect(button.superview.bounds, button.frame)) fprintf(stderr, "control=%s frame=%s parent=%s\n", button.title.UTF8String, NSStringFromRect(button.frame).UTF8String, NSStringFromRect(button.superview.bounds).UTF8String);
+                Check(NSContainsRect(button.superview.bounds, button.frame), @"window controls fit toolbar in all languages");
+            }
+            Check(!NSIntersectsRect(d.hudView.minimizeButton.frame, d.hudView.closeButton.frame), @"minimize and close do not overlap");
+        }
+        [d.hudView setCollapsed:NO];
+        Check([d.hudView.closeButton.toolTip isEqual:HUDL(@"关闭悬浮窗，后台继续监控；可从程序坞或菜单栏重新打开。")], @"close behavior and recovery explained");
         d.cpuHistory = [NSMutableArray array]; d.minuteSamples = [NSMutableArray array];
         d.displayMode = @"both";
         NSBox *displaySettings = [d menuBarSettingsGroup];
@@ -118,6 +143,10 @@ int main(int argc, const char *argv[]) {
         Check(d.statusItem == item, @"one status item on repeat application");
         d.displayMode = @"both"; [d applyDisplayMode];
         Check(d.statusItem == item && panel.presented, @"both mode reuses item and restores window");
+        [d closeHUD:nil];
+        Check(!panel.presented && d.statusItem == item && [d.displayMode isEqual:@"both"], @"close hides only window, preserving menu entry and mode");
+        [d showHUD:nil];
+        Check(panel.presented, @"closed HUD reopens without relaunch");
         d.menuBarMetrics = @[]; [d updateMenuBar];
         Check(d.statusItem.button.title.length == 0 && d.statusItem.button.image != nil, @"icon-only retains entry");
         d.displayMode = @"floating"; [d applyDisplayMode];
@@ -174,6 +203,11 @@ int main(int argc, const char *argv[]) {
             [root.appearance performAsCurrentDrawingAppearance:^{ [root cacheDisplayInRect:root.bounds toBitmapImageRep:bitmap]; }];
             NSData *png = [bitmap representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
             Check([png writeToFile:[NSString stringWithUTF8String:argv[1]] atomically:YES], @"synthetic visual capture");
+            NSRect toolbar = NSMakeRect(0, NSHeight(d.hudView.bounds) - 100, NSWidth(d.hudView.bounds), 100);
+            NSBitmapImageRep *toolbarBitmap = [d.hudView bitmapImageRepForCachingDisplayInRect:toolbar];
+            [d.hudView cacheDisplayInRect:toolbar toBitmapImageRep:toolbarBitmap];
+            NSData *toolbarPNG = [toolbarBitmap representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
+            Check([toolbarPNG writeToFile:[[NSString stringWithUTF8String:argv[1]] stringByAppendingString:@".toolbar.png"] atomically:YES], @"synthetic window controls capture");
         }
         [d popoverDidClose:[NSNotification notificationWithName:NSPopoverDidCloseNotification object:d.statusPopover]];
         Check(!d.statusPopover && !d.statusDetails && !d.systemTimer.valid, @"close releases detail UI and unneeded sampler");

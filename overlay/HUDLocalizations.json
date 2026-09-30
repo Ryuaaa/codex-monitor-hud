@@ -1,4 +1,8 @@
 {
+  "最小化": {"en":"Minimize","ja":"最小化","ko":"최소화"},
+  "关闭": {"en":"Close","ja":"閉じる","ko":"닫기"},
+  "关闭悬浮窗": {"en":"Close floating window","ja":"フローティングウィンドウを閉じる","ko":"플로팅 창 닫기"},
+  "关闭悬浮窗，后台继续监控；可从程序坞或菜单栏重新打开。": {"en":"Close the window and keep monitoring in the background. Reopen from the Dock or menu bar.","ja":"ウィンドウを閉じても監視は続きます。Dockまたはメニューバーから再表示できます。","ko":"창을 닫아도 백그라운드 모니터링은 계속됩니다. Dock 또는 메뉴 막대에서 다시 열 수 있습니다."},
   "%@ · %@": {"en":"%@ · %@","ja":"%@・%@","ko":"%@ · %@"},
   "本期到期": {"en":"Current period ends","ja":"今期の終了日","ko":"이번 기간 만료"},
   "下次续费": {"en":"Next renewal","ja":"次回更新日","ko":"다음 갱신일"},

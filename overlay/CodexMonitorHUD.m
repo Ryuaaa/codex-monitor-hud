@@ -530,6 +530,8 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
     NSMenu *windowMenu = [[NSMenu alloc] initWithTitle:HUDL(@"窗口")];
     NSMenuItem *minimize = [windowMenu addItemWithTitle:HUDL(@"最小化到程序栏") action:@selector(minimizeToDock:) keyEquivalent:@"m"];
     minimize.target = self;
+    NSMenuItem *close = [windowMenu addItemWithTitle:HUDL(@"关闭悬浮窗") action:@selector(closeHUD:) keyEquivalent:@"w"];
+    close.target = self;
     NSMenuItem *restore = [windowMenu addItemWithTitle:HUDL(@"显示悬浮窗") action:@selector(showHUD:) keyEquivalent:@""];
     restore.target = self;
     windowRoot.submenu = windowMenu;
@@ -674,6 +676,12 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
     if (self.panel.isMiniaturized) [self.panel deminiaturize:nil];
     [NSApp activateIgnoringOtherApps:YES];
     [self.panel orderFrontRegardless];
+}
+
+- (void)closeHUD:(id)sender {
+    [self savePosition];
+    [self.statusPopover close];
+    [self.panel orderOut:nil];
 }
 
 - (BOOL)menuBarNeedsQuota {
@@ -970,11 +978,11 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
     if (self.homeShowMemoryApps) height += 118;
     if (self.homeShowTrend) height += 25;
     height += 22;
-    return MAX(170, height + (self.compact ? 0 : 110));
+    return MAX(170, height + (self.compact ? 0 : 110)) + 40; // Window controls row and spacing.
 }
 
 - (NSSize)basePanelSize {
-    if (self.collapsed) return NSMakeSize(430, 54);
+    if (self.collapsed) return NSMakeSize(430, 94);
     BOOL hasQuota = self.showFiveHourQuota || self.showWeeklyQuota || self.showModelQuota;
     BOOL hasInsights = self.showPlan || self.showUsage || self.showModelQuota;
     CGFloat codexHeight = 260 + (self.showTaskActivity ? 66 : 0) + (self.showRecentTasks ? 94 : 0) + ((self.showLongestTurn || self.showLongestStreak || self.showPeakDailyTokens) ? 66 : 0);
@@ -988,7 +996,7 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
     codexHeight = MAX(170, codexHeight);
     CGFloat height = self.currentPage == 0 ? [self homePanelHeight] : (self.currentPage == 1 ? codexHeight : (self.showMemoryApps ? 421 : 303));
     if (!self.compact && self.currentPage != 0) height += 110;
-    return NSMakeSize(430, height);
+    return NSMakeSize(430, height + (self.currentPage == 0 ? 0 : 40));
 }
 
 - (NSSize)panelSize {
@@ -1134,6 +1142,7 @@ static NSPasteboardType const HUDModuleOrderPasteboardType = @"com.codexmonitorh
     self.hudView.minimizeRequested = ^{
         [weakSelf.panel miniaturize:nil];
     };
+    self.hudView.closeRequested = ^{ [weakSelf closeHUD:nil]; };
     self.panel.contentView = self.hudView;
     [self updateHUDGeometryForContentSize:self.hudView.frame.size baseSize:baseSize];
     if (![self restorePosition]) [self moveToCorner:@"bottomLeft"];
@@ -2723,6 +2732,11 @@ static NSButton *FindButtonWithTitle(NSView *view, NSString *title) {
 
 static int RunUIDiagnostic(void) {
     [NSApplication sharedApplication];
+    // Synthetic date checks must not inherit the user's live automatic billing settings.
+    NSMutableDictionary *arguments = [[NSUserDefaults.standardUserDefaults volatileDomainForName:NSArgumentDomain] mutableCopy] ?: [NSMutableDictionary dictionary];
+    arguments[@"subscriptionDateSource"] = @"manual";
+    arguments[@"subscriptionAutomaticSyncEnabled"] = @NO;
+    [NSUserDefaults.standardUserDefaults setVolatileDomain:arguments forName:NSArgumentDomain];
     AppDelegate *delegate = [AppDelegate new];
     delegate.homeShowFiveHour = NO; delegate.showFiveHourQuota = NO;
     delegate.homeShowPlan = NO; delegate.showPlan = NO;
@@ -2762,7 +2776,7 @@ static int RunUIDiagnostic(void) {
     CGFloat screenMaximumScale = [delegate maximumWindowScaleForBaseSize:[delegate basePanelSize]];
     delegate.windowScale = screenMaximumScale + 1.0;
     scalePass = scalePass && fabs([delegate panelSize].width - 430.0 * screenMaximumScale) < 0.1;
-    NSSize transientBase = NSMakeSize(430, 260);
+    NSSize transientBase = [delegate basePanelSize];
     NSSize wideResize = HUDContentSizeForUniformScale(transientBase, HUDUniformScaleForProposedContentSize(NSMakeSize(501, 260), transientBase, 1.0));
     NSSize tallResize = HUDContentSizeForUniformScale(transientBase, HUDUniformScaleForProposedContentSize(NSMakeSize(430, 317), transientBase, 1.0));
     NSSize maximumResize = HUDContentSizeForUniformScale(transientBase, HUDUniformScaleForProposedContentSize(NSMakeSize(1000, 260), transientBase, 1.0));
@@ -2770,7 +2784,7 @@ static int RunUIDiagnostic(void) {
     scalePass = scalePass && fabs(tallResize.width / transientBase.width - tallResize.height / transientBase.height) < 0.0001;
     scalePass = scalePass && fabs(wideResize.width - 501.0) < 0.01 && fabs(tallResize.height - 317.0) < 0.01;
     scalePass = scalePass && maximumResize.width > 645.0 && maximumResize.height > 390.0;
-    delegate.hudView = [[HUDView alloc] initWithFrame:NSMakeRect(0, 0, 430, 260)];
+    delegate.hudView = [[HUDView alloc] initWithFrame:NSMakeRect(0, 0, transientBase.width, transientBase.height)];
     __block BOOL taskCenterRequested = NO;
     delegate.hudView.taskCenterRequested = ^{ taskCenterRequested = YES; };
     [delegate.hudView.taskCenterButton performClick:nil];
@@ -2827,6 +2841,7 @@ static int RunUIDiagnostic(void) {
     BOOL homeWidthPass = fabs(fullHomeHUD.homeTaskActivityCard.frame.size.width - homeWidth) <= 1.0 && fabs(fullHomeHUD.homeRecentTasksCard.frame.size.width - homeWidth) <= 1.0 && fabs(fullHomeHUD.homeQuotaRow.frame.size.width - homeWidth) <= 1.0 && fabs(fullHomeHUD.homeInsightsRow.frame.size.width - homeWidth) <= 1.0 && fabs(fullHomeHUD.homeLocalCostCard.frame.size.width - homeWidth) <= 1.0 && fabs(fullHomeHUD.homeQuotaForecastCard.frame.size.width - homeWidth) <= 1.0 && fabs(fullHomeHUD.homeServiceStatusCard.frame.size.width - homeWidth) <= 1.0 && fabs(fullHomeHUD.homeMemoryAppsCard.frame.size.width - homeWidth) <= 1.0;
     BOOL homeLayoutPass = fullHomeHeight > 650.0 && homeWidthPass && NSMinY(fullHomeRoot) >= NSMinY(fullHomeBounds) - 1.0 && NSMaxY(fullHomeRoot) <= NSMaxY(fullHomeBounds) + 1.0;
     delegate.currentPage = 1; delegate.compact = YES; delegate.collapsed = NO; delegate.windowScale = 1.0;
+    transientBase = [delegate basePanelSize]; // The resize scenario uses the Codex page, not the earlier home page.
     [delegate.hudView setPage:1]; [delegate.hudView setCompact:YES];
     delegate.panel = [[NSPanel alloc] initWithContentRect:NSMakeRect(0, 0, transientBase.width, transientBase.height) styleMask:[delegate panelStyleMask] backing:NSBackingStoreBuffered defer:NO];
     delegate.panel.contentView = delegate.hudView;

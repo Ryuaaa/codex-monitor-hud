@@ -45,6 +45,7 @@
 @property(nonatomic, strong) NSStackView *rootStack;
 @property(nonatomic, strong) NSSegmentedControl *tabs;
 @property(nonatomic, strong) NSButton *minimizeButton;
+@property(nonatomic, strong) NSButton *closeButton;
 @property(nonatomic, strong) NSButton *pinButton;
 @property(nonatomic, strong) NSButton *lockButton;
 @property(nonatomic, strong) NSButton *taskCenterButton;
@@ -130,6 +131,7 @@
 @property(nonatomic, copy) void (^topmostChanged)(BOOL enabled);
 @property(nonatomic, copy) void (^positionLockChanged)(BOOL enabled);
 @property(nonatomic, copy) void (^minimizeRequested)(void);
+@property(nonatomic, copy) void (^closeRequested)(void);
 @property(nonatomic, strong) NSColor *accentColor;
 @property(nonatomic) BOOL alwaysOnTop;
 @property(nonatomic) BOOL positionLocked;
